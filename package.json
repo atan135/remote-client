@@ -10,7 +10,9 @@
     "dev:agent": "npm run dev --workspace localapp",
     "dev:server": "npm run dev --workspace webserver/server",
     "dev:client": "npm run dev --workspace webserver/client",
-    "build:client": "npm run build --workspace webserver/client"
+    "build:client": "npm run build --workspace webserver/client",
+    "auth:keygen:localapp": "node scripts/generate-rsa-keypair.js localapp-auth",
+    "auth:keygen:webserver": "node scripts/generate-rsa-keypair.js webserver-sign",
+    "auth:keygen:all": "npm run auth:keygen:localapp && npm run auth:keygen:webserver"
   }
 }
-

@@ -22,6 +22,10 @@ export function loadConfig() {
     maxBufferBytes: toNumber(process.env.MAX_BUFFER_BYTES, 1024 * 1024),
     logLevel: process.env.LOG_LEVEL || "info",
     logDir: process.env.LOG_DIR || "logs",
-    windowsOutputEncoding: process.env.WINDOWS_OUTPUT_ENCODING || "cp936"
+    windowsOutputEncoding: process.env.WINDOWS_OUTPUT_ENCODING || "cp936",
+    authPrivateKeyPath: process.env.AUTH_PRIVATE_KEY_PATH || "./keys/auth_private.pem",
+    authPrivateKeyPassphrase: process.env.AUTH_PRIVATE_KEY_PASSPHRASE || "",
+    webserverSignPublicKeyPath:
+      process.env.WEBSERVER_SIGN_PUBLIC_KEY_PATH || "./keys/webserver_sign_public.pem"
   };
 }

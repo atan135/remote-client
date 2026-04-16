@@ -20,6 +20,15 @@
 - 用户可通过 `/api/auth/change-password` 修改自己的密码
 - 管理员可通过 `/api/users` 系列接口管理用户和重置密码
 
+## 安全命令加密设计
+
+- 设计文档：[auth-code-rsa-design.md](/c:/project/remote-client/docs/auth-code-rsa-design.md)
+- 目标是在 `webserver -> localapp` 命令链路中增加基于 `auth_code + RSA` 的加密与校验机制
+- 当前设计采用两套密钥：`localapp` 自身 RSA 密钥负责解密，`webserver` 自身 RSA 密钥负责签名
+- `auth_code` 将从 `users` 表拆出，独立存到用户与 `agent` 的绑定表中
+- 已补充密钥生成工具，可通过根目录脚本 `npm run auth:keygen:localapp` 和 `npm run auth:keygen:webserver` 生成密钥对
+- 加密下发、验签和解密执行链路仍处于待开发状态
+
 ## 数据库
 
 - 初始化脚本：[init.sql](/c:/project/remote-client/db/init.sql)
@@ -28,6 +37,7 @@
 - 主要表：
 - `users`：控制台登录用户
 - `user_sessions`：浏览器登录会话
+- `user_auth_codes`：用户与 `agent` 的公钥绑定关系，作为安全命令加密设计中的新增表
 
 ## 模块划分
 

@@ -10,7 +10,9 @@ const loggers = configureLogging(config);
 logEvent(loggers.agentLogger, "info", "agent.boot", {
   agentId: config.agentId,
   serverWsUrl: config.serverWsUrl,
-  logDir: loggers.logDir
+  logDir: loggers.logDir,
+  authPrivateKeyPath: config.authPrivateKeyPath,
+  webserverSignPublicKeyPath: config.webserverSignPublicKeyPath
 });
 
 process.on("uncaughtException", (error) => {

@@ -8,12 +8,14 @@ import cookie from "cookie";
 import express from "express";
 import WebSocket, { WebSocketServer } from "ws";
 
+import { AuthCodeService } from "./auth/auth-code-service.js";
 import { SessionService } from "./auth/session-service.js";
 import { UserService } from "./auth/user-service.js";
 import { loadConfig } from "./config.js";
 import { createMysqlPool } from "./db/mysql.js";
 import { configureLogging, logEvent } from "./logger.js";
 import { BrowserHub } from "./realtime/browser-hub.js";
+import { SecureCommandService } from "./security/secure-command-service.js";
 import { AgentRegistry } from "./state/agent-registry.js";
 import { CommandStore } from "./state/command-store.js";
 
@@ -25,12 +27,15 @@ const loggers = configureLogging(config);
 const { serverLogger, commandLogger } = loggers;
 const pool = createMysqlPool(config);
 const userService = new UserService(pool);
+const authCodeService = new AuthCodeService(pool);
 const sessionService = new SessionService(pool, config);
+const secureCommandService = new SecureCommandService(config);
 const app = express();
 const server = http.createServer(app);
 const agentRegistry = new AgentRegistry();
 const commandStore = new CommandStore(config.commandHistoryLimit);
 const browserHub = new BrowserHub();
+const commandDispatchContextSymbol = Symbol("commandDispatchContext");
 
 const agentSocketServer = new WebSocketServer({ noServer: true });
 const browserSocketServer = new WebSocketServer({ noServer: true });
@@ -314,6 +319,126 @@ app.post("/api/users/:id/reset-password", requireAdmin, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/auth-codes", requireAuth, async (req, res) => {
+  try {
+    const items = await authCodeService.listByUserId(req.auth.user.id);
+    res.json({ items });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth_code.list_failed", {
+      userId: req.auth.user.id,
+      error: error.message
+    });
+    res.status(500).json({ message: "加载授权密钥失败" });
+  }
+});
+
+app.post("/api/auth-codes", requireAuth, async (req, res) => {
+  try {
+    const item = await authCodeService.create({
+      userId: req.auth.user.id,
+      agentId: req.body?.agentId,
+      authCode: req.body?.authCode,
+      remark: req.body?.remark
+    });
+
+    logEvent(serverLogger, "info", "auth_code.created", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      authCodeId: item.id,
+      agentId: item.agentId,
+      fingerprint: item.fingerprint
+    });
+
+    res.status(201).json({ item });
+  } catch (error) {
+    const duplicate = isDuplicateEntryError(error);
+
+    logEvent(serverLogger, duplicate ? "warn" : "error", "auth_code.create_failed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      agentId: String(req.body?.agentId || ""),
+      error: error.message
+    });
+
+    res.status(duplicate ? 409 : 400).json({
+      message: duplicate ? "同一设备只能保存一条授权密钥" : error.message || "创建授权密钥失败"
+    });
+  }
+});
+
+app.patch("/api/auth-codes/:id", requireAuth, async (req, res) => {
+  const authCodeId = Number(req.params.id);
+
+  try {
+    const existing = await authCodeService.findByIdForUser(req.auth.user.id, authCodeId);
+
+    if (!existing) {
+      res.status(404).json({ message: "授权密钥不存在" });
+      return;
+    }
+
+    const item = await authCodeService.update(authCodeId, req.auth.user.id, {
+      agentId: req.body?.agentId,
+      authCode: req.body?.authCode,
+      remark: req.body?.remark
+    });
+
+    logEvent(serverLogger, "info", "auth_code.updated", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      authCodeId: item.id,
+      agentId: item.agentId,
+      fingerprint: item.fingerprint
+    });
+
+    res.json({ item });
+  } catch (error) {
+    const duplicate = isDuplicateEntryError(error);
+
+    logEvent(serverLogger, duplicate ? "warn" : "error", "auth_code.update_failed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      authCodeId,
+      error: error.message
+    });
+
+    res.status(duplicate ? 409 : 400).json({
+      message: duplicate ? "同一设备只能保存一条授权密钥" : error.message || "更新授权密钥失败"
+    });
+  }
+});
+
+app.delete("/api/auth-codes/:id", requireAuth, async (req, res) => {
+  const authCodeId = Number(req.params.id);
+
+  try {
+    const removed = await authCodeService.delete(authCodeId, req.auth.user.id);
+
+    if (!removed) {
+      res.status(404).json({ message: "授权密钥不存在" });
+      return;
+    }
+
+    logEvent(serverLogger, "info", "auth_code.deleted", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      authCodeId: removed.id,
+      agentId: removed.agentId,
+      fingerprint: removed.fingerprint
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth_code.delete_failed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      authCodeId,
+      error: error.message
+    });
+    res.status(500).json({ message: "删除授权密钥失败" });
+  }
+});
+
 app.get("/api/agents", requireAuth, (req, res) => {
   res.json({ items: agentRegistry.list() });
 });
@@ -330,8 +455,12 @@ app.get("/api/commands", requireAuth, (req, res) => {
 });
 
 app.post("/api/commands", requireAuth, (req, res) => {
-  const command = req.body?.command?.trim();
-  const agentId = req.body?.agentId?.trim();
+  void handleCommandRequest(req, res);
+});
+
+async function handleCommandRequest(req, res) {
+  const command = String(req.body?.command || "").trim();
+  const agentId = String(req.body?.agentId || "").trim();
 
   if (!agentId || !command) {
     logEvent(commandLogger, "warn", "command.invalid_request", {
@@ -343,27 +472,84 @@ app.post("/api/commands", requireAuth, (req, res) => {
     return;
   }
 
-  const record = commandStore.create({ agentId, command });
-  const dispatched = isAgentSocketOpen(agentId);
+  try {
+    const authCodeBinding = await authCodeService.findByUserIdAndAgentId(req.auth.user.id, agentId);
 
-  logEvent(commandLogger, "info", "command.requested", {
-    requestId: record.requestId,
-    agentId,
-    command,
-    queued: !dispatched,
-    userId: req.auth.user.id,
-    username: req.auth.user.username,
-    ...getRequestContext(req)
-  });
+    if (!authCodeBinding) {
+      logEvent(commandLogger, "warn", "command.auth_code_missing", {
+        agentId,
+        command,
+        userId: req.auth.user.id,
+        username: req.auth.user.username,
+        ...getRequestContext(req)
+      });
+      res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
+      return;
+    }
 
-  dispatchCommand(record);
-  browserHub.broadcast("command.updated", record);
+    const record = commandStore.create({
+      agentId,
+      command,
+      metadata: {
+        operatorUserId: req.auth.user.id,
+        operatorUsername: req.auth.user.username,
+        authCodeId: authCodeBinding.id,
+        authCodeFingerprint: authCodeBinding.fingerprint,
+        authCodeRemark: authCodeBinding.remark,
+        secureStatus: "pending",
+        securityError: ""
+      }
+    });
+    storeCommandDispatchContext(record, {
+      user: req.auth.user,
+      authCodeBinding
+    });
+    const dispatchResult = dispatchCommand(record, {
+      user: req.auth.user,
+      authCodeBinding
+    });
+    const queued = dispatchResult === "queued";
 
-  res.status(dispatched ? 202 : 201).json({
-    item: record,
-    queued: !dispatched
-  });
-});
+    logEvent(commandLogger, "info", "command.requested", {
+      requestId: record.requestId,
+      agentId,
+      command,
+      queued,
+      dispatchResult,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      authCodeId: authCodeBinding.id,
+      authCodeFingerprint: authCodeBinding.fingerprint,
+      ...getRequestContext(req)
+    });
+
+    browserHub.broadcast("command.updated", record);
+
+    if (dispatchResult === "failed") {
+      res.status(500).json({
+        message: record.error || "命令安全封装失败",
+        item: record,
+        queued: false
+      });
+      return;
+    }
+
+    res.status(dispatchResult === "dispatched" ? 202 : 201).json({
+      item: record,
+      queued
+    });
+  } catch (error) {
+    logEvent(commandLogger, "error", "command.request_failed", {
+      agentId,
+      command,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message,
+      ...getRequestContext(req)
+    });
+    res.status(500).json({ message: error.message || "命令提交失败" });
+  }
+}
 
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
 
@@ -485,7 +671,19 @@ browserSocketServer.on("connection", (socket) => {
 async function bootstrap() {
   try {
     await pool.query("SELECT 1");
+    await ensureUserAuthCodesTable();
     await sessionService.purgeExpiredSessions();
+    try {
+      const signingKeyInfo = secureCommandService.getSigningKeyInfo();
+      logEvent(serverLogger, "info", "security.signing_key_ready", {
+        fingerprint: signingKeyInfo.fingerprint,
+        publicKeyPath: config.webserverSignPublicKeyPath
+      });
+    } catch (error) {
+      logEvent(serverLogger, "warn", "security.signing_key_unavailable", {
+        error: error.message
+      });
+    }
 
     server.listen(config.httpPort, () => {
       logEvent(serverLogger, "info", "server.started", {
@@ -544,6 +742,7 @@ function handleAgentMessage(agentId, socket, message) {
   if (message.type === "command.started") {
     const record = commandStore.update(message.payload.requestId, {
       status: "running",
+      secureStatus: message.payload.secureStatus || "verified",
       startedAt: message.payload.startedAt || new Date().toISOString()
     });
 
@@ -563,10 +762,12 @@ function handleAgentMessage(agentId, socket, message) {
   if (message.type === "command.finished") {
     const record = commandStore.update(message.payload.requestId, {
       status: message.payload.status,
+      secureStatus: message.payload.secureStatus || inferSecureStatusFromResult(message.payload),
       exitCode: message.payload.exitCode,
       stdout: message.payload.stdout || "",
       stderr: message.payload.stderr || "",
       error: message.payload.error || "",
+      securityError: message.payload.securityError || "",
       startedAt: message.payload.startedAt || null,
       completedAt: message.payload.completedAt || new Date().toISOString()
     });
@@ -585,6 +786,8 @@ function handleAgentMessage(agentId, socket, message) {
           stdout: record.stdout,
           stderr: record.stderr,
           error: record.error,
+          secureStatus: record.secureStatus,
+          securityError: record.securityError,
           startedAt: record.startedAt,
           completedAt: record.completedAt
         }
@@ -596,11 +799,11 @@ function handleAgentMessage(agentId, socket, message) {
 
 function dispatchQueuedCommands(agentId) {
   for (const command of commandStore.listQueued(agentId)) {
-    dispatchCommand(command);
+    dispatchCommand(command, loadCommandDispatchContext(command));
   }
 }
 
-function dispatchCommand(command) {
+function dispatchCommand(command, context = loadCommandDispatchContext(command)) {
   const socket = agentRegistry.getSocket(command.agentId);
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
@@ -609,43 +812,144 @@ function dispatchCommand(command) {
       agentId: command.agentId,
       command: command.command
     });
+    return "queued";
+  }
+
+  if (!context?.user?.id || !context?.authCodeBinding?.authCode) {
+    const error = "命令缺少可用的 auth_code 快照，无法安全派发";
+    const failedRecord = commandStore.update(command.requestId, {
+      status: "failed",
+      secureStatus: "missing_auth_code_snapshot",
+      securityError: error,
+      error,
+      completedAt: new Date().toISOString()
+    });
+
+    logEvent(commandLogger, "error", "command.dispatch_context_missing", {
+      requestId: command.requestId,
+      agentId: command.agentId,
+      command: command.command,
+      userId: command.operatorUserId,
+      username: command.operatorUsername,
+      authCodeId: command.authCodeId
+    });
+
+    if (failedRecord) {
+      browserHub.broadcast("command.updated", failedRecord);
+    }
+
+    return "failed";
+  }
+
+  let secureEnvelope;
+  try {
+    secureEnvelope = secureCommandService.createSecureEnvelope({
+      commandRecord: command,
+      operatorUser: context.user,
+      authCodeBinding: context.authCodeBinding
+    });
+  } catch (error) {
+    const failedRecord = commandStore.update(command.requestId, {
+      status: "failed",
+      secureStatus: "failed_to_encrypt",
+      securityError: error.message,
+      error: error.message,
+      completedAt: new Date().toISOString()
+    });
+
+    logEvent(commandLogger, "error", "command.secure_dispatch_failed", {
+      requestId: command.requestId,
+      agentId: command.agentId,
+      command: command.command,
+      userId: command.operatorUserId,
+      username: command.operatorUsername,
+      authCodeId: command.authCodeId,
+      authCodeFingerprint: command.authCodeFingerprint,
+      error: error.message
+    });
+
+    if (failedRecord) {
+      browserHub.broadcast("command.updated", failedRecord);
+    }
+
     return false;
   }
 
-  const dispatchedAt = new Date().toISOString();
+  const dispatchedAt = secureEnvelope.sentAt;
 
   commandStore.update(command.requestId, {
     status: "dispatched",
+    secureStatus: "encrypted",
+    securityError: "",
     dispatchedAt,
-    error: ""
+    error: "",
+    expiresAt: secureEnvelope.meta.expiresAt,
+    webserverSignFingerprint: secureEnvelope.meta.webserverSignFingerprint
   });
 
   logEvent(commandLogger, "info", "command.dispatched", {
     requestId: command.requestId,
     agentId: command.agentId,
     command: command.command,
+    userId: command.operatorUserId,
+    username: command.operatorUsername,
+    authCodeId: command.authCodeId,
+    authCodeFingerprint: command.authCodeFingerprint,
+    webserverSignFingerprint: secureEnvelope.meta.webserverSignFingerprint,
     dispatchedAt
   });
 
-  socket.send(
-    JSON.stringify({
-      type: "command.execute",
-      payload: {
-        requestId: command.requestId,
-        agentId: command.agentId,
-        command: command.command,
-        createdAt: command.createdAt
-      },
-      sentAt: new Date().toISOString()
-    })
-  );
+  try {
+    socket.send(JSON.stringify(secureEnvelope));
+  } catch (error) {
+    const failedRecord = commandStore.update(command.requestId, {
+      status: "failed",
+      secureStatus: "send_failed",
+      securityError: error.message,
+      error: error.message,
+      completedAt: new Date().toISOString()
+    });
 
-  return true;
+    logEvent(commandLogger, "error", "command.socket_send_failed", {
+      requestId: command.requestId,
+      agentId: command.agentId,
+      command: command.command,
+      error: error.message
+    });
+
+    if (failedRecord) {
+      browserHub.broadcast("command.updated", failedRecord);
+    }
+
+    return "failed";
+  }
+
+  return "dispatched";
 }
 
-function isAgentSocketOpen(agentId) {
-  const socket = agentRegistry.getSocket(agentId);
-  return Boolean(socket && socket.readyState === WebSocket.OPEN);
+function loadCommandDispatchContext(command) {
+  return command[commandDispatchContextSymbol] || null;
+}
+
+function storeCommandDispatchContext(command, context) {
+  Object.defineProperty(command, commandDispatchContextSymbol, {
+    value: context,
+    writable: true,
+    configurable: true,
+    enumerable: false
+  });
+}
+
+function inferSecureStatusFromResult(payload) {
+  if (payload.securityError) {
+    return "rejected";
+  }
+
+  if (payload.status === "completed") {
+    return "verified";
+  }
+
+  return payload.secureStatus || "verified";
 }
 
 function authorizeAgentRequest(url) {
@@ -779,6 +1083,30 @@ function isValidPassword(password) {
   return typeof password === "string" && password.length >= 8;
 }
 
+function isDuplicateEntryError(error) {
+  return error?.code === "ER_DUP_ENTRY";
+}
+
+async function ensureUserAuthCodesTable() {
+  await pool.execute(`
+    CREATE TABLE IF NOT EXISTS user_auth_codes (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+      user_id BIGINT UNSIGNED NOT NULL,
+      agent_id VARCHAR(128) NOT NULL,
+      auth_code LONGTEXT NOT NULL,
+      remark VARCHAR(255) NOT NULL DEFAULT '',
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      PRIMARY KEY (id),
+      UNIQUE KEY uk_user_auth_codes_user_agent (user_id, agent_id),
+      KEY idx_user_auth_codes_user_id (user_id),
+      CONSTRAINT fk_user_auth_codes_user_id
+        FOREIGN KEY (user_id) REFERENCES users (id)
+        ON DELETE CASCADE
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+  `);
+}
+
 function formatUnknownError(reason) {
   if (reason instanceof Error) {
     return {
@@ -789,4 +1117,3 @@ function formatUnknownError(reason) {
 
   return String(reason);
 }
-

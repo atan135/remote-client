@@ -271,7 +271,8 @@ dt {
 }
 
 .token-field input,
-.command-input {
+.command-input,
+.authcode-input {
   width: 100%;
   border: 1px solid var(--line);
   border-radius: 18px;
@@ -335,9 +336,20 @@ dt {
   resize: vertical;
 }
 
+.authcode-input {
+  min-height: 180px;
+  padding: 18px;
+  resize: vertical;
+}
+
 .toolbar {
   margin-top: 16px;
   align-items: center;
+}
+
+.compact-toolbar {
+  margin-top: 0;
+  margin-bottom: 4px;
 }
 
 .submit-button {
@@ -365,6 +377,7 @@ dt {
 }
 
 .account-panel,
+.authcodes-panel,
 .users-panel {
   display: grid;
   gap: 18px;
@@ -372,7 +385,9 @@ dt {
 
 .form-grid,
 .user-create-grid,
-.user-edit-grid {
+.user-edit-grid,
+.authcode-create-grid,
+.authcode-edit-grid {
   display: grid;
   gap: 14px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -398,7 +413,27 @@ dt {
   color: var(--text-dim);
 }
 
+.binding-summary {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid rgba(120, 215, 166, 0.18);
+  border-radius: 18px;
+  background: rgba(120, 215, 166, 0.08);
+}
+
+.binding-summary.missing {
+  border-color: rgba(255, 133, 122, 0.22);
+  background: rgba(255, 133, 122, 0.08);
+}
+
 .user-list {
+  display: grid;
+  gap: 14px;
+}
+
+.authcode-list {
   display: grid;
   gap: 14px;
 }
@@ -410,20 +445,46 @@ dt {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.authcode-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
 .user-card-head,
-.user-actions {
+.user-actions,
+.authcode-card-head {
   display: flex;
   justify-content: space-between;
   gap: 16px;
 }
 
-.user-card-head p {
+.user-card-head p,
+.authcode-card-head p {
   margin: 6px 0 0;
   color: var(--text-dim);
 }
 
 .user-actions {
   margin-top: 14px;
+}
+
+.hint-line {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.inline-error {
+  margin: 0 0 14px;
+  color: var(--danger);
+}
+
+.danger-button {
+  color: var(--danger);
 }
 
 .command-card {

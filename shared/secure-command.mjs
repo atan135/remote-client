@@ -1,0 +1,135 @@
+import crypto from "node:crypto";
+
+export const SECURE_COMMAND_ALGORITHMS = Object.freeze({
+  asymmetric: "RSA-OAEP-256",
+  symmetric: "AES-256-GCM",
+  signature: "RSA-SHA256"
+});
+
+export function normalizeRsaPublicKeyPem(publicKeyPem) {
+  const keyObject = crypto.createPublicKey(publicKeyPem);
+
+  if (keyObject.asymmetricKeyType !== "rsa") {
+    throw new Error("auth_code 必须是 RSA 公钥");
+  }
+
+  return String(
+    keyObject.export({
+      type: "spki",
+      format: "pem"
+    })
+  ).trimEnd();
+}
+
+export function createRsaPrivateKey(privateKeyPem, passphrase = "") {
+  const keyObject = crypto.createPrivateKey({
+    key: privateKeyPem,
+    format: "pem",
+    passphrase: passphrase || undefined
+  });
+
+  if (keyObject.asymmetricKeyType !== "rsa") {
+    throw new Error("私钥必须是 RSA 私钥");
+  }
+
+  return keyObject;
+}
+
+export function createRsaPublicKey(publicKeyPem) {
+  const keyObject = crypto.createPublicKey(publicKeyPem);
+
+  if (keyObject.asymmetricKeyType !== "rsa") {
+    throw new Error("公钥必须是 RSA 公钥");
+  }
+
+  return keyObject;
+}
+
+export function createPublicKeyFingerprint(publicKeyPem) {
+  return crypto
+    .createHash("sha256")
+    .update(normalizeRsaPublicKeyPem(publicKeyPem))
+    .digest("hex");
+}
+
+export function encryptSecureCommandPayload(plaintextPayload, publicKey) {
+  const aesKey = crypto.randomBytes(32);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", aesKey, iv);
+  const ciphertext = Buffer.concat([
+    cipher.update(JSON.stringify(plaintextPayload), "utf8"),
+    cipher.final()
+  ]);
+  const tag = cipher.getAuthTag();
+  const encryptedKey = crypto.publicEncrypt(
+    {
+      key: publicKey,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256"
+    },
+    aesKey
+  );
+
+  return {
+    encryptedKey: encryptedKey.toString("base64"),
+    iv: iv.toString("base64"),
+    tag: tag.toString("base64"),
+    ciphertext: ciphertext.toString("base64")
+  };
+}
+
+export function decryptSecureCommandPayload(payload, privateKey) {
+  const aesKey = crypto.privateDecrypt(
+    {
+      key: privateKey,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+      oaepHash: "sha256"
+    },
+    Buffer.from(payload.encryptedKey, "base64")
+  );
+
+  const decipher = crypto.createDecipheriv(
+    "aes-256-gcm",
+    aesKey,
+    Buffer.from(payload.iv, "base64")
+  );
+
+  decipher.setAuthTag(Buffer.from(payload.tag, "base64"));
+
+  const plaintext = Buffer.concat([
+    decipher.update(Buffer.from(payload.ciphertext, "base64")),
+    decipher.final()
+  ]).toString("utf8");
+
+  return JSON.parse(plaintext);
+}
+
+export function buildSecureSignatureInput({ payload, sentAt }) {
+  return JSON.stringify({
+    requestId: payload.requestId || "",
+    agentId: payload.agentId || "",
+    operatorUserId: payload.operatorUserId ?? null,
+    authCodeId: payload.authCodeId ?? null,
+    encryptKeyVersion: payload.encryptKeyVersion ?? null,
+    signKeyVersion: payload.signKeyVersion ?? null,
+    encryptedKey: payload.encryptedKey || "",
+    iv: payload.iv || "",
+    tag: payload.tag || "",
+    ciphertext: payload.ciphertext || "",
+    sentAt: sentAt || ""
+  });
+}
+
+export function signSecureEnvelope({ payload, sentAt, privateKey }) {
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(buildSecureSignatureInput({ payload, sentAt }));
+  signer.end();
+  return signer.sign(privateKey).toString("base64");
+}
+
+export function verifySecureEnvelopeSignature({ payload, sentAt, signature, publicKey }) {
+  const verifier = crypto.createVerify("RSA-SHA256");
+  verifier.update(buildSecureSignatureInput({ payload, sentAt }));
+  verifier.end();
+  return verifier.verify(publicKey, Buffer.from(signature, "base64"));
+}

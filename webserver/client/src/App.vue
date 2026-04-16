@@ -4,16 +4,21 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
 const agents = ref([]);
 const commands = ref([]);
 const users = ref([]);
+const authCodes = ref([]);
 const selectedAgentId = ref("");
 const commandInput = ref("");
 const submitting = ref(false);
 const bootstrapping = ref(true);
 const authenticating = ref(false);
 const loadingUsers = ref(false);
+const loadingAuthCodes = ref(false);
 const creatingUser = ref(false);
+const creatingAuthCode = ref(false);
 const changingPassword = ref(false);
 const resettingUserId = ref(null);
 const updatingUserId = ref(null);
+const savingAuthCodeId = ref(null);
+const deletingAuthCodeId = ref(null);
 const session = ref(null);
 const authMode = ref("login");
 const loginForm = reactive({
@@ -36,6 +41,11 @@ const userForm = reactive({
   role: "operator",
   isActive: true
 });
+const authCodeForm = reactive({
+  agentId: "",
+  remark: "",
+  authCode: ""
+});
 const wsState = reactive({
   connected: false,
   error: ""
@@ -46,8 +56,17 @@ const appConfig = reactive({
 
 let socket = null;
 
+const selectedAgentIdKey = computed(() => normalizeAgentId(selectedAgentId.value));
+
 const activeAgent = computed(
   () => agents.value.find((item) => item.agentId === selectedAgentId.value) || null
+);
+
+const activeAuthCodeBinding = computed(
+  () =>
+    authCodes.value.find(
+      (item) => normalizeAgentId(item.agentId) === selectedAgentIdKey.value
+    ) || null
 );
 
 const visibleCommands = computed(() => {
@@ -63,6 +82,16 @@ const displayName = computed(
 );
 
 const isAdmin = computed(() => session.value?.user?.role === "admin");
+
+const canSubmitCommand = computed(
+  () =>
+    Boolean(
+      selectedAgentId.value &&
+        commandInput.value.trim() &&
+        activeAuthCodeBinding.value &&
+        !submitting.value
+    )
+);
 
 onMounted(async () => {
   await bootstrap();
@@ -217,7 +246,7 @@ async function logout() {
 }
 
 async function loadDashboard() {
-  const jobs = [loadAgents(), loadCommands()];
+  const jobs = [loadAgents(), loadCommands(), loadAuthCodes()];
 
   if (isAdmin.value) {
     jobs.push(loadUsers());
@@ -261,6 +290,28 @@ async function loadCommands() {
   commands.value = payload.items || [];
 }
 
+async function loadAuthCodes() {
+  loadingAuthCodes.value = true;
+
+  try {
+    const response = await fetch("/api/auth-codes");
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
+    if (!response.ok) {
+      throw new Error("加载 auth_code 列表失败");
+    }
+
+    const payload = await response.json();
+    authCodes.value = payload.items || [];
+  } finally {
+    loadingAuthCodes.value = false;
+  }
+}
+
 async function loadUsers() {
   if (!isAdmin.value) {
     return;
@@ -298,6 +349,11 @@ async function submitCommand() {
     return;
   }
 
+  if (!activeAuthCodeBinding.value) {
+    wsState.error = "请先为当前设备配置 auth_code，再发送命令";
+    return;
+  }
+
   submitting.value = true;
   wsState.error = "";
 
@@ -328,6 +384,103 @@ async function submitCommand() {
     wsState.error = error.message;
   } finally {
     submitting.value = false;
+  }
+}
+
+async function createAuthCode() {
+  if (!authCodeForm.agentId.trim() || !authCodeForm.authCode.trim()) {
+    wsState.error = "请填写设备标识和 RSA 公钥";
+    return;
+  }
+
+  creatingAuthCode.value = true;
+  wsState.error = "";
+
+  try {
+    const response = await fetch("/api/auth-codes", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        agentId: authCodeForm.agentId.trim(),
+        remark: authCodeForm.remark.trim(),
+        authCode: authCodeForm.authCode.trim()
+      })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "创建 auth_code 失败");
+    }
+
+    authCodeForm.agentId = "";
+    authCodeForm.remark = "";
+    authCodeForm.authCode = "";
+    await loadAuthCodes();
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    creatingAuthCode.value = false;
+  }
+}
+
+async function saveAuthCode(item) {
+  savingAuthCodeId.value = item.id;
+  wsState.error = "";
+
+  try {
+    const response = await fetch(`/api/auth-codes/${item.id}`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        agentId: item.agentId,
+        remark: item.remark,
+        authCode: item.authCode
+      })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "更新 auth_code 失败");
+    }
+
+    Object.assign(item, payload.item);
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    savingAuthCodeId.value = null;
+  }
+}
+
+async function deleteAuthCode(item) {
+  if (!window.confirm(`确认删除设备 ${item.agentId} 的 auth_code 吗？`)) {
+    return;
+  }
+
+  deletingAuthCodeId.value = item.id;
+  wsState.error = "";
+
+  try {
+    const response = await fetch(`/api/auth-codes/${item.id}`, {
+      method: "DELETE"
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "删除 auth_code 失败");
+    }
+
+    authCodes.value = authCodes.value.filter((candidate) => candidate.id !== item.id);
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    deletingAuthCodeId.value = null;
   }
 }
 
@@ -563,6 +716,7 @@ function resetAuthedState() {
   agents.value = [];
   commands.value = [];
   users.value = [];
+  authCodes.value = [];
   selectedAgentId.value = "";
   commandInput.value = "";
 }
@@ -581,6 +735,34 @@ function upsertByKey(collection, item, key) {
   } else {
     collection.sort((left, right) => left.label.localeCompare(right.label));
   }
+}
+
+function shortFingerprint(fingerprint) {
+  const value = String(fingerprint || "");
+
+  if (!value) {
+    return "-";
+  }
+
+  if (value.length <= 16) {
+    return value;
+  }
+
+  return `${value.slice(0, 12)}...${value.slice(-8)}`;
+}
+
+function normalizeAgentId(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function useSelectedAgentIdForAuthCode() {
+  if (!selectedAgentId.value) {
+    wsState.error = "请先从左侧选择设备";
+    return;
+  }
+
+  authCodeForm.agentId = selectedAgentId.value;
+  wsState.error = "";
 }
 </script>
 
@@ -724,6 +906,16 @@ function upsertByKey(collection, item, key) {
               <span class="pill muted">{{ activeAgent?.label || "未选择设备" }}</span>
             </div>
 
+            <div class="binding-summary" :class="{ missing: !activeAuthCodeBinding }">
+              <strong>{{ activeAuthCodeBinding ? "auth_code 已绑定" : "缺少 auth_code 绑定" }}</strong>
+              <span v-if="activeAuthCodeBinding">
+                指纹 {{ shortFingerprint(activeAuthCodeBinding.fingerprint) }}
+              </span>
+              <span v-else>
+                请先在下方 auth_code 管理中为当前设备添加 RSA 公钥
+              </span>
+            </div>
+
             <textarea
               v-model="commandInput"
               class="command-input"
@@ -736,10 +928,109 @@ function upsertByKey(collection, item, key) {
                 <span>目标设备：</span>
                 <strong>{{ activeAgent?.agentId || "未选择" }}</strong>
               </div>
-              <button class="submit-button" :disabled="submitting || !selectedAgentId || !commandInput.trim()" @click="submitCommand">
-                {{ submitting ? "提交中..." : "发送命令" }}
+              <button class="submit-button" :disabled="!canSubmitCommand" @click="submitCommand">
+                {{ submitting ? "提交中..." : "发送安全命令" }}
               </button>
             </div>
+          </section>
+
+          <section class="panel authcodes-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Auth Codes</p>
+                <h2>设备公钥绑定</h2>
+              </div>
+              <span class="pill">{{ authCodes.length }}</span>
+            </div>
+
+            <div class="authcode-create-grid">
+              <label class="login-field">
+                <span>设备 ID</span>
+                <input v-model="authCodeForm.agentId" type="text" placeholder="例如 office-pc-01" />
+              </label>
+              <label class="login-field">
+                <span>备注</span>
+                <input v-model="authCodeForm.remark" type="text" placeholder="例如 办公室电脑" />
+              </label>
+            </div>
+
+            <div class="toolbar compact-toolbar">
+              <div class="hint">
+                <span>当前选中设备：</span>
+                <strong>{{ selectedAgentId || "未选择" }}</strong>
+              </div>
+              <button class="ghost-button" type="button" @click="useSelectedAgentIdForAuthCode">
+                使用当前设备 ID
+              </button>
+            </div>
+
+            <label class="login-field">
+              <span>RSA 公钥 PEM</span>
+              <textarea
+                v-model="authCodeForm.authCode"
+                class="authcode-input"
+                rows="7"
+                placeholder="粘贴 localapp 生成的 auth_public.pem 内容"
+              ></textarea>
+            </label>
+
+            <button class="submit-button" :disabled="creatingAuthCode" @click="createAuthCode">
+              {{ creatingAuthCode ? "创建中..." : "新增 auth_code" }}
+            </button>
+
+            <div class="authcode-list">
+              <article v-for="item in authCodes" :key="item.id" class="authcode-card">
+                <div class="authcode-card-head">
+                  <div>
+                    <strong>{{ item.agentId }}</strong>
+                    <p>{{ item.updatedAt || item.createdAt }}</p>
+                  </div>
+                  <span class="pill muted">{{ shortFingerprint(item.fingerprint) }}</span>
+                </div>
+
+                <div class="authcode-edit-grid">
+                  <label class="login-field">
+                    <span>设备 ID</span>
+                    <input v-model="item.agentId" type="text" />
+                  </label>
+                  <label class="login-field">
+                    <span>备注</span>
+                    <input v-model="item.remark" type="text" />
+                  </label>
+                </div>
+
+                <label class="login-field">
+                  <span>RSA 公钥 PEM</span>
+                  <textarea v-model="item.authCode" class="authcode-input" rows="7"></textarea>
+                </label>
+
+                <div class="hint-line">
+                  <span>authCodeId: {{ item.id }}</span>
+                  <span>SHA-256: {{ item.fingerprint }}</span>
+                </div>
+
+                <div class="user-actions">
+                  <button
+                    class="ghost-button"
+                    type="button"
+                    :disabled="savingAuthCodeId === item.id"
+                    @click="saveAuthCode(item)"
+                  >
+                    {{ savingAuthCodeId === item.id ? "保存中..." : "保存" }}
+                  </button>
+                  <button
+                    class="ghost-button danger-button"
+                    type="button"
+                    :disabled="deletingAuthCodeId === item.id"
+                    @click="deleteAuthCode(item)"
+                  >
+                    {{ deletingAuthCodeId === item.id ? "删除中..." : "删除" }}
+                  </button>
+                </div>
+              </article>
+            </div>
+
+            <p v-if="loadingAuthCodes" class="hint">正在加载 auth_code 列表...</p>
           </section>
 
           <section class="panel timeline-panel">
@@ -770,7 +1061,19 @@ function upsertByKey(collection, item, key) {
                     <dt>退出码</dt>
                     <dd>{{ item.exitCode ?? "-" }}</dd>
                   </div>
+                  <div>
+                    <dt>安全状态</dt>
+                    <dd>{{ item.secureStatus || "-" }}</dd>
+                  </div>
+                  <div>
+                    <dt>authCodeId</dt>
+                    <dd>{{ item.authCodeId ?? "-" }}</dd>
+                  </div>
                 </dl>
+
+                <p v-if="item.securityError" class="inline-error">
+                  安全校验失败：{{ item.securityError }}
+                </p>
 
                 <div v-if="item.stdout" class="output-block">
                   <h3>STDOUT</h3>
@@ -901,4 +1204,3 @@ function upsertByKey(collection, item, key) {
     </template>
   </div>
 </template>
-

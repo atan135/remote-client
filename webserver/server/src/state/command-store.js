@@ -7,13 +7,14 @@ export class CommandStore {
     this.order = [];
   }
 
-  create({ agentId, command }) {
+  create({ agentId, command, metadata = {} }) {
     const createdAt = new Date().toISOString();
     const requestId = randomUUID();
     const record = {
       requestId,
       agentId,
       command,
+      ...metadata,
       status: "queued",
       createdAt,
       updatedAt: createdAt,
@@ -85,4 +86,3 @@ export class CommandStore {
     }
   }
 }
-

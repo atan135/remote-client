@@ -4,6 +4,7 @@ import WebSocket from "ws";
 
 import { normalizeCommandForExecution, runCommand } from "./command-runner.js";
 import { logEvent } from "./logger.js";
+import { SecureCommandService } from "./security/secure-command-service.js";
 
 function createMessage(type, payload) {
   return JSON.stringify({
@@ -24,6 +25,7 @@ export class AgentClient {
     this.commandQueue = [];
     this.processing = false;
     this.outbox = [];
+    this.secureCommandService = new SecureCommandService(config);
   }
 
   start() {
@@ -86,18 +88,19 @@ export class AgentClient {
   }
 
   handleMessage(message) {
-    if (message.type !== "command.execute") {
+    if (message.type === "command.execute.secure") {
+      this.handleSecureCommand(message);
       return;
     }
 
-    this.commandQueue.push(message.payload);
-    logEvent(this.commandLogger, "info", "command.received", {
-      requestId: message.payload.requestId,
-      agentId: this.config.agentId,
-      command: message.payload.command,
-      queueLength: this.commandQueue.length
-    });
-    this.processQueue();
+    if (message.type === "command.execute") {
+      this.rejectInsecureCommand(message.payload || {});
+      return;
+    }
+
+    if (!message?.type) {
+      return;
+    }
   }
 
   async processQueue() {
@@ -114,6 +117,7 @@ export class AgentClient {
         requestId: payload.requestId,
         agentId: this.config.agentId,
         command: payload.command,
+        secureStatus: payload.secureStatus || "verified",
         executedCommand
       });
 
@@ -122,6 +126,7 @@ export class AgentClient {
         {
           requestId: payload.requestId,
           agentId: this.config.agentId,
+          secureStatus: payload.secureStatus || "verified",
           startedAt: new Date().toISOString()
         },
         true
@@ -137,6 +142,8 @@ export class AgentClient {
           requestId: payload.requestId,
           agentId: this.config.agentId,
           command: payload.command,
+          secureStatus: payload.secureStatus || "verified",
+          securityError: "",
           ...result
         }
       );
@@ -147,6 +154,8 @@ export class AgentClient {
           requestId: payload.requestId,
           agentId: this.config.agentId,
           command: payload.command,
+          secureStatus: payload.secureStatus || "verified",
+          securityError: "",
           ...result
         },
         true
@@ -159,6 +168,8 @@ export class AgentClient {
           agentId: this.config.agentId,
           command: payload.command,
           status: "failed",
+          secureStatus: payload.secureStatus || "verified",
+          securityError: error.message,
           exitCode: null,
           stdout: "",
           stderr: "",
@@ -173,6 +184,7 @@ export class AgentClient {
         requestId: payload.requestId,
         agentId: this.config.agentId,
         command: payload.command,
+        secureStatus: payload.secureStatus || "verified",
         error: error.message
       });
     } finally {
@@ -271,5 +283,101 @@ export class AgentClient {
 
   isOpen() {
     return this.socket && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  handleSecureCommand(message) {
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message);
+      const payload = {
+        ...unwrapped.payload,
+        secureStatus: "verified",
+        webserverSignFingerprint: unwrapped.meta.webserverSignFingerprint,
+        authCodeId: unwrapped.meta.authCodeId
+      };
+
+      this.commandQueue.push(payload);
+      logEvent(this.commandLogger, "info", "command.received_secure", {
+        requestId: payload.requestId,
+        agentId: this.config.agentId,
+        command: payload.command,
+        authCodeId: payload.authCodeId,
+        webserverSignFingerprint: payload.webserverSignFingerprint,
+        queueLength: this.commandQueue.length
+      });
+      this.processQueue();
+    } catch (error) {
+      this.rejectSecureCommand(message.payload || {}, error);
+    }
+  }
+
+  rejectInsecureCommand(payload) {
+    const error = new Error("已拒绝未加密命令，当前 agent 仅接受 command.execute.secure");
+    const requestId = String(payload.requestId || "");
+    const now = new Date().toISOString();
+
+    logEvent(this.commandLogger, "warn", "command.insecure_rejected", {
+      requestId,
+      agentId: this.config.agentId,
+      error: error.message
+    });
+
+    if (!requestId) {
+      return;
+    }
+
+    this.send(
+      "command.finished",
+      {
+        requestId,
+        agentId: this.config.agentId,
+        command: String(payload.command || ""),
+        status: "failed",
+        secureStatus: "rejected",
+        securityError: error.message,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        error: error.message,
+        startedAt: now,
+        completedAt: now
+      },
+      true
+    );
+  }
+
+  rejectSecureCommand(payload, error) {
+    const requestId = String(payload.requestId || "");
+    const now = new Date().toISOString();
+    const message = error instanceof Error ? error.message : String(error);
+
+    logEvent(this.commandLogger, "warn", "command.secure_rejected", {
+      requestId,
+      agentId: this.config.agentId,
+      authCodeId: payload.authCodeId ?? null,
+      error: message
+    });
+
+    if (!requestId) {
+      return;
+    }
+
+    this.send(
+      "command.finished",
+      {
+        requestId,
+        agentId: this.config.agentId,
+        command: "",
+        status: "failed",
+        secureStatus: "rejected",
+        securityError: message,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        error: message,
+        startedAt: now,
+        completedAt: now
+      },
+      true
+    );
   }
 }
