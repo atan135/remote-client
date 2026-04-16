@@ -10,6 +10,22 @@
 - `localapp` 默认上连地址：`ws://localhost:3100/ws/agent`
 - `webserver/client` 开发代理：`http://localhost:3100`
 
+## 登录与会话
+
+- `webserver/server` 使用 MySQL 保存用户和会话
+- 浏览器通过 `/api/auth/login` 提交用户名和密码
+- 服务端验证成功后写入 HTTP-only session cookie
+- 后续 `/api/agents`、`/api/commands` 和 `/ws/browser` 都基于会话校验
+
+## 数据库
+
+- 初始化脚本：[init.sql](/c:/project/remote-client/db/init.sql)
+- 数据库名：`remote_client`
+- 字符集：`utf8mb4`
+- 主要表：
+- `users`：控制台登录用户
+- `user_sessions`：浏览器登录会话
+
 ## 模块划分
 
 ### 1. `localapp`
@@ -111,6 +127,6 @@
 ## 当前实现边界
 
 - 命令记录为内存存储，重启后不会保留
-- 默认不做多用户权限体系，只支持一个控制令牌 `CONTROL_TOKEN`
+- 当前提供基础用户名密码登录，不包含更细粒度的 RBAC 权限模型
 - 默认不做命令白名单，生产环境建议补上策略控制
 - 当前前端面向单控制台使用场景，适合先验证链路与功能

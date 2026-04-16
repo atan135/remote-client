@@ -41,6 +41,45 @@ textarea {
   overflow: hidden;
 }
 
+.login-shell {
+  position: relative;
+  z-index: 1;
+  min-height: calc(100vh - 64px);
+  display: grid;
+  place-items: center;
+}
+
+.login-panel {
+  width: min(100%, 460px);
+  padding: 32px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.login-field input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+.login-button {
+  width: 100%;
+  margin-top: 24px;
+}
+
+.login-error {
+  margin: 14px 0 0;
+  color: var(--danger);
+}
+
 .ambient {
   position: absolute;
   width: 320px;
@@ -117,6 +156,19 @@ dt {
 
 .status-card {
   padding: 20px;
+}
+
+.status-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.status-user {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--text-dim);
 }
 
 .status-dot {
@@ -295,6 +347,15 @@ dt {
 .submit-button:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.ghost-button {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  cursor: pointer;
 }
 
 .command-card {

@@ -4,10 +4,14 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import cookie from "cookie";
 import express from "express";
 import WebSocket, { WebSocketServer } from "ws";
 
+import { SessionService } from "./auth/session-service.js";
+import { UserService } from "./auth/user-service.js";
 import { loadConfig } from "./config.js";
+import { createMysqlPool } from "./db/mysql.js";
 import { configureLogging, logEvent } from "./logger.js";
 import { BrowserHub } from "./realtime/browser-hub.js";
 import { AgentRegistry } from "./state/agent-registry.js";
@@ -19,6 +23,9 @@ const __dirname = path.dirname(__filename);
 const config = loadConfig();
 const loggers = configureLogging(config);
 const { serverLogger, commandLogger } = loggers;
+const pool = createMysqlPool(config);
+const userService = new UserService(pool);
+const sessionService = new SessionService(pool, config);
 const app = express();
 const server = http.createServer(app);
 const agentRegistry = new AgentRegistry();
@@ -34,29 +41,87 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, now: new Date().toISOString() });
 });
 
-app.get("/api/config", (_req, res) => {
+app.get("/api/config", (req, res) => {
   res.json({
-    controlTokenRequired: Boolean(config.controlToken)
+    authEnabled: true,
+    currentUser: req.auth?.user || null
   });
 });
 
-app.get("/api/agents", (req, res) => {
-  if (!authorizeControlRequest(req)) {
-    logUnauthorizedControlAccess(req, "api.agents");
-    res.status(401).json({ message: "Unauthorized" });
+app.get("/api/auth/session", requireAuth, (req, res) => {
+  res.json({
+    authenticated: true,
+    user: req.auth.user
+  });
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  const username = String(req.body?.username || "").trim();
+  const password = String(req.body?.password || "");
+
+  if (!username || !password) {
+    res.status(400).json({ message: "username and password are required" });
     return;
   }
 
+  try {
+    const user = await userService.authenticate(username, password);
+
+    if (!user) {
+      logEvent(serverLogger, "warn", "auth.login_failed", {
+        username,
+        ...getRequestContext(req)
+      });
+      res.status(401).json({ message: "用户名或密码错误" });
+      return;
+    }
+
+    const session = await sessionService.createSession({
+      userId: user.id,
+      ...getRequestContext(req)
+    });
+
+    setSessionCookie(res, session.sessionToken, session.expiresAt);
+
+    logEvent(serverLogger, "info", "auth.login_succeeded", {
+      userId: user.id,
+      username: user.username,
+      ...getRequestContext(req)
+    });
+
+    res.json({
+      authenticated: true,
+      user
+    });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth.login_error", {
+      username,
+      error: error.message
+    });
+    res.status(500).json({ message: "登录失败" });
+  }
+});
+
+app.post("/api/auth/logout", async (req, res) => {
+  const sessionToken = getSessionTokenFromRequest(req);
+
+  try {
+    await sessionService.deleteSession(sessionToken);
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth.logout_error", {
+      error: error.message
+    });
+  }
+
+  clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.get("/api/agents", requireAuth, (req, res) => {
   res.json({ items: agentRegistry.list() });
 });
 
-app.get("/api/commands", (req, res) => {
-  if (!authorizeControlRequest(req)) {
-    logUnauthorizedControlAccess(req, "api.commands");
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-
+app.get("/api/commands", requireAuth, (req, res) => {
   const limit = Number(req.query.limit) || config.commandHistoryLimit;
 
   res.json({
@@ -67,13 +132,7 @@ app.get("/api/commands", (req, res) => {
   });
 });
 
-app.post("/api/commands", (req, res) => {
-  if (!authorizeControlRequest(req)) {
-    logUnauthorizedControlAccess(req, "api.commands.create");
-    res.status(401).json({ message: "Unauthorized" });
-    return;
-  }
-
+app.post("/api/commands", requireAuth, (req, res) => {
   const command = req.body?.command?.trim();
   const agentId = req.body?.agentId?.trim();
 
@@ -95,11 +154,12 @@ app.post("/api/commands", (req, res) => {
     agentId,
     command,
     queued: !dispatched,
+    userId: req.auth.user.id,
+    username: req.auth.user.username,
     ...getRequestContext(req)
   });
 
   dispatchCommand(record);
-
   browserHub.broadcast("command.updated", record);
 
   res.status(dispatched ? 202 : 201).json({
@@ -118,7 +178,7 @@ if (fs.existsSync(clientDistPath)) {
   });
 }
 
-server.on("upgrade", (request, socket, head) => {
+server.on("upgrade", async (request, socket, head) => {
   const url = new URL(request.url || "/", `http://${request.headers.host}`);
 
   if (url.pathname === "/ws/agent") {
@@ -139,7 +199,9 @@ server.on("upgrade", (request, socket, head) => {
   }
 
   if (url.pathname === "/ws/browser") {
-    if (!authorizeControlRequest(request, url.searchParams.get("token"))) {
+    const auth = await resolveRequestAuth(request);
+
+    if (!auth) {
       logEvent(serverLogger, "warn", "browser.websocket_unauthorized", {
         ip: request.socket.remoteAddress || "",
         userAgent: request.headers["user-agent"] || ""
@@ -150,6 +212,7 @@ server.on("upgrade", (request, socket, head) => {
     }
 
     browserSocketServer.handleUpgrade(request, socket, head, (ws) => {
+      ws.auth = auth;
       browserSocketServer.emit("connection", ws);
     });
     return;
@@ -200,6 +263,8 @@ agentSocketServer.on("connection", (socket, _request, url) => {
 browserSocketServer.on("connection", (socket) => {
   browserHub.add(socket);
   logEvent(serverLogger, "info", "browser.websocket_connected", {
+    userId: socket.auth.user.id,
+    username: socket.auth.user.username,
     subscribers: browserHub.sockets.size
   });
   browserHub.send(socket, "snapshot", {
@@ -213,17 +278,33 @@ browserSocketServer.on("connection", (socket) => {
   socket.on("close", () => {
     browserHub.remove(socket);
     logEvent(serverLogger, "info", "browser.websocket_disconnected", {
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
       subscribers: browserHub.sockets.size
     });
   });
 });
 
-server.listen(config.httpPort, () => {
-  logEvent(serverLogger, "info", "server.started", {
-    httpPort: config.httpPort,
-    logDir: loggers.logDir
-  });
-});
+async function bootstrap() {
+  try {
+    await pool.query("SELECT 1");
+    await sessionService.purgeExpiredSessions();
+
+    server.listen(config.httpPort, () => {
+      logEvent(serverLogger, "info", "server.started", {
+        httpPort: config.httpPort,
+        logDir: loggers.logDir
+      });
+    });
+  } catch (error) {
+    logEvent(serverLogger, "error", "server.bootstrap_failed", {
+      error: error.message
+    });
+    process.exitCode = 1;
+  }
+}
+
+bootstrap();
 
 process.on("uncaughtException", (error) => {
   logEvent(serverLogger, "error", "process.uncaught_exception", {
@@ -370,15 +451,6 @@ function isAgentSocketOpen(agentId) {
   return Boolean(socket && socket.readyState === WebSocket.OPEN);
 }
 
-function authorizeControlRequest(req, tokenFromQuery = null) {
-  if (!config.controlToken) {
-    return true;
-  }
-
-  const token = req.headers?.["x-control-token"] || tokenFromQuery || "";
-  return token === config.controlToken;
-}
-
 function authorizeAgentRequest(url) {
   if (!config.agentSharedToken) {
     return true;
@@ -387,18 +459,95 @@ function authorizeAgentRequest(url) {
   return url.searchParams.get("token") === config.agentSharedToken;
 }
 
-function getRequestContext(req) {
-  return {
-    ip: req.headers?.["x-forwarded-for"] || req.socket?.remoteAddress || "",
-    userAgent: req.headers?.["user-agent"] || ""
-  };
+async function requireAuth(req, res, next) {
+  const auth = await resolveRequestAuth(req);
+
+  if (!auth) {
+    logEvent(serverLogger, "warn", "auth.unauthorized", {
+      path: req.path,
+      ...getRequestContext(req)
+    });
+    clearSessionCookie(res);
+    res.status(401).json({ message: "请先登录" });
+    return;
+  }
+
+  req.auth = auth;
+  setSessionCookie(res, auth.sessionToken, auth.expiresAt);
+  next();
 }
 
-function logUnauthorizedControlAccess(req, scope) {
-  logEvent(serverLogger, "warn", "control.unauthorized", {
-    scope,
-    ...getRequestContext(req)
-  });
+async function resolveRequestAuth(req) {
+  const sessionToken = getSessionTokenFromRequest(req);
+
+  if (!sessionToken) {
+    return null;
+  }
+
+  try {
+    const session = await sessionService.getSessionByToken(sessionToken);
+
+    if (!session) {
+      return null;
+    }
+
+    const expiresAt = await sessionService.touchSession(session.id);
+
+    return {
+      sessionId: session.id,
+      sessionToken,
+      expiresAt,
+      user: {
+        id: session.user_id,
+        username: session.username,
+        displayName: session.display_name,
+        role: session.role
+      }
+    };
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth.session_lookup_failed", {
+      error: error.message
+    });
+    return null;
+  }
+}
+
+function getSessionTokenFromRequest(req) {
+  const cookies = cookie.parse(req.headers?.cookie || "");
+  return cookies[config.sessionCookieName] || "";
+}
+
+function setSessionCookie(res, sessionToken, expiresAt) {
+  res.setHeader(
+    "Set-Cookie",
+    cookie.serialize(config.sessionCookieName, sessionToken, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: config.sessionSecure,
+      path: "/",
+      expires: new Date(expiresAt)
+    })
+  );
+}
+
+function clearSessionCookie(res) {
+  res.setHeader(
+    "Set-Cookie",
+    cookie.serialize(config.sessionCookieName, "", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: config.sessionSecure,
+      path: "/",
+      expires: new Date(0)
+    })
+  );
+}
+
+function getRequestContext(req) {
+  return {
+    ipAddress: req.headers?.["x-forwarded-for"] || req.socket?.remoteAddress || "",
+    userAgent: req.headers?.["user-agent"] || ""
+  };
 }
 
 function formatUnknownError(reason) {

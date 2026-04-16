@@ -6,16 +6,18 @@ const commands = ref([]);
 const selectedAgentId = ref("");
 const commandInput = ref("");
 const submitting = ref(false);
+const bootstrapping = ref(true);
+const authenticating = ref(false);
+const session = ref(null);
+const loginForm = reactive({
+  username: "",
+  password: ""
+});
 const wsState = reactive({
   connected: false,
   error: ""
 });
-const appConfig = reactive({
-  controlTokenRequired: false
-});
 
-const controlToken = ref(localStorage.getItem("controlToken") || "");
-const controlTokenDraft = ref(controlToken.value);
 let socket = null;
 
 const activeAgent = computed(
@@ -30,50 +32,121 @@ const visibleCommands = computed(() => {
   return commands.value.filter((item) => item.agentId === selectedAgentId.value);
 });
 
-onMounted(async () => {
-  try {
-    await loadBootstrapData();
-  } catch (error) {
-    wsState.error = error.message;
-  }
+const displayName = computed(
+  () => session.value?.user?.displayName || session.value?.user?.username || ""
+);
 
-  connectBrowserSocket();
+onMounted(async () => {
+  await bootstrap();
 });
 
 onBeforeUnmount(() => {
-  if (socket) {
-    socket.close();
-  }
+  disconnectBrowserSocket();
 });
 
-async function loadBootstrapData() {
-  await loadConfig();
+async function bootstrap() {
+  bootstrapping.value = true;
+  wsState.error = "";
+
+  try {
+    await fetch("/api/config");
+    const authenticated = await loadSession();
+
+    if (authenticated) {
+      await loadDashboard();
+      connectBrowserSocket();
+    }
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    bootstrapping.value = false;
+  }
+}
+
+async function loadSession() {
+  const response = await fetch("/api/auth/session");
+
+  if (response.status === 401) {
+    session.value = null;
+    return false;
+  }
+
+  if (!response.ok) {
+    throw new Error("加载登录状态失败");
+  }
+
+  const payload = await response.json();
+  session.value = payload;
+  return true;
+}
+
+async function login() {
+  if (!loginForm.username.trim() || !loginForm.password) {
+    wsState.error = "请输入用户名和密码";
+    return;
+  }
+
+  authenticating.value = true;
+  wsState.error = "";
+
+  try {
+    const response = await fetch("/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        username: loginForm.username.trim(),
+        password: loginForm.password
+      })
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload.message || "登录失败");
+    }
+
+    session.value = payload;
+    loginForm.password = "";
+
+    await loadDashboard();
+    connectBrowserSocket();
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    authenticating.value = false;
+  }
+}
+
+async function logout() {
+  disconnectBrowserSocket();
+
+  try {
+    await fetch("/api/auth/logout", {
+      method: "POST"
+    });
+  } finally {
+    session.value = null;
+    agents.value = [];
+    commands.value = [];
+    selectedAgentId.value = "";
+    commandInput.value = "";
+  }
+}
+
+async function loadDashboard() {
   await Promise.all([loadAgents(), loadCommands()]);
   ensureSelectedAgent();
 }
 
-async function applyControlToken() {
-  controlToken.value = controlTokenDraft.value.trim();
-  localStorage.setItem("controlToken", controlToken.value);
-
-  try {
-    await loadBootstrapData();
-    connectBrowserSocket();
-  } catch (error) {
-    wsState.error = error.message;
-  }
-}
-
-async function loadConfig() {
-  const response = await fetch("/api/config");
-  const payload = await response.json();
-  appConfig.controlTokenRequired = Boolean(payload.controlTokenRequired);
-}
-
 async function loadAgents() {
-  const response = await fetch("/api/agents", {
-    headers: createHeaders()
-  });
+  const response = await fetch("/api/agents");
+
+  if (response.status === 401) {
+    await handleUnauthorized();
+    return;
+  }
 
   if (!response.ok) {
     throw new Error("加载设备列表失败");
@@ -84,9 +157,12 @@ async function loadAgents() {
 }
 
 async function loadCommands() {
-  const response = await fetch("/api/commands", {
-    headers: createHeaders()
-  });
+  const response = await fetch("/api/commands");
+
+  if (response.status === 401) {
+    await handleUnauthorized();
+    return;
+  }
 
   if (!response.ok) {
     throw new Error("加载命令记录失败");
@@ -110,8 +186,7 @@ async function submitCommand() {
     const response = await fetch("/api/commands", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        ...createHeaders()
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
         agentId: selectedAgentId.value,
@@ -119,8 +194,14 @@ async function submitCommand() {
       })
     });
 
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
     if (!response.ok) {
-      throw new Error("命令提交失败");
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.message || "命令提交失败");
     }
 
     commandInput.value = "";
@@ -132,16 +213,14 @@ async function submitCommand() {
 }
 
 function connectBrowserSocket() {
-  if (socket) {
-    socket.close();
+  disconnectBrowserSocket();
+
+  if (!session.value) {
+    return;
   }
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = new URL(`${protocol}//${window.location.host}/ws/browser`);
-
-  if (controlToken.value) {
-    url.searchParams.set("token", controlToken.value);
-  }
 
   socket = new WebSocket(url);
 
@@ -173,12 +252,22 @@ function connectBrowserSocket() {
 
   socket.addEventListener("close", () => {
     wsState.connected = false;
-    window.setTimeout(connectBrowserSocket, 3000);
+
+    if (session.value) {
+      window.setTimeout(connectBrowserSocket, 3000);
+    }
   });
 
   socket.addEventListener("error", () => {
     wsState.error = "实时通道连接失败";
   });
+}
+
+function disconnectBrowserSocket() {
+  if (socket) {
+    socket.close();
+    socket = null;
+  }
 }
 
 function ensureSelectedAgent() {
@@ -190,14 +279,13 @@ function ensureSelectedAgent() {
   selectedAgentId.value = onlineAgent?.agentId || agents.value[0]?.agentId || "";
 }
 
-function createHeaders() {
-  if (!controlToken.value) {
-    return {};
-  }
-
-  return {
-    "x-control-token": controlToken.value
-  };
+async function handleUnauthorized() {
+  disconnectBrowserSocket();
+  session.value = null;
+  agents.value = [];
+  commands.value = [];
+  selectedAgentId.value = "";
+  wsState.error = "登录状态已失效，请重新登录";
 }
 
 function upsertByKey(collection, item, key) {
@@ -222,134 +310,166 @@ function upsertByKey(collection, item, key) {
     <div class="ambient ambient-left"></div>
     <div class="ambient ambient-right"></div>
 
-    <header class="hero">
-      <div>
-        <p class="eyebrow">Remote Control Console</p>
-        <h1>内外网指令桥</h1>
-        <p class="subtitle">
-          控制台通过服务端下发命令，内网 agent 主动执行并把结果实时回传。
-        </p>
-      </div>
+    <template v-if="bootstrapping">
+      <main class="login-shell">
+        <section class="panel login-panel">
+          <p class="eyebrow">Remote Control Console</p>
+          <h1>正在检查登录状态</h1>
+          <p class="subtitle">系统正在连接服务端并恢复当前会话。</p>
+        </section>
+      </main>
+    </template>
 
-      <div class="status-card">
-        <span class="status-dot" :class="{ online: wsState.connected }"></span>
-        <strong>{{ wsState.connected ? "实时链路在线" : "实时链路重连中" }}</strong>
-        <p>{{ wsState.error || "浏览器和服务端之间的事件通道正常工作。" }}</p>
-      </div>
-    </header>
+    <template v-else-if="!session">
+      <main class="login-shell">
+        <section class="panel login-panel">
+          <p class="eyebrow">Remote Control Console</p>
+          <h1>登录控制台</h1>
+          <p class="subtitle">先完成身份验证，再访问设备控制与命令记录。</p>
 
-    <main class="dashboard">
-      <aside class="panel agents-panel">
-        <div class="panel-head">
-          <div>
-            <p class="section-kicker">Agents</p>
-            <h2>设备</h2>
-          </div>
-          <span class="pill">{{ agents.length }}</span>
-        </div>
+          <label class="login-field">
+            <span>用户名</span>
+            <input v-model="loginForm.username" type="text" placeholder="输入用户名" @keyup.enter="login" />
+          </label>
 
-        <label v-if="appConfig.controlTokenRequired" class="token-field">
-          <span>控制令牌</span>
-          <div class="token-inline">
-            <input
-              v-model="controlTokenDraft"
-              type="password"
-              placeholder="输入 CONTROL_TOKEN"
-              @keyup.enter="applyControlToken"
-            />
-            <button class="token-button" type="button" @click="applyControlToken">应用</button>
-          </div>
-        </label>
+          <label class="login-field">
+            <span>密码</span>
+            <input v-model="loginForm.password" type="password" placeholder="输入密码" @keyup.enter="login" />
+          </label>
 
-        <div class="agent-list">
-          <button
-            v-for="agent in agents"
-            :key="agent.agentId"
-            class="agent-item"
-            :class="{ selected: selectedAgentId === agent.agentId }"
-            @click="selectedAgentId = agent.agentId"
-          >
-            <div class="agent-title">
-              <strong>{{ agent.label }}</strong>
-              <span class="tag" :class="agent.status">{{ agent.status }}</span>
-            </div>
-            <p>{{ agent.hostname || agent.agentId }}</p>
-            <small>{{ agent.platform }} / {{ agent.arch }}</small>
+          <button class="submit-button login-button" :disabled="authenticating" @click="login">
+            {{ authenticating ? "登录中..." : "登录" }}
           </button>
-        </div>
-      </aside>
 
-      <section class="workbench">
-        <section class="panel command-panel">
+          <p v-if="wsState.error" class="login-error">{{ wsState.error }}</p>
+        </section>
+      </main>
+    </template>
+
+    <template v-else>
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Remote Control Console</p>
+          <h1>内外网指令桥</h1>
+          <p class="subtitle">
+            控制台通过服务端下发命令，内网 agent 主动执行并把结果实时回传。
+          </p>
+        </div>
+
+        <div class="status-card">
+          <div class="status-head">
+            <div>
+              <span class="status-dot" :class="{ online: wsState.connected }"></span>
+              <strong>{{ wsState.connected ? "实时链路在线" : "实时链路重连中" }}</strong>
+            </div>
+            <button class="ghost-button" type="button" @click="logout">退出登录</button>
+          </div>
+          <p>{{ wsState.error || "浏览器和服务端之间的事件通道正常工作。" }}</p>
+          <small class="status-user">当前用户：{{ displayName }}</small>
+        </div>
+      </header>
+
+      <main class="dashboard">
+        <aside class="panel agents-panel">
           <div class="panel-head">
             <div>
-              <p class="section-kicker">Dispatch</p>
-              <h2>命令下发</h2>
+              <p class="section-kicker">Agents</p>
+              <h2>设备</h2>
             </div>
-            <span class="pill muted">{{ activeAgent?.label || "未选择设备" }}</span>
+            <span class="pill">{{ agents.length }}</span>
           </div>
 
-          <textarea
-            v-model="commandInput"
-            class="command-input"
-            placeholder="例如：ipconfig /all 或 hostname"
-            rows="5"
-          ></textarea>
-
-          <div class="toolbar">
-            <div class="hint">
-              <span>目标设备：</span>
-              <strong>{{ activeAgent?.agentId || "未选择" }}</strong>
-            </div>
-            <button class="submit-button" :disabled="submitting || !selectedAgentId || !commandInput.trim()" @click="submitCommand">
-              {{ submitting ? "提交中..." : "发送命令" }}
+          <div class="agent-list">
+            <button
+              v-for="agent in agents"
+              :key="agent.agentId"
+              class="agent-item"
+              :class="{ selected: selectedAgentId === agent.agentId }"
+              @click="selectedAgentId = agent.agentId"
+            >
+              <div class="agent-title">
+                <strong>{{ agent.label }}</strong>
+                <span class="tag" :class="agent.status">{{ agent.status }}</span>
+              </div>
+              <p>{{ agent.hostname || agent.agentId }}</p>
+              <small>{{ agent.platform }} / {{ agent.arch }}</small>
             </button>
           </div>
-        </section>
+        </aside>
 
-        <section class="panel timeline-panel">
-          <div class="panel-head">
-            <div>
-              <p class="section-kicker">Timeline</p>
-              <h2>执行记录</h2>
+        <section class="workbench">
+          <section class="panel command-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Dispatch</p>
+                <h2>命令下发</h2>
+              </div>
+              <span class="pill muted">{{ activeAgent?.label || "未选择设备" }}</span>
             </div>
-            <span class="pill">{{ visibleCommands.length }}</span>
-          </div>
 
-          <div class="command-list">
-            <article v-for="item in visibleCommands" :key="item.requestId" class="command-card">
-              <div class="command-header">
-                <div>
-                  <strong>{{ item.command }}</strong>
-                  <p>{{ item.agentId }}</p>
-                </div>
-                <span class="tag" :class="item.status">{{ item.status }}</span>
+            <textarea
+              v-model="commandInput"
+              class="command-input"
+              placeholder="例如：ipconfig /all 或 hostname"
+              rows="5"
+            ></textarea>
+
+            <div class="toolbar">
+              <div class="hint">
+                <span>目标设备：</span>
+                <strong>{{ activeAgent?.agentId || "未选择" }}</strong>
               </div>
+              <button class="submit-button" :disabled="submitting || !selectedAgentId || !commandInput.trim()" @click="submitCommand">
+                {{ submitting ? "提交中..." : "发送命令" }}
+              </button>
+            </div>
+          </section>
 
-              <dl class="meta-grid">
-                <div>
-                  <dt>创建时间</dt>
-                  <dd>{{ item.createdAt }}</dd>
-                </div>
-                <div>
-                  <dt>退出码</dt>
-                  <dd>{{ item.exitCode ?? "-" }}</dd>
-                </div>
-              </dl>
-
-              <div v-if="item.stdout" class="output-block">
-                <h3>STDOUT</h3>
-                <pre>{{ item.stdout }}</pre>
+          <section class="panel timeline-panel">
+            <div class="panel-head">
+              <div>
+                <p class="section-kicker">Timeline</p>
+                <h2>执行记录</h2>
               </div>
+              <span class="pill">{{ visibleCommands.length }}</span>
+            </div>
 
-              <div v-if="item.stderr || item.error" class="output-block error">
-                <h3>STDERR / ERROR</h3>
-                <pre>{{ item.stderr || item.error }}</pre>
-              </div>
-            </article>
-          </div>
+            <div class="command-list">
+              <article v-for="item in visibleCommands" :key="item.requestId" class="command-card">
+                <div class="command-header">
+                  <div>
+                    <strong>{{ item.command }}</strong>
+                    <p>{{ item.agentId }}</p>
+                  </div>
+                  <span class="tag" :class="item.status">{{ item.status }}</span>
+                </div>
+
+                <dl class="meta-grid">
+                  <div>
+                    <dt>创建时间</dt>
+                    <dd>{{ item.createdAt }}</dd>
+                  </div>
+                  <div>
+                    <dt>退出码</dt>
+                    <dd>{{ item.exitCode ?? "-" }}</dd>
+                  </div>
+                </dl>
+
+                <div v-if="item.stdout" class="output-block">
+                  <h3>STDOUT</h3>
+                  <pre>{{ item.stdout }}</pre>
+                </div>
+
+                <div v-if="item.stderr || item.error" class="output-block error">
+                  <h3>STDERR / ERROR</h3>
+                  <pre>{{ item.stderr || item.error }}</pre>
+                </div>
+              </article>
+            </div>
+          </section>
         </section>
-      </section>
-    </main>
+      </main>
+    </template>
   </div>
 </template>
+

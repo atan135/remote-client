@@ -43,6 +43,24 @@ npm run dev:agent
 - 服务端参考 [webserver/server/.env.example](/c:/project/remote-client/webserver/server/.env.example)
 - 内网 agent 参考 [localapp/.env.example](/c:/project/remote-client/localapp/.env.example)
 
+## 数据库初始化
+
+执行初始化脚本：
+
+```bash
+mysql -uroot -p -h 127.0.0.1 < db/init.sql
+```
+
+默认数据库：
+
+- `remote_client`
+- 字符集：`utf8mb4`
+
+默认登录账号：
+
+- 用户名：`admin`
+- 密码：`ChangeMe123!`
+
 默认端口约定：
 
 - `webserver/server` 默认监听 `3100`
