@@ -9,7 +9,7 @@ function toNumber(value, fallback) {
 
 export function loadConfig() {
   return {
-    httpPort: toNumber(process.env.HTTP_PORT, 3000),
+    httpPort: toNumber(process.env.HTTP_PORT, 3100),
     controlToken: process.env.CONTROL_TOKEN || "",
     agentSharedToken: process.env.AGENT_SHARED_TOKEN || "",
     commandHistoryLimit: toNumber(process.env.COMMAND_HISTORY_LIMIT, 100),

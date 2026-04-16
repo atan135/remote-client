@@ -4,6 +4,12 @@
 
 实现一个“内网 agent 主动外连 + 外网控制台下发命令 + 结果回传”的双端系统。
 
+## 默认端口
+
+- `webserver/server`：`3100`
+- `localapp` 默认上连地址：`ws://localhost:3100/ws/agent`
+- `webserver/client` 开发代理：`http://localhost:3100`
+
 ## 模块划分
 
 ### 1. `localapp`

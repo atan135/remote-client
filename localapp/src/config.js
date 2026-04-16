@@ -12,7 +12,7 @@ export function loadConfig() {
   const hostname = os.hostname();
 
   return {
-    serverWsUrl: process.env.SERVER_WS_URL || "ws://localhost:3000/ws/agent",
+    serverWsUrl: process.env.SERVER_WS_URL || "ws://localhost:3100/ws/agent",
     agentId: process.env.AGENT_ID || hostname,
     agentLabel: process.env.AGENT_LABEL || hostname,
     agentSharedToken: process.env.AGENT_SHARED_TOKEN || "",

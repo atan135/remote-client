@@ -26,6 +26,12 @@ npm run dev:server
 npm run dev:client
 ```
 
+默认访问地址：
+
+```text
+http://localhost:5173
+```
+
 4. 启动内网 agent：
 
 ```bash
@@ -37,3 +43,8 @@ npm run dev:agent
 - 服务端参考 [webserver/server/.env.example](/c:/project/remote-client/webserver/server/.env.example)
 - 内网 agent 参考 [localapp/.env.example](/c:/project/remote-client/localapp/.env.example)
 
+默认端口约定：
+
+- `webserver/server` 默认监听 `3100`
+- `localapp` 默认连接 `ws://localhost:3100/ws/agent`
+- `webserver/client` 开发代理默认转发到 `http://localhost:3100`
