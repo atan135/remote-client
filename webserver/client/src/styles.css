@@ -1,0 +1,358 @@
+:root {
+  color-scheme: dark;
+  --bg: #10161d;
+  --panel: rgba(12, 19, 29, 0.82);
+  --panel-strong: rgba(18, 28, 40, 0.95);
+  --line: rgba(139, 166, 191, 0.16);
+  --text: #edf3f8;
+  --text-dim: #9cb1c3;
+  --accent: #f2a65a;
+  --accent-soft: rgba(242, 166, 90, 0.16);
+  --success: #78d7a6;
+  --danger: #ff857a;
+  --shadow: 0 30px 80px rgba(0, 0, 0, 0.35);
+  font-family: "Aptos", "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top left, rgba(242, 166, 90, 0.18), transparent 28%),
+    radial-gradient(circle at bottom right, rgba(73, 144, 226, 0.16), transparent 30%),
+    linear-gradient(180deg, #0c1118 0%, #10161d 100%);
+  color: var(--text);
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  position: relative;
+  min-height: 100vh;
+  padding: 32px;
+  overflow: hidden;
+}
+
+.ambient {
+  position: absolute;
+  width: 320px;
+  height: 320px;
+  border-radius: 999px;
+  filter: blur(80px);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.ambient-left {
+  top: -80px;
+  left: -60px;
+  background: rgba(242, 166, 90, 0.22);
+}
+
+.ambient-right {
+  right: -100px;
+  bottom: -80px;
+  background: rgba(102, 180, 255, 0.18);
+}
+
+.hero,
+.dashboard {
+  position: relative;
+  z-index: 1;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
+  align-items: end;
+  margin-bottom: 24px;
+}
+
+.eyebrow,
+.section-kicker {
+  margin: 0 0 10px;
+  color: var(--accent);
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.hero h1,
+.panel h2 {
+  margin: 0;
+  font-weight: 700;
+}
+
+.hero h1 {
+  font-size: clamp(2.4rem, 4vw, 4rem);
+}
+
+.subtitle,
+.status-card p,
+.agent-item p,
+.agent-item small,
+.command-header p,
+.hint,
+dt {
+  color: var(--text-dim);
+}
+
+.status-card,
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 24px;
+  background: var(--panel);
+  backdrop-filter: blur(22px);
+  box-shadow: var(--shadow);
+}
+
+.status-card {
+  padding: 20px;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-right: 10px;
+  background: var(--danger);
+  box-shadow: 0 0 0 8px rgba(255, 133, 122, 0.12);
+}
+
+.status-dot.online {
+  background: var(--success);
+  box-shadow: 0 0 0 8px rgba(120, 215, 166, 0.12);
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: 320px minmax(0, 1fr);
+  gap: 24px;
+}
+
+.panel {
+  padding: 24px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.pill,
+.tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 42px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.pill {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pill.muted {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-dim);
+}
+
+.tag {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.tag.online,
+.tag.completed {
+  color: var(--success);
+  background: rgba(120, 215, 166, 0.14);
+}
+
+.tag.failed,
+.tag.timed_out,
+.tag.connection_lost {
+  color: var(--danger);
+  background: rgba(255, 133, 122, 0.14);
+}
+
+.tag.dispatched,
+.tag.running,
+.tag.queued {
+  color: #8cc0ff;
+  background: rgba(91, 154, 255, 0.14);
+}
+
+.token-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.token-inline {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.token-field input,
+.command-input {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+.token-field input {
+  padding: 12px 14px;
+}
+
+.token-button {
+  border: 1px solid rgba(242, 166, 90, 0.28);
+  border-radius: 16px;
+  padding: 0 16px;
+  background: rgba(242, 166, 90, 0.12);
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.agent-list,
+.command-list {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-item {
+  padding: 16px;
+  border: 1px solid transparent;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+}
+
+.agent-item:hover,
+.agent-item.selected {
+  transform: translateY(-1px);
+  border-color: rgba(242, 166, 90, 0.42);
+  background: rgba(242, 166, 90, 0.08);
+}
+
+.agent-title,
+.command-header,
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.workbench {
+  display: grid;
+  gap: 24px;
+}
+
+.command-input {
+  min-height: 140px;
+  padding: 18px;
+  resize: vertical;
+}
+
+.toolbar {
+  margin-top: 16px;
+  align-items: center;
+}
+
+.submit-button {
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 22px;
+  background: linear-gradient(135deg, #f2a65a 0%, #f6bf79 100%);
+  color: #1f1202;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.submit-button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.command-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 18px 0;
+}
+
+dt,
+dd {
+  margin: 0;
+}
+
+dd {
+  margin-top: 6px;
+}
+
+.output-block {
+  margin-top: 16px;
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(5, 10, 15, 0.7);
+}
+
+.output-block.error {
+  border: 1px solid rgba(255, 133, 122, 0.22);
+}
+
+.output-block h3 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Consolas", "Cascadia Code", monospace;
+}
+
+@media (max-width: 960px) {
+  .app-shell {
+    padding: 20px;
+  }
+
+  .hero,
+  .dashboard {
+    grid-template-columns: 1fr;
+  }
+}

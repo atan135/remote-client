@@ -1,0 +1,16 @@
+{
+  "name": "remote-control-workspace",
+  "private": true,
+  "workspaces": [
+    "localapp",
+    "webserver/server",
+    "webserver/client"
+  ],
+  "scripts": {
+    "dev:agent": "npm run dev --workspace localapp",
+    "dev:server": "npm run dev --workspace webserver/server",
+    "dev:client": "npm run dev --workspace webserver/client",
+    "build:client": "npm run build --workspace webserver/client"
+  }
+}
+
