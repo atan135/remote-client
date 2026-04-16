@@ -14,8 +14,11 @@
 
 - `webserver/server` 使用 MySQL 保存用户和会话
 - 浏览器通过 `/api/auth/login` 提交用户名和密码
+- 浏览器可通过 `/api/auth/register` 公开注册账号
 - 服务端验证成功后写入 HTTP-only session cookie
 - 后续 `/api/agents`、`/api/commands` 和 `/ws/browser` 都基于会话校验
+- 用户可通过 `/api/auth/change-password` 修改自己的密码
+- 管理员可通过 `/api/users` 系列接口管理用户和重置密码
 
 ## 数据库
 

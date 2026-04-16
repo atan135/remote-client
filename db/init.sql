@@ -9,7 +9,7 @@ CREATE TABLE IF NOT EXISTS `users` (
   `username` VARCHAR(64) NOT NULL,
   `display_name` VARCHAR(128) NOT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
-  `role` VARCHAR(32) NOT NULL DEFAULT 'admin',
+  `role` VARCHAR(32) NOT NULL DEFAULT 'operator',
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -55,3 +55,4 @@ WHERE NOT EXISTS (
 -- 默认登录账号：
 -- username: admin
 -- password: ChangeMe123!
+-- 公开注册创建的新账号默认角色：operator

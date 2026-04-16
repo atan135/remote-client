@@ -75,6 +75,12 @@ textarea {
   margin-top: 24px;
 }
 
+.auth-switch {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
+}
+
 .login-error {
   margin: 14px 0 0;
   color: var(--danger);
@@ -358,6 +364,68 @@ dt {
   cursor: pointer;
 }
 
+.account-panel,
+.users-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.form-grid,
+.user-create-grid,
+.user-edit-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.user-create-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.select-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel-strong);
+  color: var(--text);
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-dim);
+}
+
+.user-list {
+  display: grid;
+  gap: 14px;
+}
+
+.user-card {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.user-card-head,
+.user-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.user-card-head p {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+}
+
+.user-actions {
+  margin-top: 14px;
+}
+
 .command-card {
   padding: 18px;
   border: 1px solid var(--line);
@@ -414,6 +482,12 @@ pre {
 
   .hero,
   .dashboard {
+    grid-template-columns: 1fr;
+  }
+
+  .form-grid,
+  .user-create-grid,
+  .user-edit-grid {
     grid-template-columns: 1fr;
   }
 }

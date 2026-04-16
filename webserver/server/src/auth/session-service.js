@@ -87,6 +87,13 @@ export class SessionService {
     );
   }
 
+  async deleteSessionsByUserId(userId) {
+    await this.pool.execute(
+      "DELETE FROM user_sessions WHERE user_id = ?",
+      [userId]
+    );
+  }
+
   async purgeExpiredSessions() {
     await this.pool.execute(
       "DELETE FROM user_sessions WHERE expires_at <= UTC_TIMESTAMP()"
@@ -102,4 +109,3 @@ function createExpiresAt(hours) {
   const expiresAt = new Date(Date.now() + hours * 60 * 60 * 1000);
   return expiresAt.toISOString().slice(0, 19).replace("T", " ");
 }
-

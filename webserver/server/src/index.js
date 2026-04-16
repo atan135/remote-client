@@ -41,10 +41,10 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true, now: new Date().toISOString() });
 });
 
-app.get("/api/config", (req, res) => {
+app.get("/api/config", async (_req, res) => {
   res.json({
     authEnabled: true,
-    currentUser: req.auth?.user || null
+    allowPublicRegistration: config.allowPublicRegistration
   });
 });
 
@@ -56,7 +56,7 @@ app.get("/api/auth/session", requireAuth, (req, res) => {
 });
 
 app.post("/api/auth/login", async (req, res) => {
-  const username = String(req.body?.username || "").trim();
+  const username = normalizeUsername(req.body?.username);
   const password = String(req.body?.password || "");
 
   if (!username || !password) {
@@ -102,6 +102,51 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
+app.post("/api/auth/register", async (req, res) => {
+  if (!config.allowPublicRegistration) {
+    res.status(403).json({ message: "当前未开放注册" });
+    return;
+  }
+
+  const payload = normalizeUserPayload(req.body);
+  const password = String(req.body?.password || "");
+
+  if (!payload.username || !payload.displayName || !isValidPassword(password)) {
+    res.status(400).json({ message: "请填写有效的用户名、显示名和密码" });
+    return;
+  }
+
+  try {
+    if (await userService.usernameExists(payload.username)) {
+      res.status(409).json({ message: "用户名已存在" });
+      return;
+    }
+
+    const user = await userService.register({
+      username: payload.username,
+      displayName: payload.displayName,
+      password,
+      role: "operator"
+    });
+
+    logEvent(serverLogger, "info", "auth.register_succeeded", {
+      userId: user.id,
+      username: user.username,
+      ...getRequestContext(req)
+    });
+
+    res.status(201).json({
+      item: user
+    });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth.register_error", {
+      username: payload.username,
+      error: error.message
+    });
+    res.status(500).json({ message: "注册失败" });
+  }
+});
+
 app.post("/api/auth/logout", async (req, res) => {
   const sessionToken = getSessionTokenFromRequest(req);
 
@@ -114,6 +159,158 @@ app.post("/api/auth/logout", async (req, res) => {
   }
 
   clearSessionCookie(res);
+  res.json({ ok: true });
+});
+
+app.post("/api/auth/change-password", requireAuth, async (req, res) => {
+  const currentPassword = String(req.body?.currentPassword || "");
+  const newPassword = String(req.body?.newPassword || "");
+
+  if (!currentPassword || !isValidPassword(newPassword)) {
+    res.status(400).json({ message: "请填写当前密码和有效的新密码" });
+    return;
+  }
+
+  try {
+    const result = await userService.changePassword(
+      req.auth.user.id,
+      currentPassword,
+      newPassword
+    );
+
+    if (!result.ok) {
+      res.status(400).json({ message: "当前密码错误" });
+      return;
+    }
+
+    await sessionService.deleteSessionsByUserId(req.auth.user.id);
+    clearSessionCookie(res);
+
+    logEvent(serverLogger, "info", "auth.password_changed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      ...getRequestContext(req)
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth.change_password_error", {
+      userId: req.auth.user.id,
+      error: error.message
+    });
+    res.status(500).json({ message: "修改密码失败" });
+  }
+});
+
+app.get("/api/users", requireAdmin, async (_req, res) => {
+  const items = await userService.listUsers();
+  res.json({ items });
+});
+
+app.post("/api/users", requireAdmin, async (req, res) => {
+  const payload = normalizeUserPayload(req.body);
+  const password = String(req.body?.password || "");
+  const role = normalizeRole(req.body?.role);
+  const isActive = req.body?.isActive !== false;
+
+  if (!payload.username || !payload.displayName || !role || !isValidPassword(password)) {
+    res.status(400).json({ message: "请填写有效的用户信息和密码" });
+    return;
+  }
+
+  if (await userService.usernameExists(payload.username)) {
+    res.status(409).json({ message: "用户名已存在" });
+    return;
+  }
+
+  const user = await userService.createUser({
+    username: payload.username,
+    displayName: payload.displayName,
+    password,
+    role,
+    isActive
+  });
+
+  logEvent(serverLogger, "info", "admin.user_created", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    userId: user.id,
+    username: user.username
+  });
+
+  res.status(201).json({ item: user });
+});
+
+app.patch("/api/users/:id", requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const existing = await userService.findUserById(userId);
+
+  if (!existing) {
+    res.status(404).json({ message: "用户不存在" });
+    return;
+  }
+
+  const displayName = String(req.body?.displayName || "").trim();
+  const role = normalizeRole(req.body?.role);
+  const isActive = req.body?.isActive !== false;
+
+  if (!displayName || !role) {
+    res.status(400).json({ message: "请填写有效的显示名和角色" });
+    return;
+  }
+
+  if (existing.id === req.auth.user.id && !isActive) {
+    res.status(400).json({ message: "不能禁用当前登录账号" });
+    return;
+  }
+
+  const user = await userService.updateUser(userId, {
+    displayName,
+    role,
+    isActive
+  });
+
+  if (!isActive) {
+    await sessionService.deleteSessionsByUserId(userId);
+  }
+
+  logEvent(serverLogger, "info", "admin.user_updated", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    userId: user.id,
+    username: user.username,
+    role: user.role,
+    isActive: user.isActive
+  });
+
+  res.json({ item: user });
+});
+
+app.post("/api/users/:id/reset-password", requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const newPassword = String(req.body?.newPassword || "");
+  const user = await userService.findUserById(userId);
+
+  if (!user) {
+    res.status(404).json({ message: "用户不存在" });
+    return;
+  }
+
+  if (!isValidPassword(newPassword)) {
+    res.status(400).json({ message: "请输入有效的新密码" });
+    return;
+  }
+
+  await userService.adminSetPassword(userId, newPassword);
+  await sessionService.deleteSessionsByUserId(userId);
+
+  logEvent(serverLogger, "info", "admin.password_reset", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    userId: user.id,
+    username: user.username
+  });
+
   res.json({ ok: true });
 });
 
@@ -185,7 +382,7 @@ server.on("upgrade", async (request, socket, head) => {
     if (!authorizeAgentRequest(url)) {
       logEvent(serverLogger, "warn", "agent.websocket_unauthorized", {
         agentId: url.searchParams.get("agentId") || "",
-        ip: request.socket.remoteAddress || ""
+        ipAddress: request.socket.remoteAddress || ""
       });
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
       socket.destroy();
@@ -203,7 +400,7 @@ server.on("upgrade", async (request, socket, head) => {
 
     if (!auth) {
       logEvent(serverLogger, "warn", "browser.websocket_unauthorized", {
-        ip: request.socket.remoteAddress || "",
+        ipAddress: request.socket.remoteAddress || "",
         userAgent: request.headers["user-agent"] || ""
       });
       socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
@@ -477,6 +674,17 @@ async function requireAuth(req, res, next) {
   next();
 }
 
+async function requireAdmin(req, res, next) {
+  await requireAuth(req, res, async () => {
+    if (req.auth.user.role !== "admin") {
+      res.status(403).json({ message: "需要管理员权限" });
+      return;
+    }
+
+    next();
+  });
+}
+
 async function resolveRequestAuth(req) {
   const sessionToken = getSessionTokenFromRequest(req);
 
@@ -501,7 +709,8 @@ async function resolveRequestAuth(req) {
         id: session.user_id,
         username: session.username,
         displayName: session.display_name,
-        role: session.role
+        role: session.role,
+        isActive: Boolean(session.is_active)
       }
     };
   } catch (error) {
@@ -550,6 +759,26 @@ function getRequestContext(req) {
   };
 }
 
+function normalizeUsername(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function normalizeUserPayload(body) {
+  return {
+    username: normalizeUsername(body?.username),
+    displayName: String(body?.displayName || "").trim()
+  };
+}
+
+function normalizeRole(role) {
+  const value = String(role || "").trim().toLowerCase();
+  return ["admin", "operator", "viewer"].includes(value) ? value : "";
+}
+
+function isValidPassword(password) {
+  return typeof password === "string" && password.length >= 8;
+}
+
 function formatUnknownError(reason) {
   if (reason instanceof Error) {
     return {
@@ -560,3 +789,4 @@ function formatUnknownError(reason) {
 
   return String(reason);
 }
+

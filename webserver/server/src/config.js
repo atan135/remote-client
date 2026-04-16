@@ -17,6 +17,7 @@ export function loadConfig() {
     mysqlUrl: process.env.MYSQL_URL || "mysql://root:atan135@127.0.0.1:3306/remote_client",
     sessionCookieName: process.env.SESSION_COOKIE_NAME || "remote_client_session",
     sessionTtlHours: toNumber(process.env.SESSION_TTL_HOURS, 24),
-    sessionSecure: process.env.SESSION_SECURE === "true"
+    sessionSecure: process.env.SESSION_SECURE === "true",
+    allowPublicRegistration: process.env.ALLOW_PUBLIC_REGISTRATION !== "false"
   };
 }

@@ -60,9 +60,16 @@ mysql -uroot -p -h 127.0.0.1 < db/init.sql
 
 - 用户名：`admin`
 - 密码：`ChangeMe123!`
+- 公开注册默认角色：`operator`
 
 默认端口约定：
 
 - `webserver/server` 默认监听 `3100`
 - `localapp` 默认连接 `ws://localhost:3100/ws/agent`
 - `webserver/client` 开发代理默认转发到 `http://localhost:3100`
+
+认证与用户：
+
+- 支持登录、公开注册、退出登录
+- 支持用户自助修改密码
+- 管理员支持用户列表、创建用户、修改角色/启停、重置密码
