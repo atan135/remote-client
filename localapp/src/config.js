@@ -21,6 +21,7 @@ export function loadConfig() {
     commandTimeoutMs: toNumber(process.env.COMMAND_TIMEOUT_MS, 120000),
     maxBufferBytes: toNumber(process.env.MAX_BUFFER_BYTES, 1024 * 1024),
     logLevel: process.env.LOG_LEVEL || "info",
-    logDir: process.env.LOG_DIR || "logs"
+    logDir: process.env.LOG_DIR || "logs",
+    windowsOutputEncoding: process.env.WINDOWS_OUTPUT_ENCODING || "cp936"
   };
 }

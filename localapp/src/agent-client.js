@@ -2,7 +2,7 @@ import os from "node:os";
 import process from "node:process";
 import WebSocket from "ws";
 
-import { runCommand } from "./command-runner.js";
+import { normalizeCommandForExecution, runCommand } from "./command-runner.js";
 import { logEvent } from "./logger.js";
 
 function createMessage(type, payload) {
@@ -107,12 +107,14 @@ export class AgentClient {
 
     this.processing = true;
     const payload = this.commandQueue.shift();
+    const executedCommand = normalizeCommandForExecution(payload.command);
 
     try {
       logEvent(this.commandLogger, "info", "command.started", {
         requestId: payload.requestId,
         agentId: this.config.agentId,
-        command: payload.command
+        command: payload.command,
+        executedCommand
       });
 
       this.send(
