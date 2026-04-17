@@ -1,15 +1,54 @@
 <script setup>
+import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+
+import AuthScreen from "./components/AuthScreen.vue";
+import BottomTabBar from "./components/BottomTabBar.vue";
+import ExploreTab from "./components/ExploreTab.vue";
+import HomeTab from "./components/HomeTab.vue";
+import LoadingScreen from "./components/LoadingScreen.vue";
+import ProfileTab from "./components/ProfileTab.vue";
+import TasksTab from "./components/TasksTab.vue";
+import TopBar from "./components/TopBar.vue";
+
+const activeTab = ref("home");
+const tabs = [
+  {
+    key: "home",
+    label: "首页",
+    action: "设备",
+    badge: 0
+  },
+  {
+    key: "explore",
+    label: "发现",
+    action: "终端",
+    badge: 0
+  },
+  {
+    key: "tasks",
+    label: "任务",
+    action: "记录",
+    badge: 0
+  },
+  {
+    key: "profile",
+    label: "我的",
+    action: "设置",
+    badge: 0
+  }
+];
 
 const agents = ref([]);
 const commands = ref([]);
 const users = ref([]);
 const authCodes = ref([]);
 const selectedAgentId = ref("");
+const timelineFilterAgentId = ref("all");
 const commandInput = ref("");
-const submitting = ref(false);
 const bootstrapping = ref(true);
 const authenticating = ref(false);
+const submitting = ref(false);
 const loadingUsers = ref(false);
 const loadingAuthCodes = ref(false);
 const creatingUser = ref(false);
@@ -21,19 +60,23 @@ const savingAuthCodeId = ref(null);
 const deletingAuthCodeId = ref(null);
 const session = ref(null);
 const authMode = ref("login");
+
 const loginForm = reactive({
   username: "",
   password: ""
 });
+
 const registerForm = reactive({
   username: "",
   displayName: "",
   password: ""
 });
+
 const passwordForm = reactive({
   currentPassword: "",
   newPassword: ""
 });
+
 const userForm = reactive({
   username: "",
   displayName: "",
@@ -41,20 +84,28 @@ const userForm = reactive({
   role: "operator",
   isActive: true
 });
+
 const authCodeForm = reactive({
   agentId: "",
   remark: "",
   authCode: ""
 });
+
 const wsState = reactive({
   connected: false,
   error: ""
 });
+
 const appConfig = reactive({
   allowPublicRegistration: true
 });
 
 let socket = null;
+
+const avatarLabel = computed(() => {
+  const source = session.value?.user?.displayName || session.value?.user?.username || "Q";
+  return String(source).slice(0, 1).toUpperCase();
+});
 
 const selectedAgentIdKey = computed(() => normalizeAgentId(selectedAgentId.value));
 
@@ -70,18 +121,22 @@ const activeAuthCodeBinding = computed(
 );
 
 const visibleCommands = computed(() => {
-  if (!selectedAgentId.value) {
+  if (!timelineFilterAgentId.value || timelineFilterAgentId.value === "all") {
     return commands.value;
   }
 
-  return commands.value.filter((item) => item.agentId === selectedAgentId.value);
+  return commands.value.filter((item) => item.agentId === timelineFilterAgentId.value);
 });
+
+const isAdmin = computed(() => session.value?.user?.role === "admin");
+
+const onlineAgentCount = computed(
+  () => agents.value.filter((item) => item.status === "online").length
+);
 
 const displayName = computed(
   () => session.value?.user?.displayName || session.value?.user?.username || ""
 );
-
-const isAdmin = computed(() => session.value?.user?.role === "admin");
 
 const canSubmitCommand = computed(
   () =>
@@ -91,6 +146,38 @@ const canSubmitCommand = computed(
         activeAuthCodeBinding.value &&
         !submitting.value
     )
+);
+
+const pendingTaskCount = computed(
+  () =>
+    commands.value.filter((item) =>
+      ["queued", "running", "dispatched"].includes(item.status)
+    ).length
+);
+
+const failedTaskCount = computed(
+  () =>
+    commands.value.filter((item) =>
+      ["failed", "timed_out", "connection_lost"].includes(item.status)
+    ).length
+);
+
+const tabBadges = computed(() => ({
+  home: onlineAgentCount.value,
+  explore: activeAgent.value ? 1 : 0,
+  tasks: pendingTaskCount.value || failedTaskCount.value,
+  profile: wsState.error ? 1 : 0
+}));
+
+const resolvedTabs = computed(() =>
+  tabs.map((tab) => ({
+    ...tab,
+    badge: tabBadges.value[tab.key] || 0
+  }))
+);
+
+const currentTab = computed(
+  () => resolvedTabs.value.find((item) => item.key === activeTab.value) || resolvedTabs.value[0]
 );
 
 onMounted(async () => {
@@ -220,12 +307,12 @@ async function register() {
       throw new Error(payload.message || "注册失败");
     }
 
-    wsState.error = "注册成功，请登录";
     authMode.value = "login";
     loginForm.username = registerForm.username.trim();
     registerForm.username = "";
     registerForm.displayName = "";
     registerForm.password = "";
+    ElMessage.success("注册成功，请登录");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -380,6 +467,8 @@ async function submitCommand() {
     }
 
     commandInput.value = "";
+    activeTab.value = "tasks";
+    timelineFilterAgentId.value = selectedAgentId.value || "all";
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -419,6 +508,7 @@ async function createAuthCode() {
     authCodeForm.remark = "";
     authCodeForm.authCode = "";
     await loadAuthCodes();
+    ElMessage.success("auth_code 已创建");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -450,6 +540,7 @@ async function saveAuthCode(item) {
     }
 
     Object.assign(item, payload.item);
+    ElMessage.success("auth_code 已更新");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -458,7 +549,17 @@ async function saveAuthCode(item) {
 }
 
 async function deleteAuthCode(item) {
-  if (!window.confirm(`确认删除设备 ${item.agentId} 的 auth_code 吗？`)) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除设备 ${item.agentId} 的 auth_code 吗？`,
+      "删除 auth_code",
+      {
+        type: "warning",
+        confirmButtonText: "删除",
+        cancelButtonText: "取消"
+      }
+    );
+  } catch {
     return;
   }
 
@@ -477,6 +578,7 @@ async function deleteAuthCode(item) {
     }
 
     authCodes.value = authCodes.value.filter((candidate) => candidate.id !== item.id);
+    ElMessage.success("auth_code 已删除");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -514,7 +616,7 @@ async function submitChangePassword() {
     passwordForm.currentPassword = "";
     passwordForm.newPassword = "";
     resetAuthedState();
-    wsState.error = "密码已修改，请重新登录";
+    ElMessage.success("密码已修改，请重新登录");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -562,6 +664,7 @@ async function createUser() {
     userForm.role = "operator";
     userForm.isActive = true;
     await loadUsers();
+    ElMessage.success("用户已创建");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -593,6 +696,7 @@ async function saveUser(user) {
     }
 
     Object.assign(user, payload.item);
+    ElMessage.success("用户已更新");
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -601,14 +705,23 @@ async function saveUser(user) {
 }
 
 async function resetPassword(user) {
-  const nextPassword = window.prompt(`为用户 ${user.username} 设置新密码`, "ChangeMe123!");
+  let nextPassword = "";
 
-  if (!nextPassword) {
-    return;
-  }
+  try {
+    const result = await ElMessageBox.prompt(
+      `为用户 ${user.username} 设置新密码`,
+      "重置密码",
+      {
+        inputValue: "ChangeMe123!",
+        inputPattern: /^.{8,}$/,
+        inputErrorMessage: "新密码至少 8 位",
+        confirmButtonText: "提交",
+        cancelButtonText: "取消"
+      }
+    );
 
-  if (nextPassword.length < 8) {
-    wsState.error = "新密码至少 8 位";
+    nextPassword = result.value;
+  } catch {
     return;
   }
 
@@ -631,6 +744,8 @@ async function resetPassword(user) {
     if (!response.ok) {
       throw new Error(payload.message || "重置密码失败");
     }
+
+    ElMessage.success(`已为 ${user.username} 重置密码`);
   } catch (error) {
     wsState.error = error.message;
   } finally {
@@ -698,11 +813,25 @@ function disconnectBrowserSocket() {
 
 function ensureSelectedAgent() {
   if (selectedAgentId.value && agents.value.some((item) => item.agentId === selectedAgentId.value)) {
+    if (
+      timelineFilterAgentId.value !== "all" &&
+      !agents.value.some((item) => item.agentId === timelineFilterAgentId.value)
+    ) {
+      timelineFilterAgentId.value = "all";
+    }
+
     return;
   }
 
   const onlineAgent = agents.value.find((item) => item.status === "online");
   selectedAgentId.value = onlineAgent?.agentId || agents.value[0]?.agentId || "";
+
+  if (
+    timelineFilterAgentId.value !== "all" &&
+    !agents.value.some((item) => item.agentId === timelineFilterAgentId.value)
+  ) {
+    timelineFilterAgentId.value = "all";
+  }
 }
 
 async function handleUnauthorized() {
@@ -718,7 +847,9 @@ function resetAuthedState() {
   users.value = [];
   authCodes.value = [];
   selectedAgentId.value = "";
+  timelineFilterAgentId.value = "all";
   commandInput.value = "";
+  activeTab.value = "home";
 }
 
 function upsertByKey(collection, item, key) {
@@ -757,7 +888,7 @@ function normalizeAgentId(value) {
 
 function useSelectedAgentIdForAuthCode() {
   if (!selectedAgentId.value) {
-    wsState.error = "请先从左侧选择设备";
+    wsState.error = "请先选择设备";
     return;
   }
 
@@ -767,440 +898,101 @@ function useSelectedAgentIdForAuthCode() {
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-demo">
     <div class="ambient ambient-left"></div>
     <div class="ambient ambient-right"></div>
 
-    <template v-if="bootstrapping">
-      <main class="login-shell">
-        <section class="panel login-panel">
-          <p class="eyebrow">Remote Control Console</p>
-          <h1>正在检查登录状态</h1>
-          <p class="subtitle">系统正在连接服务端并恢复当前会话。</p>
-        </section>
+    <LoadingScreen v-if="bootstrapping" />
+
+    <AuthScreen
+      v-else-if="!session"
+      :auth-mode="authMode"
+      :allow-public-registration="appConfig.allowPublicRegistration"
+      :login-form="loginForm"
+      :register-form="registerForm"
+      :authenticating="authenticating"
+      :error-message="wsState.error"
+      @update:auth-mode="authMode = $event"
+      @login="login"
+      @register="register"
+    />
+
+    <div v-else class="mobile-shell">
+      <TopBar :current-tab="currentTab" :avatar-label="avatarLabel" />
+
+      <main class="content">
+        <HomeTab
+          v-show="activeTab === 'home'"
+          :agents="agents"
+          :selected-agent-id="selectedAgentId"
+          :active-agent="activeAgent"
+          :commands="commands"
+          :online-agent-count="onlineAgentCount"
+          :display-name="displayName"
+          :ws-connected="wsState.connected"
+          @select-agent="selectedAgentId = $event"
+          @go-terminal="activeTab = 'explore'"
+        />
+
+        <ExploreTab
+          v-show="activeTab === 'explore'"
+          :agents="agents"
+          :selected-agent-id="selectedAgentId"
+          :active-agent="activeAgent"
+          :active-auth-code-binding="activeAuthCodeBinding"
+          :command-input="commandInput"
+          :can-submit-command="canSubmitCommand"
+          :submitting="submitting"
+          @update:selected-agent-id="selectedAgentId = $event"
+          @update:command-input="commandInput = $event"
+          @submit-command="submitCommand"
+        />
+
+        <TasksTab
+          v-show="activeTab === 'tasks'"
+          :commands="visibleCommands"
+          :agents="agents"
+          :timeline-filter-agent-id="timelineFilterAgentId"
+          @update:timeline-filter-agent-id="timelineFilterAgentId = $event"
+        />
+
+        <ProfileTab
+          v-show="activeTab === 'profile'"
+          :session="session"
+          :display-name="displayName"
+          :is-admin="isAdmin"
+          :users="users"
+          :auth-codes="authCodes"
+          :selected-agent-id="selectedAgentId"
+          :password-form="passwordForm"
+          :user-form="userForm"
+          :auth-code-form="authCodeForm"
+          :changing-password="changingPassword"
+          :creating-user="creatingUser"
+          :loading-users="loadingUsers"
+          :loading-auth-codes="loadingAuthCodes"
+          :creating-auth-code="creatingAuthCode"
+          :saving-auth-code-id="savingAuthCodeId"
+          :deleting-auth-code-id="deletingAuthCodeId"
+          :updating-user-id="updatingUserId"
+          :resetting-user-id="resettingUserId"
+          @logout="logout"
+          @submit-change-password="submitChangePassword"
+          @create-user="createUser"
+          @save-user="saveUser"
+          @reset-password="resetPassword"
+          @create-auth-code="createAuthCode"
+          @save-auth-code="saveAuthCode"
+          @delete-auth-code="deleteAuthCode"
+          @use-selected-agent-id="useSelectedAgentIdForAuthCode"
+        />
       </main>
-    </template>
 
-    <template v-else-if="!session">
-      <main class="login-shell">
-        <section class="panel login-panel">
-          <p class="eyebrow">Remote Control Console</p>
-          <h1>{{ authMode === "login" ? "登录控制台" : "注册账号" }}</h1>
-          <p class="subtitle">
-            {{
-              authMode === "login"
-                ? "先完成身份验证，再访问设备控制与命令记录。"
-                : "创建新账号后，再回到登录页进入控制台。"
-            }}
-          </p>
-
-          <template v-if="authMode === 'login'">
-            <label class="login-field">
-              <span>用户名</span>
-              <input v-model="loginForm.username" type="text" placeholder="输入用户名" @keyup.enter="login" />
-            </label>
-
-            <label class="login-field">
-              <span>密码</span>
-              <input v-model="loginForm.password" type="password" placeholder="输入密码" @keyup.enter="login" />
-            </label>
-
-            <button class="submit-button login-button" :disabled="authenticating" @click="login">
-              {{ authenticating ? "登录中..." : "登录" }}
-            </button>
-          </template>
-
-          <template v-else>
-            <label class="login-field">
-              <span>用户名</span>
-              <input v-model="registerForm.username" type="text" placeholder="输入用户名" @keyup.enter="register" />
-            </label>
-
-            <label class="login-field">
-              <span>显示名</span>
-              <input v-model="registerForm.displayName" type="text" placeholder="输入显示名" @keyup.enter="register" />
-            </label>
-
-            <label class="login-field">
-              <span>密码</span>
-              <input v-model="registerForm.password" type="password" placeholder="至少 8 位" @keyup.enter="register" />
-            </label>
-
-            <button class="submit-button login-button" :disabled="authenticating" @click="register">
-              {{ authenticating ? "提交中..." : "注册" }}
-            </button>
-          </template>
-
-          <div class="auth-switch">
-            <button v-if="appConfig.allowPublicRegistration && authMode === 'login'" class="ghost-button" type="button" @click="authMode = 'register'">
-              去注册
-            </button>
-            <button v-if="authMode === 'register'" class="ghost-button" type="button" @click="authMode = 'login'">
-              返回登录
-            </button>
-          </div>
-
-          <p v-if="wsState.error" class="login-error">{{ wsState.error }}</p>
-        </section>
-      </main>
-    </template>
-
-    <template v-else>
-      <header class="hero">
-        <div>
-          <p class="eyebrow">Remote Control Console</p>
-          <h1>内外网指令桥</h1>
-          <p class="subtitle">
-            控制台通过服务端下发命令，内网 agent 主动执行并把结果实时回传。
-          </p>
-        </div>
-
-        <div class="status-card">
-          <div class="status-head">
-            <div>
-              <span class="status-dot" :class="{ online: wsState.connected }"></span>
-              <strong>{{ wsState.connected ? "实时链路在线" : "实时链路重连中" }}</strong>
-            </div>
-            <button class="ghost-button" type="button" @click="logout">退出登录</button>
-          </div>
-          <p>{{ wsState.error || "浏览器和服务端之间的事件通道正常工作。" }}</p>
-          <small class="status-user">当前用户：{{ displayName }} / {{ session.user.role }}</small>
-        </div>
-      </header>
-
-      <main class="dashboard">
-        <aside class="panel agents-panel">
-          <div class="panel-head">
-            <div>
-              <p class="section-kicker">Agents</p>
-              <h2>设备</h2>
-            </div>
-            <span class="pill">{{ agents.length }}</span>
-          </div>
-
-          <div class="agent-list">
-            <button
-              v-for="agent in agents"
-              :key="agent.agentId"
-              class="agent-item"
-              :class="{ selected: selectedAgentId === agent.agentId }"
-              @click="selectedAgentId = agent.agentId"
-            >
-              <div class="agent-title">
-                <strong>{{ agent.label }}</strong>
-                <span class="tag" :class="agent.status">{{ agent.status }}</span>
-              </div>
-              <p>{{ agent.hostname || agent.agentId }}</p>
-              <small>{{ agent.platform }} / {{ agent.arch }}</small>
-            </button>
-          </div>
-        </aside>
-
-        <section class="workbench">
-          <section class="panel command-panel">
-            <div class="panel-head">
-              <div>
-                <p class="section-kicker">Dispatch</p>
-                <h2>命令下发</h2>
-              </div>
-              <span class="pill muted">{{ activeAgent?.label || "未选择设备" }}</span>
-            </div>
-
-            <div class="binding-summary" :class="{ missing: !activeAuthCodeBinding }">
-              <strong>{{ activeAuthCodeBinding ? "auth_code 已绑定" : "缺少 auth_code 绑定" }}</strong>
-              <span v-if="activeAuthCodeBinding">
-                指纹 {{ shortFingerprint(activeAuthCodeBinding.fingerprint) }}
-              </span>
-              <span v-else>
-                请先在下方 auth_code 管理中为当前设备添加 RSA 公钥
-              </span>
-            </div>
-
-            <textarea
-              v-model="commandInput"
-              class="command-input"
-              placeholder="例如：ipconfig /all 或 hostname"
-              rows="5"
-            ></textarea>
-
-            <div class="toolbar">
-              <div class="hint">
-                <span>目标设备：</span>
-                <strong>{{ activeAgent?.agentId || "未选择" }}</strong>
-              </div>
-              <button class="submit-button" :disabled="!canSubmitCommand" @click="submitCommand">
-                {{ submitting ? "提交中..." : "发送安全命令" }}
-              </button>
-            </div>
-          </section>
-
-          <section class="panel authcodes-panel">
-            <div class="panel-head">
-              <div>
-                <p class="section-kicker">Auth Codes</p>
-                <h2>设备公钥绑定</h2>
-              </div>
-              <span class="pill">{{ authCodes.length }}</span>
-            </div>
-
-            <div class="authcode-create-grid">
-              <label class="login-field">
-                <span>设备 ID</span>
-                <input v-model="authCodeForm.agentId" type="text" placeholder="例如 office-pc-01" />
-              </label>
-              <label class="login-field">
-                <span>备注</span>
-                <input v-model="authCodeForm.remark" type="text" placeholder="例如 办公室电脑" />
-              </label>
-            </div>
-
-            <div class="toolbar compact-toolbar">
-              <div class="hint">
-                <span>当前选中设备：</span>
-                <strong>{{ selectedAgentId || "未选择" }}</strong>
-              </div>
-              <button class="ghost-button" type="button" @click="useSelectedAgentIdForAuthCode">
-                使用当前设备 ID
-              </button>
-            </div>
-
-            <label class="login-field">
-              <span>RSA 公钥 PEM</span>
-              <textarea
-                v-model="authCodeForm.authCode"
-                class="authcode-input"
-                rows="7"
-                placeholder="粘贴 localapp 生成的 auth_public.pem 内容"
-              ></textarea>
-            </label>
-
-            <button class="submit-button" :disabled="creatingAuthCode" @click="createAuthCode">
-              {{ creatingAuthCode ? "创建中..." : "新增 auth_code" }}
-            </button>
-
-            <div class="authcode-list">
-              <article v-for="item in authCodes" :key="item.id" class="authcode-card">
-                <div class="authcode-card-head">
-                  <div>
-                    <strong>{{ item.agentId }}</strong>
-                    <p>{{ item.updatedAt || item.createdAt }}</p>
-                  </div>
-                  <span class="pill muted">{{ shortFingerprint(item.fingerprint) }}</span>
-                </div>
-
-                <div class="authcode-edit-grid">
-                  <label class="login-field">
-                    <span>设备 ID</span>
-                    <input v-model="item.agentId" type="text" />
-                  </label>
-                  <label class="login-field">
-                    <span>备注</span>
-                    <input v-model="item.remark" type="text" />
-                  </label>
-                </div>
-
-                <label class="login-field">
-                  <span>RSA 公钥 PEM</span>
-                  <textarea v-model="item.authCode" class="authcode-input" rows="7"></textarea>
-                </label>
-
-                <div class="hint-line">
-                  <span>authCodeId: {{ item.id }}</span>
-                  <span>SHA-256: {{ item.fingerprint }}</span>
-                </div>
-
-                <div class="user-actions">
-                  <button
-                    class="ghost-button"
-                    type="button"
-                    :disabled="savingAuthCodeId === item.id"
-                    @click="saveAuthCode(item)"
-                  >
-                    {{ savingAuthCodeId === item.id ? "保存中..." : "保存" }}
-                  </button>
-                  <button
-                    class="ghost-button danger-button"
-                    type="button"
-                    :disabled="deletingAuthCodeId === item.id"
-                    @click="deleteAuthCode(item)"
-                  >
-                    {{ deletingAuthCodeId === item.id ? "删除中..." : "删除" }}
-                  </button>
-                </div>
-              </article>
-            </div>
-
-            <p v-if="loadingAuthCodes" class="hint">正在加载 auth_code 列表...</p>
-          </section>
-
-          <section class="panel timeline-panel">
-            <div class="panel-head">
-              <div>
-                <p class="section-kicker">Timeline</p>
-                <h2>执行记录</h2>
-              </div>
-              <span class="pill">{{ visibleCommands.length }}</span>
-            </div>
-
-            <div class="command-list">
-              <article v-for="item in visibleCommands" :key="item.requestId" class="command-card">
-                <div class="command-header">
-                  <div>
-                    <strong>{{ item.command }}</strong>
-                    <p>{{ item.agentId }}</p>
-                  </div>
-                  <span class="tag" :class="item.status">{{ item.status }}</span>
-                </div>
-
-                <dl class="meta-grid">
-                  <div>
-                    <dt>创建时间</dt>
-                    <dd>{{ item.createdAt }}</dd>
-                  </div>
-                  <div>
-                    <dt>退出码</dt>
-                    <dd>{{ item.exitCode ?? "-" }}</dd>
-                  </div>
-                  <div>
-                    <dt>安全状态</dt>
-                    <dd>{{ item.secureStatus || "-" }}</dd>
-                  </div>
-                  <div>
-                    <dt>authCodeId</dt>
-                    <dd>{{ item.authCodeId ?? "-" }}</dd>
-                  </div>
-                </dl>
-
-                <p v-if="item.securityError" class="inline-error">
-                  安全校验失败：{{ item.securityError }}
-                </p>
-
-                <div v-if="item.stdout" class="output-block">
-                  <h3>STDOUT</h3>
-                  <pre>{{ item.stdout }}</pre>
-                </div>
-
-                <div v-if="item.stderr || item.error" class="output-block error">
-                  <h3>STDERR / ERROR</h3>
-                  <pre>{{ item.stderr || item.error }}</pre>
-                </div>
-              </article>
-            </div>
-          </section>
-
-          <section class="panel account-panel">
-            <div class="panel-head">
-              <div>
-                <p class="section-kicker">Account</p>
-                <h2>修改密码</h2>
-              </div>
-            </div>
-
-            <div class="form-grid">
-              <label class="login-field">
-                <span>当前密码</span>
-                <input v-model="passwordForm.currentPassword" type="password" placeholder="输入当前密码" />
-              </label>
-
-              <label class="login-field">
-                <span>新密码</span>
-                <input v-model="passwordForm.newPassword" type="password" placeholder="至少 8 位" />
-              </label>
-            </div>
-
-            <button class="submit-button" :disabled="changingPassword" @click="submitChangePassword">
-              {{ changingPassword ? "提交中..." : "修改密码" }}
-            </button>
-          </section>
-
-          <section v-if="isAdmin" class="panel users-panel">
-            <div class="panel-head">
-              <div>
-                <p class="section-kicker">Users</p>
-                <h2>用户管理</h2>
-              </div>
-              <span class="pill">{{ users.length }}</span>
-            </div>
-
-            <div class="user-create-grid">
-              <label class="login-field">
-                <span>用户名</span>
-                <input v-model="userForm.username" type="text" placeholder="新用户名" />
-              </label>
-              <label class="login-field">
-                <span>显示名</span>
-                <input v-model="userForm.displayName" type="text" placeholder="显示名" />
-              </label>
-              <label class="login-field">
-                <span>密码</span>
-                <input v-model="userForm.password" type="password" placeholder="初始密码" />
-              </label>
-              <label class="login-field">
-                <span>角色</span>
-                <select v-model="userForm.role" class="select-input">
-                  <option value="admin">admin</option>
-                  <option value="operator">operator</option>
-                  <option value="viewer">viewer</option>
-                </select>
-              </label>
-            </div>
-
-            <label class="checkbox-row">
-              <input v-model="userForm.isActive" type="checkbox" />
-              <span>创建后启用</span>
-            </label>
-
-            <button class="submit-button" :disabled="creatingUser" @click="createUser">
-              {{ creatingUser ? "创建中..." : "创建用户" }}
-            </button>
-
-            <div class="user-list">
-              <article v-for="user in users" :key="user.id" class="user-card">
-                <div class="user-card-head">
-                  <div>
-                    <strong>{{ user.username }}</strong>
-                    <p>{{ user.createdAt }}</p>
-                  </div>
-                  <span class="tag" :class="user.isActive ? 'completed' : 'failed'">
-                    {{ user.isActive ? "active" : "disabled" }}
-                  </span>
-                </div>
-
-                <div class="user-edit-grid">
-                  <label class="login-field">
-                    <span>显示名</span>
-                    <input v-model="user.displayName" type="text" />
-                  </label>
-                  <label class="login-field">
-                    <span>角色</span>
-                    <select v-model="user.role" class="select-input">
-                      <option value="admin">admin</option>
-                      <option value="operator">operator</option>
-                      <option value="viewer">viewer</option>
-                    </select>
-                  </label>
-                </div>
-
-                <label class="checkbox-row">
-                  <input v-model="user.isActive" type="checkbox" />
-                  <span>启用用户</span>
-                </label>
-
-                <div class="user-actions">
-                  <button class="ghost-button" type="button" :disabled="updatingUserId === user.id" @click="saveUser(user)">
-                    {{ updatingUserId === user.id ? "保存中..." : "保存" }}
-                  </button>
-                  <button class="ghost-button" type="button" :disabled="resettingUserId === user.id" @click="resetPassword(user)">
-                    {{ resettingUserId === user.id ? "提交中..." : "重置密码" }}
-                  </button>
-                </div>
-              </article>
-            </div>
-
-            <p v-if="loadingUsers" class="hint">正在加载用户列表...</p>
-          </section>
-        </section>
-      </main>
-    </template>
+      <BottomTabBar
+        :tabs="resolvedTabs"
+        :active-tab="activeTab"
+        @update:active-tab="activeTab = $event"
+      />
+    </div>
   </div>
 </template>
