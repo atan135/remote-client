@@ -1,0 +1,5 @@
+{
+  "name": "remote-mock-client",
+  "private": true,
+  "type": "module"
+}
