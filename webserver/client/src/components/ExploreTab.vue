@@ -137,6 +137,15 @@ const canTerminateCurrentSession = computed(
     )
 );
 
+const shouldPreferFinalAnswer = computed(
+  () =>
+    ["final_only", "hybrid"].includes(String(currentSession.value?.displayMode || ""))
+);
+
+const hasFinalAnswer = computed(() => Boolean(String(currentSession.value?.finalText || "").trim()));
+
+const rawTerminalPanels = ref([]);
+
 function statusType(status) {
   if (["running", "completed"].includes(status)) {
     return "success";
@@ -187,6 +196,7 @@ watch(
   () => props.selectedAgentId,
   () => {
     sessionMetaPanels.value = [];
+    rawTerminalPanels.value = [];
     sessionScreen.value = "main";
     detailSessionId.value = "";
   }
@@ -194,6 +204,14 @@ watch(
 
 watch(currentSession, (session) => {
   if (session) {
+    if (
+      shouldPreferFinalAnswer.value &&
+      !hasFinalAnswer.value &&
+      !rawTerminalPanels.value.includes("raw")
+    ) {
+      rawTerminalPanels.value = ["raw"];
+    }
+
     return;
   }
 
@@ -202,6 +220,7 @@ watch(currentSession, (session) => {
   }
 
   sessionMetaPanels.value = [];
+  rawTerminalPanels.value = [];
   detailSessionId.value = "";
 });
 </script>
@@ -349,9 +368,65 @@ watch(currentSession, (session) => {
         </el-collapse>
 
         <div v-if="currentSession" class="explore-terminal-shell">
-          <TerminalEmulator class="explore-terminal" :session-id="currentSession.sessionId"
-            :outputs="currentSession.outputs || []" :interactive="!isTerminalSessionClosed(currentSession.status)"
-            @terminal-data="emit('send-terminal-raw-input', { input: $event, sessionId: currentSession.sessionId })" />
+          <div
+            v-if="shouldPreferFinalAnswer"
+            class="console-block final-answer-block"
+            :class="{ empty: !hasFinalAnswer }"
+          >
+            <h4>Final Answer</h4>
+            <pre v-if="hasFinalAnswer">{{ currentSession.finalText }}</pre>
+            <p v-else class="muted">
+              当前会话将优先展示最终结果。结果尚未提取出来前，可展开下方原始终端查看实时输出。
+            </p>
+          </div>
+
+          <label
+            v-if="currentSession && !isTerminalSessionClosed(currentSession.status)"
+            class="field-block field-block-tight explore-session-input"
+          >
+            <span>{{ shouldPreferFinalAnswer ? "继续提问" : "发送输入" }}</span>
+            <div class="explore-session-input-row">
+              <el-input
+                :model-value="terminalInput"
+                type="textarea"
+                :autosize="{ minRows: 2, maxRows: 4 }"
+                :placeholder="
+                  shouldPreferFinalAnswer
+                    ? '输入你的追加要求，发送到当前模型会话'
+                    : '向当前终端会话发送输入'
+                "
+                @update:model-value="emit('update:terminalInput', $event)"
+              />
+              <el-button
+                type="primary"
+                round
+                :disabled="!canSendTerminalInput"
+                @click="emit('send-terminal-input', currentSession.sessionId)"
+              >
+                {{ sendingTerminalInput ? "发送中..." : "发送" }}
+              </el-button>
+            </div>
+          </label>
+
+          <el-collapse v-model="rawTerminalPanels" class="explore-raw-terminal">
+            <el-collapse-item
+              name="raw"
+              :title="shouldPreferFinalAnswer ? '原始终端输出（调试）' : '终端输出'"
+            >
+              <TerminalEmulator
+                class="explore-terminal"
+                :session-id="currentSession.sessionId"
+                :outputs="currentSession.outputs || []"
+                :interactive="!isTerminalSessionClosed(currentSession.status)"
+                @terminal-data="
+                  emit('send-terminal-raw-input', {
+                    input: $event,
+                    sessionId: currentSession.sessionId
+                  })
+                "
+              />
+            </el-collapse-item>
+          </el-collapse>
         </div>
         <p v-else class="muted">当前会话不可用，请返回会话列表重新选择。</p>
 

@@ -69,6 +69,10 @@ export class AgentRegistry {
     return this.sockets.get(agentId) || null;
   }
 
+  get(agentId) {
+    return this.agents.get(agentId) || null;
+  }
+
   list() {
     return Array.from(this.agents.values()).sort((left, right) =>
       left.label.localeCompare(right.label)
@@ -87,6 +91,16 @@ function normalizeTerminalProfiles(profiles) {
       runner: String(profile?.runner || "").trim(),
       command: String(profile?.command || "").trim(),
       cwdPolicy: String(profile?.cwdPolicy || "").trim(),
+      outputMode: String(profile?.outputMode || "terminal").trim() || "terminal",
+      finalOutputMarkers:
+        profile?.finalOutputMarkers &&
+        typeof profile.finalOutputMarkers === "object" &&
+        !Array.isArray(profile.finalOutputMarkers)
+          ? {
+              start: String(profile.finalOutputMarkers.start || "").trim(),
+              end: String(profile.finalOutputMarkers.end || "").trim()
+            }
+          : null,
       idleTimeoutMs: Number(profile?.idleTimeoutMs) || 0,
       envAllowlist: Array.isArray(profile?.envAllowlist)
         ? profile.envAllowlist.map((item) => String(item))

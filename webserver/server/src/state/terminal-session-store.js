@@ -28,6 +28,10 @@ export class TerminalSessionStore {
       closedAt: null,
       exitCode: null,
       error: "",
+      displayMode: "terminal",
+      finalText: "",
+      finalTextUpdatedAt: null,
+      rawTranscript: "",
       outputs: [],
       ...metadata
     };
@@ -111,6 +115,7 @@ export class TerminalSessionStore {
       record.outputs.splice(0, record.outputs.length - this.outputLimit);
     }
 
+    record.rawTranscript = clampTextTail(`${String(record.rawTranscript || "")}${output.chunk}`, 200000);
     record.lastOutputAt = output.sentAt;
     record.updatedAt = output.sentAt;
     return {
@@ -150,4 +155,14 @@ export class TerminalSessionStore {
       this.inputReceipts.delete(sessionId);
     }
   }
+}
+
+function clampTextTail(value, maxLength) {
+  const text = String(value || "");
+
+  if (text.length <= maxLength) {
+    return text;
+  }
+
+  return text.slice(text.length - maxLength);
 }

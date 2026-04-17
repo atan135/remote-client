@@ -467,7 +467,7 @@ app.post("/api/commands", requireAuth, (req, res) => {
 app.get("/api/terminal-sessions", requireAuth, (req, res) => {
   const limit = Number(req.query.limit) || config.terminalSessionHistoryLimit;
   res.json({
-    items: terminalSessionStore.list(limit)
+    items: terminalSessionStore.list(limit).map(serializeTerminalSession)
   });
 });
 
@@ -479,7 +479,7 @@ app.get("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
     return;
   }
 
-  res.json({ item: session });
+  res.json({ item: serializeTerminalSession(session) });
 });
 
 app.post("/api/terminal-sessions", requireAuth, (req, res) => {
@@ -611,6 +611,9 @@ async function handleTerminalSessionCreateRequest(req, res) {
 
   try {
     const authCodeBinding = await authCodeService.findByUserIdAndAgentId(req.auth.user.id, agentId);
+    const agent = agentRegistry.get(agentId);
+    const profileConfig =
+      agent?.terminalProfiles?.find((item) => item.name === profile) || null;
 
     if (!authCodeBinding) {
       res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
@@ -628,6 +631,8 @@ async function handleTerminalSessionCreateRequest(req, res) {
         authCodeRemark: authCodeBinding.remark,
         cwd: launchPayload.cwd,
         envKeys: Object.keys(launchPayload.env),
+        displayMode: normalizeProfileOutputMode(profileConfig?.outputMode),
+        finalOutputMarkers: normalizeFinalOutputMarkers(profileConfig?.finalOutputMarkers),
         cols: launchPayload.cols,
         rows: launchPayload.rows
       }
@@ -648,17 +653,17 @@ async function handleTerminalSessionCreateRequest(req, res) {
       username: req.auth.user.username
     });
 
-    browserHub.broadcast("terminal.session.updated", record);
+    browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
 
     if (dispatchResult === "failed") {
       res.status(500).json({
         message: record.error || "终端会话下发失败",
-        item: record
+        item: serializeTerminalSession(record)
       });
       return;
     }
 
-    res.status(202).json({ item: record });
+    res.status(202).json({ item: serializeTerminalSession(record) });
   } catch (error) {
     logEvent(commandLogger, "error", "terminal.session.request_failed", {
       agentId,
@@ -731,7 +736,10 @@ async function handleTerminalSessionTerminateRequest(req, res) {
     terminalSessionStore.update(sessionId, {
       status: "terminating"
     });
-    browserHub.broadcast("terminal.session.updated", terminalSessionStore.get(sessionId));
+    browserHub.broadcast(
+      "terminal.session.updated",
+      serializeTerminalSession(terminalSessionStore.get(sessionId))
+    );
 
     res.status(202).json({
       ok: true,
@@ -835,7 +843,7 @@ agentSocketServer.on("connection", (socket, _request, url) => {
     }
 
     for (const session of changedSessions) {
-      browserHub.broadcast("terminal.session.updated", session);
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
     }
   });
 });
@@ -853,7 +861,9 @@ browserSocketServer.on("connection", (socket) => {
       agentId: "",
       limit: config.commandHistoryLimit
     }),
-    terminalSessions: terminalSessionStore.list(config.terminalSessionHistoryLimit)
+    terminalSessions: terminalSessionStore
+      .list(config.terminalSessionHistoryLimit)
+      .map(serializeTerminalSession)
   });
 
   socket.on("message", (raw) => {
@@ -1010,7 +1020,7 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
-      browserHub.broadcast("terminal.session.updated", record);
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
 
     return;
@@ -1020,8 +1030,17 @@ function handleAgentMessage(agentId, socket, message) {
     const result = terminalSessionStore.appendOutput(message.payload.sessionId, message.payload);
 
     if (result) {
+      const finalPatch = deriveTerminalSessionDisplayPatch(result.record);
+
+      if (finalPatch) {
+        terminalSessionStore.update(result.record.sessionId, finalPatch);
+      }
+
       browserHub.broadcast("terminal.session.output", result.output);
-      browserHub.broadcast("terminal.session.updated", result.record);
+      browserHub.broadcast(
+        "terminal.session.updated",
+        serializeTerminalSession(terminalSessionStore.get(result.record.sessionId) || result.record)
+      );
     }
 
     return;
@@ -1036,7 +1055,7 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
-      browserHub.broadcast("terminal.session.updated", record);
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
 
     return;
@@ -1049,7 +1068,7 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
-      browserHub.broadcast("terminal.session.updated", record);
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
   }
 }
@@ -1274,7 +1293,7 @@ function dispatchTerminalSessionTerminate(sessionRecord, context) {
 async function dispatchTerminalSessionInputForUser({ user, sessionId, input }) {
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedInput = String(input || "");
-  const session = terminalSessionStore.get(normalizedSessionId);
+  let session = terminalSessionStore.get(normalizedSessionId);
 
   if (!session) {
     throw createHttpError(404, "会话不存在");
@@ -1298,6 +1317,15 @@ async function dispatchTerminalSessionInputForUser({ user, sessionId, input }) {
 
   if (!authCodeBinding) {
     throw createHttpError(400, "当前用户未为该设备配置 auth_code");
+  }
+
+  if (["final_only", "hybrid"].includes(String(session.displayMode || ""))) {
+    session =
+      terminalSessionStore.update(normalizedSessionId, {
+        finalText: "",
+        finalTextUpdatedAt: null
+      }) || session;
+    browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
   }
 
   dispatchTerminalSessionInput(session, {
@@ -1573,6 +1601,162 @@ function createHttpError(statusCode, message) {
 
 function isTerminalSessionClosedStatus(status) {
   return ["completed", "failed", "terminated", "connection_lost"].includes(String(status || ""));
+}
+
+function normalizeProfileOutputMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["terminal", "final_only", "hybrid"].includes(normalized) ? normalized : "terminal";
+}
+
+function normalizeFinalOutputMarkers(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const start = String(value.start || "").trim();
+  const end = String(value.end || "").trim();
+
+  if (!start || !end) {
+    return null;
+  }
+
+  return { start, end };
+}
+
+function deriveTerminalSessionDisplayPatch(record) {
+  if (!record) {
+    return null;
+  }
+
+  const transcript = String(record.rawTranscript || "");
+  const nextFinalText = extractFinalText(record, transcript);
+  const patch = {};
+
+  if (nextFinalText !== String(record.finalText || "")) {
+    patch.finalText = nextFinalText;
+    patch.finalTextUpdatedAt = new Date().toISOString();
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function extractFinalText(record, transcript) {
+  const markers = normalizeFinalOutputMarkers(record?.finalOutputMarkers);
+
+  if (markers) {
+    const marked = extractTextBetweenMarkers(transcript, markers.start, markers.end);
+
+    if (marked) {
+      return marked;
+    }
+
+    return "";
+  }
+
+  if (record?.displayMode === "final_only" || record?.displayMode === "hybrid") {
+    return extractLikelyFinalAnswer(transcript);
+  }
+
+  return "";
+}
+
+function extractTextBetweenMarkers(text, startMarker, endMarker) {
+  const source = String(text || "");
+  const startIndex = source.lastIndexOf(startMarker);
+
+  if (startIndex === -1) {
+    return "";
+  }
+
+  const afterStart = startIndex + startMarker.length;
+  const endIndex = source.indexOf(endMarker, afterStart);
+
+  if (endIndex === -1) {
+    return "";
+  }
+
+  const cleaned = cleanTerminalText(source.slice(afterStart, endIndex));
+  return looksLikePromptEchoContent(cleaned) ? "" : cleaned;
+}
+
+function extractLikelyFinalAnswer(text) {
+  const cleaned = cleanTerminalText(text);
+
+  if (!cleaned) {
+    return "";
+  }
+
+  const blocks = cleaned
+    .split(/\n{2,}/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (blocks.length === 0) {
+    return "";
+  }
+
+  const preferred = [...blocks]
+    .reverse()
+    .find((block) => block.length >= 40 && !looksLikeTerminalNoise(block));
+
+  return preferred || blocks[blocks.length - 1];
+}
+
+function cleanTerminalText(text) {
+  const withoutAnsi = String(text || "")
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-_]/g, "")
+    .replace(/\r/g, "")
+    .replace(/\u0008/g, "");
+
+  return withoutAnsi
+    .split("\n")
+    .map((line) => line.replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, "").trimEnd())
+    .filter((line, index, lines) => !(line === "" && lines[index - 1] === ""))
+    .join("\n")
+    .trim();
+}
+
+function looksLikeTerminalNoise(text) {
+  const value = String(text || "").trim();
+
+  if (!value) {
+    return true;
+  }
+
+  return /^(thinking|analyzing|running|executing|processing|loading|waiting)\b/i.test(value);
+}
+
+function looksLikePromptEchoContent(text) {
+  const value = String(text || "").trim();
+  const lowered = value.toLowerCase();
+
+  if (!value) {
+    return true;
+  }
+
+  if (["与", "and", "正文"].includes(lowered) || ["与", "正文"].includes(value)) {
+    return true;
+  }
+
+  return /(用户请求|不要输出中间思考|最终只允许输出|标记包裹)/.test(value);
+}
+
+function serializeTerminalSession(session) {
+  if (!session) {
+    return null;
+  }
+
+  const {
+    rawTranscript: _rawTranscript,
+    ...rest
+  } = session;
+
+  return {
+    ...rest,
+    outputs: Array.isArray(session.outputs) ? session.outputs : []
+  };
 }
 
 async function ensureUserAuthCodesTable() {

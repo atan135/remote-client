@@ -51,6 +51,10 @@ export class ToolProfileRegistry {
       runner: profile.runner,
       command: profile.command,
       cwdPolicy: profile.cwdPolicy,
+      outputMode: profile.outputMode,
+      finalOutputMarkers: profile.finalOutputMarkers
+        ? { ...profile.finalOutputMarkers }
+        : null,
       idleTimeoutMs: profile.idleTimeoutMs,
       envAllowlist: [...profile.envAllowlist]
     }));
@@ -80,6 +84,7 @@ function createBuiltInProfiles(config) {
       command: config.defaultShell,
       argsTemplate: [],
       cwdPolicy: "allowlist",
+      outputMode: "terminal",
       envAllowlist: [
         "PATH",
         "PATHEXT",
@@ -99,6 +104,11 @@ function createBuiltInProfiles(config) {
       command: "claude",
       argsTemplate: [],
       cwdPolicy: "allowlist",
+      outputMode: "final_only",
+      finalOutputMarkers: {
+        start: "<<<FINAL>>>",
+        end: "<<<END_FINAL>>>"
+      },
       envAllowlist: [
         "ANTHROPIC_API_KEY",
         "HTTP_PROXY",
@@ -119,11 +129,33 @@ function normalizeProfile(profileName, profileConfig) {
       ? profileConfig.argsTemplate.map((item) => String(item))
       : [],
     cwdPolicy: String(profileConfig.cwdPolicy || "allowlist"),
+    outputMode: normalizeOutputMode(profileConfig.outputMode),
+    finalOutputMarkers: normalizeFinalOutputMarkers(profileConfig.finalOutputMarkers),
     envAllowlist: Array.isArray(profileConfig.envAllowlist)
       ? profileConfig.envAllowlist.map((item) => String(item))
       : [],
     idleTimeoutMs: Number(profileConfig.idleTimeoutMs) || 30 * 60 * 1000
   };
+}
+
+function normalizeOutputMode(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["terminal", "final_only", "hybrid"].includes(normalized) ? normalized : "terminal";
+}
+
+function normalizeFinalOutputMarkers(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const start = String(value.start || "").trim();
+  const end = String(value.end || "").trim();
+
+  if (!start || !end) {
+    return null;
+  }
+
+  return { start, end };
 }
 
 function buildProcessEnv(allowlist, extraEnv) {

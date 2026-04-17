@@ -45,6 +45,8 @@ const fallbackTerminalProfiles = Object.freeze([
     runner: "pty",
     command: "shell",
     cwdPolicy: "allowlist",
+    outputMode: "terminal",
+    finalOutputMarkers: null,
     idleTimeoutMs: 30 * 60 * 1000,
     envAllowlist: []
   }
@@ -658,7 +660,7 @@ async function sendTerminalInput(sessionId = activeTerminalSession.value?.sessio
   try {
     enqueueTerminalSocketInput(
       sessionRecord.sessionId,
-      /[\r\n]$/.test(input) ? input : `${input}\r`
+      buildSessionInputPayload(sessionRecord, input)
     );
     terminalInput.value = "";
   } catch (error) {
@@ -1398,6 +1400,10 @@ function upsertTerminalSession(item) {
     terminalSessions.value[index] = {
       ...terminalSessions.value[index],
       ...item,
+      finalText:
+        typeof item.finalText === "string"
+          ? item.finalText
+          : terminalSessions.value[index].finalText || "",
       outputs: incomingOutputs.length > 0 ? incomingOutputs : currentOutputs
     };
   }
@@ -1448,6 +1454,47 @@ function isTerminalSessionClosedStatus(status) {
   return ["completed", "failed", "terminated", "connection_lost"].includes(
     String(status || "")
   );
+}
+
+function buildSessionInputPayload(sessionRecord, input) {
+  const normalizedInput = String(input || "");
+
+  if (prefersFinalAnswerView(sessionRecord)) {
+    const markers = normalizeFinalOutputMarkers(sessionRecord?.finalOutputMarkers);
+    const wrapped = markers
+      ? [
+          "请直接完成下面的用户请求，不要输出中间思考、分析过程、计划或工具调用解释。",
+          `最终只允许输出以下标记包裹的结果正文：${markers.start} 与 ${markers.end}。`,
+          "如果需要代码、命令或步骤，请直接写在最终结果正文中。",
+          "",
+          "用户请求：",
+          normalizedInput
+        ].join("\n")
+      : normalizedInput;
+
+    return /[\r\n]$/.test(wrapped) ? wrapped : `${wrapped}\r`;
+  }
+
+  return /[\r\n]$/.test(normalizedInput) ? normalizedInput : `${normalizedInput}\r`;
+}
+
+function prefersFinalAnswerView(sessionRecord) {
+  return ["final_only", "hybrid"].includes(String(sessionRecord?.displayMode || ""));
+}
+
+function normalizeFinalOutputMarkers(markers) {
+  if (!markers || typeof markers !== "object") {
+    return null;
+  }
+
+  const start = String(markers.start || "").trim();
+  const end = String(markers.end || "").trim();
+
+  if (!start || !end) {
+    return null;
+  }
+
+  return { start, end };
 }
 
 function useSelectedAgentIdForAuthCode() {

@@ -5,6 +5,11 @@
       "command": "claude",
       "argsTemplate": [],
       "cwdPolicy": "allowlist",
+      "outputMode": "final_only",
+      "finalOutputMarkers": {
+        "start": "<<<FINAL>>>",
+        "end": "<<<END_FINAL>>>"
+      },
       "envAllowlist": [
         "ANTHROPIC_API_KEY",
         "HTTP_PROXY",
@@ -18,6 +23,11 @@
       "command": "codex",
       "argsTemplate": [],
       "cwdPolicy": "allowlist",
+      "outputMode": "final_only",
+      "finalOutputMarkers": {
+        "start": "<<<FINAL>>>",
+        "end": "<<<END_FINAL>>>"
+      },
       "envAllowlist": [
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
