@@ -42,6 +42,7 @@ npm run dev:agent
 
 - 服务端参考 [webserver/server/.env.example](/c:/project/remote-client/webserver/server/.env.example)
 - 内网 agent 参考 [localapp/.env.example](/c:/project/remote-client/localapp/.env.example)
+- 详细使用与部署说明见 [docs/deployment-and-usage.md](/c:/project/remote-client/docs/deployment-and-usage.md)
 
 ## 数据库初始化
 
