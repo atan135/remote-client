@@ -1,6 +1,6 @@
 <script setup>
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 import AuthScreen from "./components/AuthScreen.vue";
 import BottomTabBar from "./components/BottomTabBar.vue";
@@ -39,16 +39,34 @@ const tabs = [
   }
 ];
 
+const fallbackTerminalProfiles = Object.freeze([
+  {
+    name: "default_shell_session",
+    runner: "pty",
+    command: "shell",
+    cwdPolicy: "allowlist",
+    idleTimeoutMs: 30 * 60 * 1000,
+    envAllowlist: []
+  }
+]);
+
 const agents = ref([]);
 const commands = ref([]);
+const terminalSessions = ref([]);
 const users = ref([]);
 const authCodes = ref([]);
 const selectedAgentId = ref("");
+const selectedTerminalSessionId = ref("");
 const timelineFilterAgentId = ref("all");
 const commandInput = ref("");
+const terminalProfile = ref("");
+const terminalCwd = ref("");
+const terminalInput = ref("");
 const bootstrapping = ref(true);
 const authenticating = ref(false);
 const submitting = ref(false);
+const creatingTerminalSession = ref(false);
+const sendingTerminalInput = ref(false);
 const loadingUsers = ref(false);
 const loadingAuthCodes = ref(false);
 const creatingUser = ref(false);
@@ -58,6 +76,7 @@ const resettingUserId = ref(null);
 const updatingUserId = ref(null);
 const savingAuthCodeId = ref(null);
 const deletingAuthCodeId = ref(null);
+const terminatingTerminalSessionId = ref(null);
 const session = ref(null);
 const authMode = ref("login");
 
@@ -120,6 +139,29 @@ const activeAuthCodeBinding = computed(
     ) || null
 );
 
+const availableTerminalProfiles = computed(() => {
+  if (!activeAgent.value) {
+    return [];
+  }
+
+  const profiles = Array.isArray(activeAgent.value.terminalProfiles)
+    ? activeAgent.value.terminalProfiles.filter((profile) => Boolean(profile?.name))
+    : [];
+
+  return profiles.length > 0 ? profiles : fallbackTerminalProfiles;
+});
+
+const visibleTerminalSessions = computed(() =>
+  terminalSessions.value.filter((item) => item.agentId === selectedAgentId.value)
+);
+
+const activeTerminalSession = computed(
+  () =>
+    visibleTerminalSessions.value.find(
+      (item) => item.sessionId === selectedTerminalSessionId.value
+    ) || null
+);
+
 const visibleCommands = computed(() => {
   if (!timelineFilterAgentId.value || timelineFilterAgentId.value === "all") {
     return commands.value;
@@ -148,6 +190,35 @@ const canSubmitCommand = computed(
     )
 );
 
+const canCreateTerminalSession = computed(
+  () =>
+    Boolean(
+      selectedAgentId.value &&
+        terminalProfile.value &&
+        activeAuthCodeBinding.value &&
+        !creatingTerminalSession.value
+    )
+);
+
+const canSendTerminalInput = computed(
+  () =>
+    Boolean(
+      activeTerminalSession.value &&
+        terminalInput.value &&
+        !sendingTerminalInput.value &&
+        !isTerminalSessionClosedStatus(activeTerminalSession.value.status)
+    )
+);
+
+const canTerminateTerminalSession = computed(
+  () =>
+    Boolean(
+      activeTerminalSession.value &&
+        !isTerminalSessionClosedStatus(activeTerminalSession.value.status) &&
+        terminatingTerminalSessionId.value !== activeTerminalSession.value.sessionId
+    )
+);
+
 const pendingTaskCount = computed(
   () =>
     commands.value.filter((item) =>
@@ -162,9 +233,16 @@ const failedTaskCount = computed(
     ).length
 );
 
+const runningTerminalSessionCount = computed(
+  () =>
+    visibleTerminalSessions.value.filter(
+      (item) => !isTerminalSessionClosedStatus(item.status)
+    ).length
+);
+
 const tabBadges = computed(() => ({
   home: onlineAgentCount.value,
-  explore: activeAgent.value ? 1 : 0,
+  explore: runningTerminalSessionCount.value || (activeAgent.value ? 1 : 0),
   tasks: pendingTaskCount.value || failedTaskCount.value,
   profile: wsState.error ? 1 : 0
 }));
@@ -179,6 +257,19 @@ const resolvedTabs = computed(() =>
 const currentTab = computed(
   () => resolvedTabs.value.find((item) => item.key === activeTab.value) || resolvedTabs.value[0]
 );
+
+watch(selectedAgentId, () => {
+  ensureSelectedTerminalProfile();
+  ensureSelectedTerminalSession();
+});
+
+watch(availableTerminalProfiles, () => {
+  ensureSelectedTerminalProfile();
+});
+
+watch(visibleTerminalSessions, () => {
+  ensureSelectedTerminalSession();
+});
 
 onMounted(async () => {
   await bootstrap();
@@ -333,7 +424,7 @@ async function logout() {
 }
 
 async function loadDashboard() {
-  const jobs = [loadAgents(), loadCommands(), loadAuthCodes()];
+  const jobs = [loadAgents(), loadCommands(), loadTerminalSessions(), loadAuthCodes()];
 
   if (isAdmin.value) {
     jobs.push(loadUsers());
@@ -343,6 +434,8 @@ async function loadDashboard() {
 
   await Promise.all(jobs);
   ensureSelectedAgent();
+  ensureSelectedTerminalProfile();
+  ensureSelectedTerminalSession();
 }
 
 async function loadAgents() {
@@ -375,6 +468,22 @@ async function loadCommands() {
 
   const payload = await response.json();
   commands.value = payload.items || [];
+}
+
+async function loadTerminalSessions() {
+  const response = await fetch("/api/terminal-sessions");
+
+  if (response.status === 401) {
+    await handleUnauthorized();
+    return;
+  }
+
+  if (!response.ok) {
+    throw new Error("加载终端会话失败");
+  }
+
+  const payload = await response.json();
+  terminalSessions.value = payload.items || [];
 }
 
 async function loadAuthCodes() {
@@ -473,6 +582,134 @@ async function submitCommand() {
     wsState.error = error.message;
   } finally {
     submitting.value = false;
+  }
+}
+
+async function createTerminalSession() {
+  if (!selectedAgentId.value || !terminalProfile.value) {
+    return;
+  }
+
+  if (!activeAuthCodeBinding.value) {
+    wsState.error = "请先为当前设备配置 auth_code，再创建终端会话";
+    return;
+  }
+
+  creatingTerminalSession.value = true;
+  wsState.error = "";
+
+  try {
+    const response = await fetch("/api/terminal-sessions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        agentId: selectedAgentId.value,
+        profile: terminalProfile.value,
+        cwd: terminalCwd.value.trim(),
+        env: {},
+        cols: 120,
+        rows: 30
+      })
+    });
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "终端会话创建失败");
+    }
+
+    if (payload.item) {
+      upsertTerminalSession(payload.item);
+      selectedTerminalSessionId.value = payload.item.sessionId;
+    }
+
+    terminalInput.value = "";
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    creatingTerminalSession.value = false;
+  }
+}
+
+async function sendTerminalInput() {
+  const sessionRecord = activeTerminalSession.value;
+  const input = terminalInput.value;
+
+  if (!sessionRecord || !input) {
+    return;
+  }
+
+  sendingTerminalInput.value = true;
+  wsState.error = "";
+
+  try {
+    const response = await fetch(`/api/terminal-sessions/${sessionRecord.sessionId}/input`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        input: /[\r\n]$/.test(input) ? input : `${input}\r`
+      })
+    });
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "终端输入发送失败");
+    }
+
+    terminalInput.value = "";
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    sendingTerminalInput.value = false;
+  }
+}
+
+async function terminateTerminalSession(sessionId = activeTerminalSession.value?.sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  terminatingTerminalSessionId.value = sessionId;
+  wsState.error = "";
+
+  try {
+    const response = await fetch(`/api/terminal-sessions/${sessionId}/terminate`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({})
+    });
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "终端会话终止失败");
+    }
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    terminatingTerminalSessionId.value = null;
   }
 }
 
@@ -776,18 +1013,33 @@ function connectBrowserSocket() {
     if (message.type === "snapshot") {
       agents.value = message.payload.agents || [];
       commands.value = message.payload.commands || [];
+      terminalSessions.value = message.payload.terminalSessions || [];
       ensureSelectedAgent();
+      ensureSelectedTerminalProfile();
+      ensureSelectedTerminalSession();
       return;
     }
 
     if (message.type === "agent.updated") {
       upsertByKey(agents.value, message.payload, "agentId");
       ensureSelectedAgent();
+      ensureSelectedTerminalProfile();
       return;
     }
 
     if (message.type === "command.updated") {
       upsertByKey(commands.value, message.payload, "requestId");
+      return;
+    }
+
+    if (message.type === "terminal.session.updated") {
+      upsertTerminalSession(message.payload);
+      ensureSelectedTerminalSession();
+      return;
+    }
+
+    if (message.type === "terminal.session.output") {
+      appendTerminalSessionOutput(message.payload);
     }
   });
 
@@ -834,6 +1086,36 @@ function ensureSelectedAgent() {
   }
 }
 
+function ensureSelectedTerminalProfile() {
+  const profiles = availableTerminalProfiles.value;
+
+  if (!profiles.length) {
+    terminalProfile.value = "";
+    return;
+  }
+
+  if (profiles.some((item) => item.name === terminalProfile.value)) {
+    return;
+  }
+
+  terminalProfile.value = profiles[0].name;
+}
+
+function ensureSelectedTerminalSession() {
+  if (
+    selectedTerminalSessionId.value &&
+    visibleTerminalSessions.value.some((item) => item.sessionId === selectedTerminalSessionId.value)
+  ) {
+    return;
+  }
+
+  const runningSession = visibleTerminalSessions.value.find(
+    (item) => !isTerminalSessionClosedStatus(item.status)
+  );
+  selectedTerminalSessionId.value =
+    runningSession?.sessionId || visibleTerminalSessions.value[0]?.sessionId || "";
+}
+
 async function handleUnauthorized() {
   disconnectBrowserSocket();
   resetAuthedState();
@@ -844,11 +1126,16 @@ function resetAuthedState() {
   session.value = null;
   agents.value = [];
   commands.value = [];
+  terminalSessions.value = [];
   users.value = [];
   authCodes.value = [];
   selectedAgentId.value = "";
+  selectedTerminalSessionId.value = "";
   timelineFilterAgentId.value = "all";
   commandInput.value = "";
+  terminalProfile.value = "";
+  terminalCwd.value = "";
+  terminalInput.value = "";
   activeTab.value = "home";
 }
 
@@ -868,6 +1155,54 @@ function upsertByKey(collection, item, key) {
   }
 }
 
+function upsertTerminalSession(item) {
+  if (!item?.sessionId) {
+    return;
+  }
+
+  const index = terminalSessions.value.findIndex(
+    (candidate) => candidate.sessionId === item.sessionId
+  );
+
+  if (index === -1) {
+    terminalSessions.value.unshift(item);
+  } else {
+    const currentOutputs = Array.isArray(terminalSessions.value[index].outputs)
+      ? terminalSessions.value[index].outputs
+      : [];
+    const incomingOutputs = Array.isArray(item.outputs) ? item.outputs : [];
+
+    terminalSessions.value[index] = {
+      ...terminalSessions.value[index],
+      ...item,
+      outputs: incomingOutputs.length > 0 ? incomingOutputs : currentOutputs
+    };
+  }
+
+  terminalSessions.value.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+}
+
+function appendTerminalSessionOutput(output) {
+  const sessionRecord = terminalSessions.value.find(
+    (item) => item.sessionId === output?.sessionId
+  );
+
+  if (!sessionRecord) {
+    return;
+  }
+
+  const outputs = Array.isArray(sessionRecord.outputs) ? [...sessionRecord.outputs] : [];
+
+  if (outputs.some((item) => item.seq === output.seq)) {
+    return;
+  }
+
+  outputs.push(output);
+  outputs.sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0));
+  sessionRecord.outputs = outputs;
+  sessionRecord.lastOutputAt = output.sentAt || sessionRecord.lastOutputAt;
+}
+
 function shortFingerprint(fingerprint) {
   const value = String(fingerprint || "");
 
@@ -884,6 +1219,12 @@ function shortFingerprint(fingerprint) {
 
 function normalizeAgentId(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function isTerminalSessionClosedStatus(status) {
+  return ["completed", "failed", "terminated", "connection_lost"].includes(
+    String(status || "")
+  );
 }
 
 function useSelectedAgentIdForAuthCode() {
@@ -941,11 +1282,30 @@ function useSelectedAgentIdForAuthCode() {
           :active-agent="activeAgent"
           :active-auth-code-binding="activeAuthCodeBinding"
           :command-input="commandInput"
+          :terminal-profile="terminalProfile"
+          :terminal-cwd="terminalCwd"
+          :terminal-input="terminalInput"
+          :available-terminal-profiles="availableTerminalProfiles"
+          :terminal-sessions="visibleTerminalSessions"
+          :active-terminal-session="activeTerminalSession"
           :can-submit-command="canSubmitCommand"
+          :can-create-terminal-session="canCreateTerminalSession"
+          :can-send-terminal-input="canSendTerminalInput"
+          :can-terminate-terminal-session="canTerminateTerminalSession"
           :submitting="submitting"
+          :creating-terminal-session="creatingTerminalSession"
+          :sending-terminal-input="sendingTerminalInput"
+          :terminating-terminal-session-id="terminatingTerminalSessionId || ''"
           @update:selected-agent-id="selectedAgentId = $event"
           @update:command-input="commandInput = $event"
+          @update:terminal-profile="terminalProfile = $event"
+          @update:terminal-cwd="terminalCwd = $event"
+          @update:terminal-input="terminalInput = $event"
+          @select:terminal-session="selectedTerminalSessionId = $event"
           @submit-command="submitCommand"
+          @create-terminal-session="createTerminalSession"
+          @send-terminal-input="sendTerminalInput"
+          @terminate-terminal-session="terminateTerminalSession"
         />
 
         <TasksTab
