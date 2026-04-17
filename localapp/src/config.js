@@ -8,6 +8,21 @@ function toNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
+}
+
+function toList(value) {
+  return String(value || "")
+    .split(/[,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
 export function loadConfig() {
   const hostname = os.hostname();
 
@@ -26,6 +41,18 @@ export function loadConfig() {
     authPrivateKeyPath: process.env.AUTH_PRIVATE_KEY_PATH || "./keys/auth_private.pem",
     authPrivateKeyPassphrase: process.env.AUTH_PRIVATE_KEY_PASSPHRASE || "",
     webserverSignPublicKeyPath:
-      process.env.WEBSERVER_SIGN_PUBLIC_KEY_PATH || "./keys/webserver_sign_public.pem"
+      process.env.WEBSERVER_SIGN_PUBLIC_KEY_PATH || "./keys/webserver_sign_public.pem",
+    defaultShell:
+      process.env.DEFAULT_SHELL || (os.platform() === "win32" ? "powershell.exe" : "/bin/bash"),
+    maxTerminalSessions: toNumber(process.env.MAX_TERMINAL_SESSIONS, 4),
+    sessionIdleTimeoutMs: toNumber(process.env.SESSION_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
+    sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 200),
+    taskProfileConfigPath:
+      process.env.TASK_PROFILE_CONFIG_PATH || "./config/tool-profiles.json",
+    allowedCwdRoots: toList(process.env.ALLOWED_CWD_ROOTS),
+    localDebugServerEnabled: toBoolean(process.env.LOCAL_DEBUG_SERVER_ENABLED, false),
+    localDebugServerHost: process.env.LOCAL_DEBUG_SERVER_HOST || "127.0.0.1",
+    localDebugServerPort: toNumber(process.env.LOCAL_DEBUG_SERVER_PORT, 3210),
+    localDebugToken: process.env.LOCAL_DEBUG_TOKEN || ""
   };
 }

@@ -38,24 +38,156 @@ export class SecureCommandService {
   }
 
   createSecureEnvelope({ commandRecord, operatorUser, authCodeBinding }) {
-    const authCodePublicKey = createRsaPublicKey(authCodeBinding.authCode);
-    const signingKeyInfo = this.getSigningKeyInfo();
     const issuedAt = new Date();
     const sentAt = issuedAt.toISOString();
     const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
-    const plaintextPayload = {
+
+    return this.createEncryptedEnvelope({
+      messageType: "command.execute.secure",
       requestId: commandRecord.requestId,
       agentId: commandRecord.agentId,
-      command: commandRecord.command,
-      createdAt: commandRecord.createdAt,
-      issuedAt: sentAt,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId: commandRecord.requestId,
+        agentId: commandRecord.agentId,
+        command: commandRecord.command,
+        createdAt: commandRecord.createdAt,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
+      expiresAt
+    });
+  }
+
+  createTerminalSessionCreateEnvelope({
+    sessionRecord,
+    operatorUser,
+    authCodeBinding,
+    launchPayload
+  }) {
+    const issuedAt = new Date();
+    const sentAt = issuedAt.toISOString();
+    const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
+
+    return this.createEncryptedEnvelope({
+      messageType: "terminal.session.create.secure",
+      requestId: sessionRecord.requestId,
+      agentId: sessionRecord.agentId,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId: sessionRecord.requestId,
+        sessionId: sessionRecord.sessionId,
+        agentId: sessionRecord.agentId,
+        sessionType: sessionRecord.sessionType,
+        profile: sessionRecord.profile,
+        cwd: launchPayload.cwd || "",
+        env: launchPayload.env || {},
+        cols: launchPayload.cols || 120,
+        rows: launchPayload.rows || 30,
+        createdAt: sessionRecord.createdAt,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
       expiresAt,
-      nonce: randomUUID()
-    };
+      metaExtra: {
+        sessionId: sessionRecord.sessionId,
+        profile: sessionRecord.profile
+      }
+    });
+  }
+
+  createTerminalSessionInputEnvelope({
+    requestId,
+    agentId,
+    sessionId,
+    input,
+    operatorUser,
+    authCodeBinding
+  }) {
+    const issuedAt = new Date();
+    const sentAt = issuedAt.toISOString();
+    const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
+
+    return this.createEncryptedEnvelope({
+      messageType: "terminal.session.input.secure",
+      requestId,
+      agentId,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId,
+        sessionId,
+        agentId,
+        input,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
+      expiresAt,
+      metaExtra: {
+        sessionId
+      }
+    });
+  }
+
+  createTerminalSessionTerminateEnvelope({
+    requestId,
+    agentId,
+    sessionId,
+    operatorUser,
+    authCodeBinding
+  }) {
+    const issuedAt = new Date();
+    const sentAt = issuedAt.toISOString();
+    const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
+
+    return this.createEncryptedEnvelope({
+      messageType: "terminal.session.terminate.secure",
+      requestId,
+      agentId,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId,
+        sessionId,
+        agentId,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
+      expiresAt,
+      metaExtra: {
+        sessionId
+      }
+    });
+  }
+
+  createEncryptedEnvelope({
+    messageType,
+    requestId,
+    agentId,
+    operatorUser,
+    authCodeBinding,
+    plaintextPayload,
+    sentAt,
+    expiresAt,
+    metaExtra = {}
+  }) {
+    const authCodePublicKey = createRsaPublicKey(authCodeBinding.authCode);
+    const signingKeyInfo = this.getSigningKeyInfo();
     const encryptedPayload = encryptSecureCommandPayload(plaintextPayload, authCodePublicKey);
     const payload = {
-      requestId: commandRecord.requestId,
-      agentId: commandRecord.agentId,
+      messageType,
+      requestId,
+      agentId,
       operatorUserId: operatorUser.id,
       authCodeId: authCodeBinding.id,
       encryptKeyVersion: 1,
@@ -71,7 +203,7 @@ export class SecureCommandService {
     });
 
     return {
-      type: "command.execute.secure",
+      type: messageType,
       payload,
       sentAt,
       meta: {
@@ -79,7 +211,8 @@ export class SecureCommandService {
         authCodeFingerprint: authCodeBinding.fingerprint,
         authCodeRemark: authCodeBinding.remark,
         webserverSignFingerprint: signingKeyInfo.fingerprint,
-        expiresAt
+        expiresAt,
+        ...metaExtra
       }
     };
   }

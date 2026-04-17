@@ -1,8 +1,9 @@
 import os from "node:os";
 import process from "node:process";
+import { randomUUID } from "node:crypto";
 import WebSocket from "ws";
 
-import { normalizeCommandForExecution, runCommand } from "./command-runner.js";
+import { normalizeCommandForExecution } from "./command-runner.js";
 import { logEvent } from "./logger.js";
 import { SecureCommandService } from "./security/secure-command-service.js";
 
@@ -15,10 +16,12 @@ function createMessage(type, payload) {
 }
 
 export class AgentClient {
-  constructor(config, loggers) {
+  constructor(config, loggers, executionGateway, profileRegistry = null) {
     this.config = config;
     this.agentLogger = loggers.agentLogger;
     this.commandLogger = loggers.commandLogger;
+    this.executionGateway = executionGateway;
+    this.profileRegistry = profileRegistry;
     this.socket = null;
     this.reconnectTimer = null;
     this.heartbeatTimer = null;
@@ -76,6 +79,7 @@ export class AgentClient {
         agentId: this.config.agentId
       });
       this.stopHeartbeat();
+      this.executionGateway.terminateRemoteSessions("agent_disconnected");
       this.scheduleReconnect();
     });
 
@@ -93,12 +97,23 @@ export class AgentClient {
       return;
     }
 
-    if (message.type === "command.execute") {
-      this.rejectInsecureCommand(message.payload || {});
+    if (message.type === "terminal.session.create.secure") {
+      this.handleSecureTerminalSessionCreate(message);
       return;
     }
 
-    if (!message?.type) {
+    if (message.type === "terminal.session.input.secure") {
+      this.handleSecureTerminalSessionInput(message);
+      return;
+    }
+
+    if (message.type === "terminal.session.terminate.secure") {
+      this.handleSecureTerminalSessionTerminate(message);
+      return;
+    }
+
+    if (message.type === "command.execute") {
+      this.rejectInsecureCommand(message.payload || {});
       return;
     }
   }
@@ -132,7 +147,7 @@ export class AgentClient {
         true
       );
 
-      const result = await runCommand(payload.command, this.config);
+      const result = await this.executionGateway.executeCommand(payload.command);
 
       logEvent(
         this.commandLogger,
@@ -205,7 +220,8 @@ export class AgentClient {
       hostname: os.hostname(),
       platform: os.platform(),
       arch: os.arch(),
-      pid: process.pid
+      pid: process.pid,
+      terminalProfiles: this.listTerminalProfiles()
     });
   }
 
@@ -287,7 +303,10 @@ export class AgentClient {
 
   handleSecureCommand(message) {
     try {
-      const unwrapped = this.secureCommandService.unwrapMessage(message);
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "command.execute.secure",
+        requiredFields: ["command"]
+      });
       const payload = {
         ...unwrapped.payload,
         secureStatus: "verified",
@@ -307,6 +326,103 @@ export class AgentClient {
       this.processQueue();
     } catch (error) {
       this.rejectSecureCommand(message.payload || {}, error);
+    }
+  }
+
+  handleSecureTerminalSessionCreate(message) {
+    let payload;
+
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "terminal.session.create.secure",
+        requiredFields: ["profile", "sessionId"]
+      });
+      payload = unwrapped.payload;
+      this.executionGateway.createTerminalSession({
+        sessionId: String(payload.sessionId || randomUUID()),
+        agentId: this.config.agentId,
+        requestId: payload.requestId,
+        source: "remote",
+        profileName: payload.profile,
+        cwd: payload.cwd || payload.payload?.cwd,
+        env: payload.env || payload.payload?.env || {},
+        cols: payload.cols || payload.payload?.cols,
+        rows: payload.rows || payload.payload?.rows,
+        eventSink: ({ type, payload: eventPayload, persistIfOffline }) => {
+          this.send(type, eventPayload, persistIfOffline);
+        }
+      });
+    } catch (error) {
+      this.send(
+        "terminal.session.error",
+        {
+          requestId: String(payload?.requestId || message?.payload?.requestId || ""),
+          agentId: this.config.agentId,
+          sessionId: String(payload?.sessionId || ""),
+          error: error.message
+        },
+        true
+      );
+
+      logEvent(this.commandLogger, "warn", "terminal.session.create_rejected", {
+        requestId: String(payload?.requestId || message?.payload?.requestId || ""),
+        agentId: this.config.agentId,
+        error: error.message
+      });
+    }
+  }
+
+  handleSecureTerminalSessionInput(message) {
+    let payload;
+
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "terminal.session.input.secure",
+        requiredFields: ["sessionId", "input"]
+      });
+      payload = unwrapped.payload;
+      this.executionGateway.writeTerminalSessionInput(
+        String(payload.sessionId),
+        String(payload.input)
+      );
+    } catch (error) {
+      this.send(
+        "terminal.session.error",
+        {
+          requestId: String(payload?.requestId || message?.payload?.requestId || ""),
+          agentId: this.config.agentId,
+          sessionId: String(payload?.sessionId || ""),
+          error: error.message
+        },
+        true
+      );
+    }
+  }
+
+  handleSecureTerminalSessionTerminate(message) {
+    let payload;
+
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "terminal.session.terminate.secure",
+        requiredFields: ["sessionId"]
+      });
+      payload = unwrapped.payload;
+      this.executionGateway.terminateTerminalSession(
+        String(payload.sessionId),
+        "remote_terminate"
+      );
+    } catch (error) {
+      this.send(
+        "terminal.session.error",
+        {
+          requestId: String(payload?.requestId || message?.payload?.requestId || ""),
+          agentId: this.config.agentId,
+          sessionId: String(payload?.sessionId || ""),
+          error: error.message
+        },
+        true
+      );
     }
   }
 
@@ -379,5 +495,15 @@ export class AgentClient {
       },
       true
     );
+  }
+
+  listTerminalProfiles() {
+    if (!this.profileRegistry || typeof this.profileRegistry.listProfiles !== "function") {
+      return [];
+    }
+
+    return this.profileRegistry
+      .listProfiles()
+      .filter((profile) => profile.runner === "pty");
   }
 }

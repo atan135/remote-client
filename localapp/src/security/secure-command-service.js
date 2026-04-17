@@ -28,9 +28,11 @@ export class SecureCommandService {
     this.nonceCache = new Map();
   }
 
-  unwrapMessage(message) {
-    if (message.type !== "command.execute.secure") {
-      throw new SecureCommandError("不接受未加密的 command.execute 消息", "insecure_message");
+  unwrapMessage(message, options = {}) {
+    const expectedType = options.expectedType || "command.execute.secure";
+
+    if (message.type !== expectedType) {
+      throw new SecureCommandError(`不接受消息类型 ${String(message.type || "")}`, "unexpected_type");
     }
 
     const payload = message.payload || {};
@@ -39,6 +41,10 @@ export class SecureCommandService {
 
     if (!payload.requestId || !payload.agentId || !signature || !sentAt) {
       throw new SecureCommandError("安全消息结构不完整", "invalid_envelope");
+    }
+
+    if (String(payload.messageType || "") !== expectedType) {
+      throw new SecureCommandError("签名消息类型与外层消息类型不匹配", "message_type_mismatch");
     }
 
     const webserverPublicKeyInfo = this.loadWebserverPublicKey();
@@ -56,7 +62,7 @@ export class SecureCommandService {
     const authPrivateKeyInfo = this.loadAuthPrivateKey();
     const plaintext = decryptSecureCommandPayload(payload, authPrivateKeyInfo.privateKey);
 
-    this.validatePlaintextPayload(plaintext);
+    this.validatePlaintextPayload(plaintext, options.requiredFields || []);
 
     return {
       payload: plaintext,
@@ -95,7 +101,7 @@ export class SecureCommandService {
     };
   }
 
-  validatePlaintextPayload(payload) {
+  validatePlaintextPayload(payload, requiredFields = []) {
     this.pruneNonceCache();
 
     if (!payload || typeof payload !== "object") {
@@ -104,10 +110,6 @@ export class SecureCommandService {
 
     if (String(payload.agentId || "") !== this.config.agentId) {
       throw new SecureCommandError("agentId 与本地配置不匹配", "agent_mismatch");
-    }
-
-    if (!String(payload.command || "").trim()) {
-      throw new SecureCommandError("命令内容为空", "empty_command");
     }
 
     const expiresAt = Date.parse(String(payload.expiresAt || ""));
@@ -128,6 +130,12 @@ export class SecureCommandService {
 
     if (this.nonceCache.has(nonce)) {
       throw new SecureCommandError("检测到重复 nonce，命令已拒绝", "replayed_nonce");
+    }
+
+    for (const fieldName of requiredFields) {
+      if (!hasRequiredField(payload, fieldName)) {
+        throw new SecureCommandError(`缺少必要字段: ${fieldName}`, "missing_required_field");
+      }
     }
 
     this.nonceCache.set(nonce, expiresAt);
@@ -154,4 +162,16 @@ function readTextFile(filePath) {
   } catch (error) {
     throw new SecureCommandError(`读取密钥文件失败: ${filePath} (${error.message})`, "key_read_failed");
   }
+}
+
+function hasRequiredField(payload, fieldName) {
+  if (fieldName === "command") {
+    return Boolean(String(payload.command || "").trim());
+  }
+
+  if (fieldName === "input") {
+    return typeof payload.input === "string" && payload.input.length > 0;
+  }
+
+  return Boolean(String(payload[fieldName] || "").trim());
 }

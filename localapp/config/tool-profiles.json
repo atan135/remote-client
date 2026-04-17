@@ -1,0 +1,17 @@
+{
+  "profiles": {
+    "claude_code_session": {
+      "runner": "pty",
+      "command": "claude",
+      "argsTemplate": [],
+      "cwdPolicy": "allowlist",
+      "envAllowlist": [
+        "ANTHROPIC_API_KEY",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY"
+      ],
+      "idleTimeoutMs": 1800000
+    }
+  }
+}

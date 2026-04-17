@@ -2,6 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
+import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import cookie from "cookie";
@@ -18,6 +19,7 @@ import { BrowserHub } from "./realtime/browser-hub.js";
 import { SecureCommandService } from "./security/secure-command-service.js";
 import { AgentRegistry } from "./state/agent-registry.js";
 import { CommandStore } from "./state/command-store.js";
+import { TerminalSessionStore } from "./state/terminal-session-store.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -34,6 +36,10 @@ const app = express();
 const server = http.createServer(app);
 const agentRegistry = new AgentRegistry();
 const commandStore = new CommandStore(config.commandHistoryLimit);
+const terminalSessionStore = new TerminalSessionStore(
+  config.terminalSessionHistoryLimit,
+  config.terminalSessionOutputLimit
+);
 const browserHub = new BrowserHub();
 const commandDispatchContextSymbol = Symbol("commandDispatchContext");
 
@@ -458,6 +464,36 @@ app.post("/api/commands", requireAuth, (req, res) => {
   void handleCommandRequest(req, res);
 });
 
+app.get("/api/terminal-sessions", requireAuth, (req, res) => {
+  const limit = Number(req.query.limit) || config.terminalSessionHistoryLimit;
+  res.json({
+    items: terminalSessionStore.list(limit)
+  });
+});
+
+app.get("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
+  const session = terminalSessionStore.get(String(req.params.sessionId || ""));
+
+  if (!session) {
+    res.status(404).json({ message: "会话不存在" });
+    return;
+  }
+
+  res.json({ item: session });
+});
+
+app.post("/api/terminal-sessions", requireAuth, (req, res) => {
+  void handleTerminalSessionCreateRequest(req, res);
+});
+
+app.post("/api/terminal-sessions/:sessionId/input", requireAuth, (req, res) => {
+  void handleTerminalSessionInputRequest(req, res);
+});
+
+app.post("/api/terminal-sessions/:sessionId/terminate", requireAuth, (req, res) => {
+  void handleTerminalSessionTerminateRequest(req, res);
+});
+
 async function handleCommandRequest(req, res) {
   const command = String(req.body?.command || "").trim();
   const agentId = String(req.body?.agentId || "").trim();
@@ -551,6 +587,193 @@ async function handleCommandRequest(req, res) {
   }
 }
 
+async function handleTerminalSessionCreateRequest(req, res) {
+  const agentId = String(req.body?.agentId || "").trim();
+  const profile = String(req.body?.profile || "").trim();
+  const launchPayload = {
+    cwd: String(req.body?.cwd || "").trim(),
+    env: isPlainObject(req.body?.env) ? req.body.env : {},
+    cols: Number(req.body?.cols) || 120,
+    rows: Number(req.body?.rows) || 30
+  };
+
+  if (!agentId || !profile) {
+    res.status(400).json({ message: "agentId and profile are required" });
+    return;
+  }
+
+  const socket = agentRegistry.getSocket(agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    res.status(409).json({ message: "目标 agent 当前不在线" });
+    return;
+  }
+
+  try {
+    const authCodeBinding = await authCodeService.findByUserIdAndAgentId(req.auth.user.id, agentId);
+
+    if (!authCodeBinding) {
+      res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
+      return;
+    }
+
+    const record = terminalSessionStore.create({
+      agentId,
+      profile,
+      metadata: {
+        operatorUserId: req.auth.user.id,
+        operatorUsername: req.auth.user.username,
+        authCodeId: authCodeBinding.id,
+        authCodeFingerprint: authCodeBinding.fingerprint,
+        authCodeRemark: authCodeBinding.remark,
+        cwd: launchPayload.cwd,
+        envKeys: Object.keys(launchPayload.env),
+        cols: launchPayload.cols,
+        rows: launchPayload.rows
+      }
+    });
+    const dispatchResult = dispatchTerminalSessionCreate(record, {
+      user: req.auth.user,
+      authCodeBinding,
+      launchPayload
+    });
+
+    logEvent(commandLogger, "info", "terminal.session.requested", {
+      sessionId: record.sessionId,
+      requestId: record.requestId,
+      agentId,
+      profile,
+      dispatchResult,
+      userId: req.auth.user.id,
+      username: req.auth.user.username
+    });
+
+    browserHub.broadcast("terminal.session.updated", record);
+
+    if (dispatchResult === "failed") {
+      res.status(500).json({
+        message: record.error || "终端会话下发失败",
+        item: record
+      });
+      return;
+    }
+
+    res.status(202).json({ item: record });
+  } catch (error) {
+    logEvent(commandLogger, "error", "terminal.session.request_failed", {
+      agentId,
+      profile,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: error.message || "终端会话创建失败" });
+  }
+}
+
+async function handleTerminalSessionInputRequest(req, res) {
+  const sessionId = String(req.params.sessionId || "");
+  const input = String(req.body?.input || "");
+  const session = terminalSessionStore.get(sessionId);
+
+  if (!session) {
+    res.status(404).json({ message: "会话不存在" });
+    return;
+  }
+
+  if (!input) {
+    res.status(400).json({ message: "input is required" });
+    return;
+  }
+
+  if (isTerminalSessionClosedStatus(session.status)) {
+    res.status(409).json({ message: "会话已关闭，不能继续输入" });
+    return;
+  }
+
+  const socket = agentRegistry.getSocket(session.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    res.status(409).json({ message: "目标 agent 当前不在线" });
+    return;
+  }
+
+  try {
+    const authCodeBinding = await authCodeService.findByUserIdAndAgentId(
+      req.auth.user.id,
+      session.agentId
+    );
+
+    if (!authCodeBinding) {
+      res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
+      return;
+    }
+
+    dispatchTerminalSessionInput(session, {
+      user: req.auth.user,
+      authCodeBinding,
+      input
+    });
+
+    res.status(202).json({
+      ok: true,
+      sessionId
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "会话输入下发失败" });
+  }
+}
+
+async function handleTerminalSessionTerminateRequest(req, res) {
+  const sessionId = String(req.params.sessionId || "");
+  const session = terminalSessionStore.get(sessionId);
+
+  if (!session) {
+    res.status(404).json({ message: "会话不存在" });
+    return;
+  }
+
+  if (isTerminalSessionClosedStatus(session.status)) {
+    res.status(409).json({ message: "会话已关闭" });
+    return;
+  }
+
+  const socket = agentRegistry.getSocket(session.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    res.status(409).json({ message: "目标 agent 当前不在线" });
+    return;
+  }
+
+  try {
+    const authCodeBinding = await authCodeService.findByUserIdAndAgentId(
+      req.auth.user.id,
+      session.agentId
+    );
+
+    if (!authCodeBinding) {
+      res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
+      return;
+    }
+
+    dispatchTerminalSessionTerminate(session, {
+      user: req.auth.user,
+      authCodeBinding
+    });
+    terminalSessionStore.update(sessionId, {
+      status: "terminating"
+    });
+    browserHub.broadcast("terminal.session.updated", terminalSessionStore.get(sessionId));
+
+    res.status(202).json({
+      ok: true,
+      sessionId
+    });
+  } catch (error) {
+    res.status(500).json({ message: error.message || "会话终止下发失败" });
+  }
+}
+
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
 
 if (fs.existsSync(clientDistPath)) {
@@ -627,10 +850,12 @@ agentSocketServer.on("connection", (socket, _request, url) => {
   socket.on("close", () => {
     const agent = agentRegistry.disconnect(agentId);
     const changedCommands = commandStore.markAgentDisconnected(agentId);
+    const changedSessions = terminalSessionStore.markAgentDisconnected(agentId);
 
     logEvent(serverLogger, "warn", "agent.websocket_disconnected", {
       agentId,
-      affectedCommands: changedCommands.length
+      affectedCommands: changedCommands.length,
+      affectedSessions: changedSessions.length
     });
 
     if (agent) {
@@ -639,6 +864,10 @@ agentSocketServer.on("connection", (socket, _request, url) => {
 
     for (const command of changedCommands) {
       browserHub.broadcast("command.updated", command);
+    }
+
+    for (const session of changedSessions) {
+      browserHub.broadcast("terminal.session.updated", session);
     }
   });
 });
@@ -655,7 +884,8 @@ browserSocketServer.on("connection", (socket) => {
     commands: commandStore.list({
       agentId: "",
       limit: config.commandHistoryLimit
-    })
+    }),
+    terminalSessions: terminalSessionStore.list(config.terminalSessionHistoryLimit)
   });
 
   socket.on("close", () => {
@@ -794,6 +1024,60 @@ function handleAgentMessage(agentId, socket, message) {
       );
       browserHub.broadcast("command.updated", record);
     }
+
+    return;
+  }
+
+  if (message.type === "terminal.session.created") {
+    const record = terminalSessionStore.update(message.payload.sessionId, {
+      status: "running",
+      startedAt: message.payload.startedAt || new Date().toISOString(),
+      pid: message.payload.pid ?? null,
+      error: ""
+    });
+
+    if (record) {
+      browserHub.broadcast("terminal.session.updated", record);
+    }
+
+    return;
+  }
+
+  if (message.type === "terminal.session.output") {
+    const result = terminalSessionStore.appendOutput(message.payload.sessionId, message.payload);
+
+    if (result) {
+      browserHub.broadcast("terminal.session.output", result.output);
+      browserHub.broadcast("terminal.session.updated", result.record);
+    }
+
+    return;
+  }
+
+  if (message.type === "terminal.session.closed") {
+    const record = terminalSessionStore.update(message.payload.sessionId, {
+      status: message.payload.status || "completed",
+      exitCode: message.payload.exitCode ?? null,
+      error: message.payload.error || "",
+      closedAt: message.payload.closedAt || new Date().toISOString()
+    });
+
+    if (record) {
+      browserHub.broadcast("terminal.session.updated", record);
+    }
+
+    return;
+  }
+
+  if (message.type === "terminal.session.error") {
+    const record = terminalSessionStore.update(message.payload.sessionId, {
+      status: "failed",
+      error: message.payload.error || "terminal session failed"
+    });
+
+    if (record) {
+      browserHub.broadcast("terminal.session.updated", record);
+    }
   }
 }
 
@@ -925,6 +1209,93 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
   }
 
   return "dispatched";
+}
+
+function dispatchTerminalSessionCreate(sessionRecord, context) {
+  const socket = agentRegistry.getSocket(sessionRecord.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    terminalSessionStore.update(sessionRecord.sessionId, {
+      status: "failed",
+      error: "Agent is offline."
+    });
+    return "failed";
+  }
+
+  let secureEnvelope;
+  try {
+    secureEnvelope = secureCommandService.createTerminalSessionCreateEnvelope({
+      sessionRecord,
+      operatorUser: context.user,
+      authCodeBinding: context.authCodeBinding,
+      launchPayload: context.launchPayload
+    });
+  } catch (error) {
+    terminalSessionStore.update(sessionRecord.sessionId, {
+      status: "failed",
+      error: error.message
+    });
+    logEvent(commandLogger, "error", "terminal.session.secure_dispatch_failed", {
+      sessionId: sessionRecord.sessionId,
+      agentId: sessionRecord.agentId,
+      profile: sessionRecord.profile,
+      error: error.message
+    });
+    return "failed";
+  }
+
+  terminalSessionStore.update(sessionRecord.sessionId, {
+    status: "dispatched"
+  });
+
+  try {
+    socket.send(JSON.stringify(secureEnvelope));
+  } catch (error) {
+    terminalSessionStore.update(sessionRecord.sessionId, {
+      status: "failed",
+      error: error.message
+    });
+    return "failed";
+  }
+
+  return "dispatched";
+}
+
+function dispatchTerminalSessionInput(sessionRecord, context) {
+  const socket = agentRegistry.getSocket(sessionRecord.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw new Error("Agent is offline.");
+  }
+
+  const secureEnvelope = secureCommandService.createTerminalSessionInputEnvelope({
+    requestId: randomUUID(),
+    agentId: sessionRecord.agentId,
+    sessionId: sessionRecord.sessionId,
+    input: context.input,
+    operatorUser: context.user,
+    authCodeBinding: context.authCodeBinding
+  });
+
+  socket.send(JSON.stringify(secureEnvelope));
+}
+
+function dispatchTerminalSessionTerminate(sessionRecord, context) {
+  const socket = agentRegistry.getSocket(sessionRecord.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw new Error("Agent is offline.");
+  }
+
+  const secureEnvelope = secureCommandService.createTerminalSessionTerminateEnvelope({
+    requestId: randomUUID(),
+    agentId: sessionRecord.agentId,
+    sessionId: sessionRecord.sessionId,
+    operatorUser: context.user,
+    authCodeBinding: context.authCodeBinding
+  });
+
+  socket.send(JSON.stringify(secureEnvelope));
 }
 
 function loadCommandDispatchContext(command) {
@@ -1085,6 +1456,14 @@ function isValidPassword(password) {
 
 function isDuplicateEntryError(error) {
   return error?.code === "ER_DUP_ENTRY";
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isTerminalSessionClosedStatus(status) {
+  return ["completed", "failed", "terminated", "connection_lost"].includes(String(status || ""));
 }
 
 async function ensureUserAuthCodesTable() {

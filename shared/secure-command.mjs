@@ -106,6 +106,7 @@ export function decryptSecureCommandPayload(payload, privateKey) {
 
 export function buildSecureSignatureInput({ payload, sentAt }) {
   return JSON.stringify({
+    messageType: payload.messageType || "",
     requestId: payload.requestId || "",
     agentId: payload.agentId || "",
     operatorUserId: payload.operatorUserId ?? null,

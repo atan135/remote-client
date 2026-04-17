@@ -7,6 +7,7 @@ export class AgentRegistry {
   register(payload, socket) {
     const now = new Date().toISOString();
     const previous = this.agents.get(payload.agentId);
+    const terminalProfiles = normalizeTerminalProfiles(payload.terminalProfiles);
 
     const agent = {
       agentId: payload.agentId,
@@ -15,6 +16,8 @@ export class AgentRegistry {
       platform: payload.platform || "",
       arch: payload.arch || "",
       pid: payload.pid || null,
+      terminalProfiles:
+        terminalProfiles.length > 0 ? terminalProfiles : previous?.terminalProfiles || [],
       status: "online",
       connectedAt: previous?.connectedAt || now,
       lastDisconnectAt: previous?.lastDisconnectAt || null,
@@ -68,3 +71,21 @@ export class AgentRegistry {
   }
 }
 
+function normalizeTerminalProfiles(profiles) {
+  if (!Array.isArray(profiles)) {
+    return [];
+  }
+
+  return profiles
+    .map((profile) => ({
+      name: String(profile?.name || "").trim(),
+      runner: String(profile?.runner || "").trim(),
+      command: String(profile?.command || "").trim(),
+      cwdPolicy: String(profile?.cwdPolicy || "").trim(),
+      idleTimeoutMs: Number(profile?.idleTimeoutMs) || 0,
+      envAllowlist: Array.isArray(profile?.envAllowlist)
+        ? profile.envAllowlist.map((item) => String(item))
+        : []
+    }))
+    .filter((profile) => profile.name);
+}
