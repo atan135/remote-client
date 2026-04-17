@@ -78,7 +78,7 @@ async function saveConfig() {
       commandTimeoutMs: Number(configForm.commandTimeoutMs),
       maxBufferBytes: Number(configForm.maxBufferBytes),
       windowsOutputEncoding: configForm.windowsOutputEncoding,
-      minimizeToTray: Boolean(configForm.minimizeToTray),
+      closeToTray: Boolean(configForm.closeToTray),
       launchOnStartup: Boolean(configForm.launchOnStartup)
     });
 
@@ -191,7 +191,7 @@ function applyConfigToForm(config) {
     commandTimeoutMs: config.commandTimeoutMs ?? 120000,
     maxBufferBytes: config.maxBufferBytes ?? 1048576,
     windowsOutputEncoding: config.windowsOutputEncoding || "cp936",
-    minimizeToTray: Boolean(config.minimizeToTray),
+    closeToTray: Boolean(config.closeToTray),
     launchOnStartup: Boolean(config.launchOnStartup)
   });
 }
@@ -242,7 +242,7 @@ function createEmptyConfig() {
     commandTimeoutMs: 120000,
     maxBufferBytes: 1048576,
     windowsOutputEncoding: "cp936",
-    minimizeToTray: true,
+    closeToTray: true,
     launchOnStartup: false
   };
 }
@@ -385,8 +385,8 @@ function getErrorMessage(error) {
 
         <div class="toggle-grid">
           <label class="toggle">
-            <input v-model="configForm.minimizeToTray" type="checkbox" />
-            <span>最小化到托盘</span>
+            <input v-model="configForm.closeToTray" type="checkbox" />
+            <span>关闭时隐藏到托盘</span>
           </label>
           <label class="toggle">
             <input v-model="configForm.launchOnStartup" type="checkbox" />

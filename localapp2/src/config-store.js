@@ -52,7 +52,7 @@ export class ConfigStore {
       webserverSignPublicKeyPath:
         this.env.WEBSERVER_SIGN_PUBLIC_KEY_PATH ||
         path.join(paths.keysDir, "webserver_sign_public.pem"),
-      minimizeToTray: this.env.MINIMIZE_TO_TRAY,
+      closeToTray: this.env.CLOSE_TO_TRAY ?? this.env.MINIMIZE_TO_TRAY,
       launchOnStartup: this.env.LAUNCH_ON_STARTUP
     });
   }
@@ -115,7 +115,7 @@ export class ConfigStore {
       authPublicKeyPath: path.join(paths.keysDir, "auth_public.pem"),
       authPrivateKeyPassphrase: "",
       webserverSignPublicKeyPath: path.join(paths.keysDir, "webserver_sign_public.pem"),
-      minimizeToTray: true,
+      closeToTray: true,
       launchOnStartup: false
     };
 
@@ -150,7 +150,10 @@ export class ConfigStore {
         defaults.webserverSignPublicKeyPath,
         this.userDataDir
       ),
-      minimizeToTray: toBoolean(input.minimizeToTray, defaults.minimizeToTray),
+      closeToTray: toBoolean(
+        input.closeToTray ?? input.minimizeToTray,
+        defaults.closeToTray
+      ),
       launchOnStartup: toBoolean(input.launchOnStartup, defaults.launchOnStartup)
     };
   }

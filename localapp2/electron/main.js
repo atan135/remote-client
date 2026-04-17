@@ -103,17 +103,8 @@ async function createMainWindow() {
     }
   });
 
-  window.on("minimize", (event) => {
-    if (!currentConfig?.minimizeToTray) {
-      return;
-    }
-
-    event.preventDefault();
-    window.hide();
-  });
-
   window.on("close", (event) => {
-    if (isQuitting || !currentConfig?.minimizeToTray) {
+    if (isQuitting || !currentConfig?.closeToTray) {
       return;
     }
 
