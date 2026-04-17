@@ -6,6 +6,8 @@ export class TerminalSessionStore {
     this.outputLimit = outputLimit;
     this.sessions = new Map();
     this.order = [];
+    this.inputReceiptLimit = Math.max(200, outputLimit);
+    this.inputReceipts = new Map();
   }
 
   create({ agentId, profile, sessionType = "llm_cli", metadata = {} }) {
@@ -38,6 +40,40 @@ export class TerminalSessionStore {
 
   get(sessionId) {
     return this.sessions.get(sessionId) || null;
+  }
+
+  getInputReceipt(sessionId, inputId) {
+    const bucket = this.inputReceipts.get(sessionId);
+    return bucket?.items.get(inputId) || null;
+  }
+
+  rememberInputReceipt(sessionId, inputId, receipt) {
+    if (!this.sessions.has(sessionId)) {
+      return null;
+    }
+
+    let bucket = this.inputReceipts.get(sessionId);
+
+    if (!bucket) {
+      bucket = {
+        items: new Map(),
+        order: []
+      };
+      this.inputReceipts.set(sessionId, bucket);
+    }
+
+    if (!bucket.items.has(inputId)) {
+      bucket.order.push(inputId);
+    }
+
+    bucket.items.set(inputId, receipt);
+
+    while (bucket.order.length > this.inputReceiptLimit) {
+      const oldestInputId = bucket.order.shift();
+      bucket.items.delete(oldestInputId);
+    }
+
+    return receipt;
   }
 
   update(sessionId, patch) {
@@ -111,6 +147,7 @@ export class TerminalSessionStore {
     while (this.order.length > this.limit) {
       const sessionId = this.order.pop();
       this.sessions.delete(sessionId);
+      this.inputReceipts.delete(sessionId);
     }
   }
 }

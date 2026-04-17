@@ -120,6 +120,12 @@ const appConfig = reactive({
 });
 
 let socket = null;
+const terminalSocketInputQueue = [];
+const pendingTerminalSocketInputs = [];
+let flushingTerminalSocketInput = false;
+let terminalSocketInputFlushTimer = null;
+let browserSocketConnectionId = 0;
+let browserReconnectTimer = null;
 
 const avatarLabel = computed(() => {
   const source = session.value?.user?.displayName || session.value?.user?.username || "Q";
@@ -638,8 +644,8 @@ async function createTerminalSession() {
   }
 }
 
-async function sendTerminalInput() {
-  const sessionRecord = activeTerminalSession.value;
+async function sendTerminalInput(sessionId = activeTerminalSession.value?.sessionId) {
+  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
   const input = terminalInput.value;
 
   if (!sessionRecord || !input) {
@@ -650,33 +656,181 @@ async function sendTerminalInput() {
   wsState.error = "";
 
   try {
-    const response = await fetch(`/api/terminal-sessions/${sessionRecord.sessionId}/input`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        input: /[\r\n]$/.test(input) ? input : `${input}\r`
-      })
-    });
-
-    if (response.status === 401) {
-      await handleUnauthorized();
-      return;
-    }
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(payload.message || "终端输入发送失败");
-    }
-
+    enqueueTerminalSocketInput(
+      sessionRecord.sessionId,
+      /[\r\n]$/.test(input) ? input : `${input}\r`
+    );
     terminalInput.value = "";
   } catch (error) {
     wsState.error = error.message;
   } finally {
     sendingTerminalInput.value = false;
   }
+}
+
+function queueTerminalRawInput(inputOrPayload, sessionId = activeTerminalSession.value?.sessionId) {
+  const payload =
+    inputOrPayload && typeof inputOrPayload === "object"
+      ? inputOrPayload
+      : {
+          input: inputOrPayload,
+          sessionId
+        };
+  const normalizedSessionId = String(payload?.sessionId || sessionId || "").trim();
+  const normalizedInput = String(payload?.input || "");
+  const sessionRecord = terminalSessions.value.find(
+    (item) => item.sessionId === normalizedSessionId
+  );
+
+  if (
+    !normalizedSessionId ||
+    !normalizedInput ||
+    !sessionRecord ||
+    isTerminalSessionClosedStatus(sessionRecord.status)
+  ) {
+    return;
+  }
+
+  terminalSocketInputQueue.push({
+    sessionId: normalizedSessionId,
+    input: normalizedInput
+  });
+
+  if (terminalSocketInputFlushTimer) {
+    return;
+  }
+
+  terminalSocketInputFlushTimer = window.setTimeout(() => {
+    terminalSocketInputFlushTimer = null;
+    flushQueuedTerminalSocketInputs();
+  }, 16);
+}
+
+function flushQueuedTerminalSocketInputs() {
+  while (terminalSocketInputQueue.length > 0) {
+    const current = terminalSocketInputQueue.shift();
+
+    if (!current?.sessionId || !current.input) {
+      continue;
+    }
+
+    let combinedInput = current.input;
+
+    while (terminalSocketInputQueue[0]?.sessionId === current.sessionId) {
+      const next = terminalSocketInputQueue.shift();
+      combinedInput += String(next?.input || "");
+    }
+
+    enqueueTerminalSocketInput(current.sessionId, combinedInput);
+  }
+}
+
+function enqueueTerminalSocketInput(sessionId, input) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  const normalizedInput = String(input || "");
+  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === normalizedSessionId);
+
+  if (
+    !normalizedSessionId ||
+    !normalizedInput ||
+    !sessionRecord ||
+    isTerminalSessionClosedStatus(sessionRecord.status)
+  ) {
+    return;
+  }
+
+  pendingTerminalSocketInputs.push({
+    inputId: createClientInputId(),
+    sessionId: normalizedSessionId,
+    input: normalizedInput,
+    createdAt: new Date().toISOString(),
+    lastSentAt: "",
+    sentConnectionId: 0,
+    status: "queued",
+    error: ""
+  });
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    wsState.error = "实时通道暂时断开，输入已排队，连接恢复后会自动重发";
+  }
+
+  flushPendingTerminalSocketInputs();
+}
+
+function flushPendingTerminalSocketInputs() {
+  if (flushingTerminalSocketInput) {
+    return;
+  }
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  flushingTerminalSocketInput = true;
+
+  try {
+    for (const item of pendingTerminalSocketInputs) {
+      if (
+        !item ||
+        item.status === "accepted" ||
+        item.sentConnectionId === browserSocketConnectionId
+      ) {
+        continue;
+      }
+
+      socket.send(
+        JSON.stringify({
+          type: "terminal.session.input",
+          payload: {
+            inputId: item.inputId,
+            sessionId: item.sessionId,
+            input: item.input
+          }
+        })
+      );
+      item.status = "sent";
+      item.error = "";
+      item.lastSentAt = new Date().toISOString();
+      item.sentConnectionId = browserSocketConnectionId;
+    }
+  } catch (error) {
+    wsState.error = error.message || "终端输入发送失败";
+  } finally {
+    flushingTerminalSocketInput = false;
+  }
+}
+
+function applyTerminalInputAck(payload) {
+  const inputId = String(payload?.inputId || "");
+
+  if (!inputId) {
+    return;
+  }
+
+  const index = pendingTerminalSocketInputs.findIndex((item) => item.inputId === inputId);
+
+  if (index === -1) {
+    return;
+  }
+
+  const status = String(payload?.status || "");
+  const error = String(payload?.error || "");
+
+  if (status === "accepted" || status === "duplicate") {
+    pendingTerminalSocketInputs.splice(index, 1);
+    return;
+  }
+
+  pendingTerminalSocketInputs.splice(index, 1);
+  wsState.error = error || "终端输入发送失败";
+}
+
+function createClientInputId() {
+  if (typeof window !== "undefined" && window.crypto?.randomUUID) {
+    return window.crypto.randomUUID();
+  }
+
+  return `input-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
 
 async function terminateTerminalSession(sessionId = activeTerminalSession.value?.sessionId) {
@@ -999,15 +1153,32 @@ function connectBrowserSocket() {
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const url = new URL(`${protocol}//${window.location.host}/ws/browser`);
+  const connectionId = browserSocketConnectionId + 1;
+
+  browserSocketConnectionId = connectionId;
 
   socket = new WebSocket(url);
 
   socket.addEventListener("open", () => {
+    if (connectionId !== browserSocketConnectionId) {
+      return;
+    }
+
+    if (browserReconnectTimer) {
+      window.clearTimeout(browserReconnectTimer);
+      browserReconnectTimer = null;
+    }
+
     wsState.connected = true;
     wsState.error = "";
+    flushPendingTerminalSocketInputs();
   });
 
   socket.addEventListener("message", (event) => {
+    if (connectionId !== browserSocketConnectionId) {
+      return;
+    }
+
     const message = JSON.parse(event.data);
 
     if (message.type === "snapshot") {
@@ -1040,27 +1211,68 @@ function connectBrowserSocket() {
 
     if (message.type === "terminal.session.output") {
       appendTerminalSessionOutput(message.payload);
+      return;
+    }
+
+    if (message.type === "terminal.session.input.ack") {
+      applyTerminalInputAck(message.payload);
     }
   });
 
   socket.addEventListener("close", () => {
+    if (connectionId !== browserSocketConnectionId) {
+      return;
+    }
+
     wsState.connected = false;
+    socket = null;
 
     if (session.value) {
-      window.setTimeout(connectBrowserSocket, 3000);
+      scheduleBrowserSocketReconnect(connectionId);
     }
   });
 
   socket.addEventListener("error", () => {
+    if (connectionId !== browserSocketConnectionId) {
+      return;
+    }
+
     wsState.error = "实时通道连接失败";
   });
 }
 
 function disconnectBrowserSocket() {
+  browserSocketConnectionId += 1;
+
+  if (browserReconnectTimer) {
+    window.clearTimeout(browserReconnectTimer);
+    browserReconnectTimer = null;
+  }
+
   if (socket) {
     socket.close();
     socket = null;
   }
+}
+
+function scheduleBrowserSocketReconnect(connectionId) {
+  if (browserReconnectTimer) {
+    window.clearTimeout(browserReconnectTimer);
+  }
+
+  browserReconnectTimer = window.setTimeout(() => {
+    browserReconnectTimer = null;
+
+    if (
+      connectionId !== browserSocketConnectionId ||
+      !session.value ||
+      socket
+    ) {
+      return;
+    }
+
+    connectBrowserSocket();
+  }, 3000);
 }
 
 function ensureSelectedAgent() {
@@ -1136,6 +1348,17 @@ function resetAuthedState() {
   terminalProfile.value = "";
   terminalCwd.value = "";
   terminalInput.value = "";
+  terminalSocketInputQueue.length = 0;
+  pendingTerminalSocketInputs.length = 0;
+  flushingTerminalSocketInput = false;
+  if (terminalSocketInputFlushTimer) {
+    window.clearTimeout(terminalSocketInputFlushTimer);
+    terminalSocketInputFlushTimer = null;
+  }
+  if (browserReconnectTimer) {
+    window.clearTimeout(browserReconnectTimer);
+    browserReconnectTimer = null;
+  }
   activeTab.value = "home";
 }
 
@@ -1305,6 +1528,7 @@ function useSelectedAgentIdForAuthCode() {
           @submit-command="submitCommand"
           @create-terminal-session="createTerminalSession"
           @send-terminal-input="sendTerminalInput"
+          @send-terminal-raw-input="queueTerminalRawInput($event)"
           @terminate-terminal-session="terminateTerminalSession"
         />
 

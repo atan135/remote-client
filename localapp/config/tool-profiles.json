@@ -12,6 +12,22 @@
         "NO_PROXY"
       ],
       "idleTimeoutMs": 1800000
+    },
+    "codex_code_session": {
+      "runner": "pty",
+      "command": "codex",
+      "argsTemplate": [],
+      "cwdPolicy": "allowlist",
+      "envAllowlist": [
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_ORG_ID",
+        "OPENAI_PROJECT_ID",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY"
+      ],
+      "idleTimeoutMs": 1800000
     }
   }
 }

@@ -23,6 +23,10 @@ function toList(value) {
     .filter(Boolean);
 }
 
+function toUniqueList(value) {
+  return Array.from(new Set(toList(value)));
+}
+
 export function loadConfig() {
   const hostname = os.hostname();
 
@@ -49,6 +53,7 @@ export function loadConfig() {
     sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 200),
     taskProfileConfigPath:
       process.env.TASK_PROFILE_CONFIG_PATH || "./config/tool-profiles.json",
+    commonWorkingDirectories: toUniqueList(process.env.COMMON_WORK_DIRS),
     allowedCwdRoots: toList(process.env.ALLOWED_CWD_ROOTS),
     localDebugServerEnabled: toBoolean(process.env.LOCAL_DEBUG_SERVER_ENABLED, false),
     localDebugServerHost: process.env.LOCAL_DEBUG_SERVER_HOST || "127.0.0.1",

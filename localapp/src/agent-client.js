@@ -211,7 +211,10 @@ export class AgentClient {
   sendRegister() {
     logEvent(this.agentLogger, "info", "agent.registering", {
       agentId: this.config.agentId,
-      label: this.config.agentLabel
+      label: this.config.agentLabel,
+      commonWorkingDirectoryCount: Array.isArray(this.config.commonWorkingDirectories)
+        ? this.config.commonWorkingDirectories.length
+        : 0
     });
 
     this.send("agent.register", {
@@ -221,7 +224,10 @@ export class AgentClient {
       platform: os.platform(),
       arch: os.arch(),
       pid: process.pid,
-      terminalProfiles: this.listTerminalProfiles()
+      terminalProfiles: this.listTerminalProfiles(),
+      commonWorkingDirectories: Array.isArray(this.config.commonWorkingDirectories)
+        ? [...this.config.commonWorkingDirectories]
+        : []
     });
   }
 

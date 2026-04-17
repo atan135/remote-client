@@ -50,10 +50,9 @@ function statusType(status) {
 <template>
   <section class="page">
     <el-card class="surface-card hero-card" shadow="never">
-      <p class="eyebrow">Control Center</p>
       <h2>{{ displayName || "控制台" }}</h2>
-      <p class="hero-copy">
-        {{ wsConnected ? "实时链路在线，最新设备与命令记录会自动刷新。" : "实时链路重连中，请稍候查看最新状态。" }}
+      <p v-if="!wsConnected" class="hero-copy">
+        实时链路重连中，请稍候查看最新状态。
       </p>
 
       <div class="hero-actions">
@@ -93,14 +92,9 @@ function statusType(status) {
         </div>
 
         <div class="list-grid">
-          <button
-            v-for="agent in agents"
-            :key="agent.agentId"
-            class="settings-item"
-            :class="{ active: selectedAgentId === agent.agentId }"
-            type="button"
-            @click="emit('select-agent', agent.agentId)"
-          >
+          <button v-for="agent in agents" :key="agent.agentId" class="settings-item"
+            :class="{ active: selectedAgentId === agent.agentId }" type="button"
+            @click="emit('select-agent', agent.agentId)">
             <span class="stack-text">
               <strong>{{ agent.label }}</strong>
               <small>{{ agent.hostname || agent.agentId }}</small>
@@ -131,6 +125,10 @@ function statusType(status) {
             <span>平台 / 架构</span>
             <strong>{{ activeAgent.platform }} / {{ activeAgent.arch }}</strong>
           </div>
+        </div>
+        <div v-if="activeAgent?.commonWorkingDirectories?.length" class="console-block compact-stack">
+          <h4>Common Working Directories</h4>
+          <pre>{{ activeAgent.commonWorkingDirectories.join("\n") }}</pre>
         </div>
         <p v-else class="muted">当前还没有选中的设备。</p>
       </el-card>

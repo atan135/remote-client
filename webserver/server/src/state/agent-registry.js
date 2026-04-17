@@ -8,6 +8,8 @@ export class AgentRegistry {
     const now = new Date().toISOString();
     const previous = this.agents.get(payload.agentId);
     const terminalProfiles = normalizeTerminalProfiles(payload.terminalProfiles);
+    const hasCommonWorkingDirectories = Array.isArray(payload.commonWorkingDirectories);
+    const commonWorkingDirectories = normalizeDirectoryList(payload.commonWorkingDirectories);
 
     const agent = {
       agentId: payload.agentId,
@@ -16,6 +18,9 @@ export class AgentRegistry {
       platform: payload.platform || "",
       arch: payload.arch || "",
       pid: payload.pid || null,
+      commonWorkingDirectories: hasCommonWorkingDirectories
+        ? commonWorkingDirectories
+        : previous?.commonWorkingDirectories || [],
       terminalProfiles:
         terminalProfiles.length > 0 ? terminalProfiles : previous?.terminalProfiles || [],
       status: "online",
@@ -88,4 +93,26 @@ function normalizeTerminalProfiles(profiles) {
         : []
     }))
     .filter((profile) => profile.name);
+}
+
+function normalizeDirectoryList(directories) {
+  if (!Array.isArray(directories)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const candidate of directories) {
+    const value = String(candidate || "").trim();
+
+    if (!value || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    normalized.push(value);
+  }
+
+  return normalized;
 }

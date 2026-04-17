@@ -674,53 +674,21 @@ async function handleTerminalSessionCreateRequest(req, res) {
 async function handleTerminalSessionInputRequest(req, res) {
   const sessionId = String(req.params.sessionId || "");
   const input = String(req.body?.input || "");
-  const session = terminalSessionStore.get(sessionId);
-
-  if (!session) {
-    res.status(404).json({ message: "会话不存在" });
-    return;
-  }
-
-  if (!input) {
-    res.status(400).json({ message: "input is required" });
-    return;
-  }
-
-  if (isTerminalSessionClosedStatus(session.status)) {
-    res.status(409).json({ message: "会话已关闭，不能继续输入" });
-    return;
-  }
-
-  const socket = agentRegistry.getSocket(session.agentId);
-
-  if (!socket || socket.readyState !== WebSocket.OPEN) {
-    res.status(409).json({ message: "目标 agent 当前不在线" });
-    return;
-  }
 
   try {
-    const authCodeBinding = await authCodeService.findByUserIdAndAgentId(
-      req.auth.user.id,
-      session.agentId
-    );
-
-    if (!authCodeBinding) {
-      res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
-      return;
-    }
-
-    dispatchTerminalSessionInput(session, {
+    await dispatchTerminalSessionInputForUser({
       user: req.auth.user,
-      authCodeBinding,
+      sessionId,
       input
     });
-
     res.status(202).json({
       ok: true,
       sessionId
     });
   } catch (error) {
-    res.status(500).json({ message: error.message || "会话输入下发失败" });
+    res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "会话输入下发失败" });
   }
 }
 
@@ -888,6 +856,10 @@ browserSocketServer.on("connection", (socket) => {
     terminalSessions: terminalSessionStore.list(config.terminalSessionHistoryLimit)
   });
 
+  socket.on("message", (raw) => {
+    void handleBrowserMessage(socket, raw);
+  });
+
   socket.on("close", () => {
     browserHub.remove(socket);
     logEvent(serverLogger, "info", "browser.websocket_disconnected", {
@@ -952,7 +924,8 @@ function handleAgentMessage(agentId, socket, message) {
       label: agent.label,
       hostname: agent.hostname,
       platform: agent.platform,
-      arch: agent.arch
+      arch: agent.arch,
+      commonWorkingDirectoryCount: agent.commonWorkingDirectories.length
     });
     browserHub.broadcast("agent.updated", agent);
     dispatchQueuedCommands(agentId);
@@ -1298,6 +1271,136 @@ function dispatchTerminalSessionTerminate(sessionRecord, context) {
   socket.send(JSON.stringify(secureEnvelope));
 }
 
+async function dispatchTerminalSessionInputForUser({ user, sessionId, input }) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  const normalizedInput = String(input || "");
+  const session = terminalSessionStore.get(normalizedSessionId);
+
+  if (!session) {
+    throw createHttpError(404, "会话不存在");
+  }
+
+  if (!normalizedInput) {
+    throw createHttpError(400, "input is required");
+  }
+
+  if (isTerminalSessionClosedStatus(session.status)) {
+    throw createHttpError(409, "会话已关闭，不能继续输入");
+  }
+
+  const socket = agentRegistry.getSocket(session.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createHttpError(409, "目标 agent 当前不在线");
+  }
+
+  const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, session.agentId);
+
+  if (!authCodeBinding) {
+    throw createHttpError(400, "当前用户未为该设备配置 auth_code");
+  }
+
+  dispatchTerminalSessionInput(session, {
+    user,
+    authCodeBinding,
+    input: normalizedInput
+  });
+
+  return session;
+}
+
+async function handleBrowserMessage(socket, raw) {
+  let message;
+
+  try {
+    message = JSON.parse(String(raw));
+  } catch (error) {
+    logEvent(serverLogger, "warn", "browser.websocket_invalid_message", {
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      error: error.message
+    });
+    return;
+  }
+
+  if (message.type === "terminal.session.input") {
+    await handleBrowserTerminalSessionInput(socket, message.payload || {});
+    return;
+  }
+
+  logEvent(serverLogger, "warn", "browser.websocket_unsupported_message", {
+    userId: socket.auth.user.id,
+    username: socket.auth.user.username,
+    type: String(message.type || "")
+  });
+}
+
+async function handleBrowserTerminalSessionInput(socket, payload) {
+  const inputId = String(payload?.inputId || "").trim();
+  const sessionId = String(payload?.sessionId || "").trim();
+  const input = String(payload?.input || "");
+
+  if (!inputId || !sessionId || !input) {
+    sendTerminalSessionInputAck(socket, {
+      inputId,
+      sessionId,
+      status: "rejected",
+      error: "sessionId、inputId 和 input 不能为空"
+    });
+    return;
+  }
+
+  const receipt = terminalSessionStore.getInputReceipt(sessionId, inputId);
+
+  if (receipt) {
+    sendTerminalSessionInputAck(socket, {
+      ...receipt,
+      status: "duplicate",
+      duplicate: true
+    });
+    return;
+  }
+
+  try {
+    const session = await dispatchTerminalSessionInputForUser({
+      user: socket.auth.user,
+      sessionId,
+      input
+    });
+    const acceptedAt = new Date().toISOString();
+    const acceptedReceipt = terminalSessionStore.rememberInputReceipt(sessionId, inputId, {
+      inputId,
+      sessionId,
+      agentId: session.agentId,
+      status: "accepted",
+      duplicate: false,
+      acceptedAt,
+      error: ""
+    });
+
+    sendTerminalSessionInputAck(socket, acceptedReceipt);
+  } catch (error) {
+    sendTerminalSessionInputAck(socket, {
+      inputId,
+      sessionId,
+      status: "rejected",
+      error: error.message || "会话输入下发失败"
+    });
+  }
+}
+
+function sendTerminalSessionInputAck(socket, payload) {
+  browserHub.send(socket, "terminal.session.input.ack", {
+    inputId: String(payload?.inputId || ""),
+    sessionId: String(payload?.sessionId || ""),
+    agentId: String(payload?.agentId || ""),
+    status: String(payload?.status || "rejected"),
+    duplicate: Boolean(payload?.duplicate),
+    acceptedAt: payload?.acceptedAt || null,
+    error: String(payload?.error || "")
+  });
+}
+
 function loadCommandDispatchContext(command) {
   return command[commandDispatchContextSymbol] || null;
 }
@@ -1460,6 +1563,12 @@ function isDuplicateEntryError(error) {
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function createHttpError(statusCode, message) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
 }
 
 function isTerminalSessionClosedStatus(status) {

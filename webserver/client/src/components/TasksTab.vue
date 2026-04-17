@@ -33,38 +33,24 @@ function statusType(status) {
 
 <template>
   <section class="page">
-    <el-card class="surface-card section-banner" shadow="never">
-      <p class="eyebrow">Tasks</p>
+    <el-card class="surface-card section-banner tab-banner" shadow="never">
       <h2>执行记录</h2>
-      <p>查看命令执行结果、退出码和标准输出。</p>
     </el-card>
 
     <el-card class="surface-card info-card" shadow="never">
       <label class="field-block">
         <span>筛选设备</span>
-        <el-select
-          :model-value="timelineFilterAgentId"
-          placeholder="全部设备"
-          @update:model-value="emit('update:timelineFilterAgentId', $event)"
-        >
+        <el-select :model-value="timelineFilterAgentId" placeholder="全部设备"
+          @update:model-value="emit('update:timelineFilterAgentId', $event)">
           <el-option label="全部设备" value="all" />
-          <el-option
-            v-for="agent in agents"
-            :key="agent.agentId"
-            :label="`${agent.label} / ${agent.agentId}`"
-            :value="agent.agentId"
-          />
+          <el-option v-for="agent in agents" :key="agent.agentId" :label="`${agent.label} / ${agent.agentId}`"
+            :value="agent.agentId" />
         </el-select>
       </label>
     </el-card>
 
     <section class="stack-grid">
-      <el-card
-        v-for="item in commands"
-        :key="item.requestId"
-        class="surface-card timeline-card"
-        shadow="never"
-      >
+      <el-card v-for="item in commands" :key="item.requestId" class="surface-card timeline-card" shadow="never">
         <div class="card-head">
           <div>
             <h3>{{ item.command }}</h3>
