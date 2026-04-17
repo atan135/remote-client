@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "source": "../../localapp/src/agent-client.js",
+      "target": "../src/synced/agent-client.js"
+    },
+    {
+      "source": "../../localapp/src/command-runner.js",
+      "target": "../src/synced/command-runner.js"
+    },
+    {
+      "source": "../../localapp/src/security/secure-command-service.js",
+      "target": "../src/synced/security/secure-command-service.js"
+    },
+    {
+      "source": "../../shared/secure-command.mjs",
+      "target": "../shared/secure-command.mjs"
+    }
+  ]
+}

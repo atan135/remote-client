@@ -3,16 +3,21 @@
   "private": true,
   "workspaces": [
     "localapp",
+    "localapp2",
     "webserver/server",
     "webserver/client"
   ],
   "scripts": {
     "dev:agent": "npm run dev --workspace localapp",
+    "dev:agent2": "npm run dev --workspace localapp2",
     "dev:server": "npm run dev --workspace webserver/server",
     "dev:client": "npm run dev --workspace webserver/client",
+    "build:agent2": "npm run build --workspace localapp2",
     "build:client": "npm run build --workspace webserver/client",
     "auth:keygen:localapp": "node scripts/generate-rsa-keypair.js localapp-auth",
     "auth:keygen:webserver": "node scripts/generate-rsa-keypair.js webserver-sign",
-    "auth:keygen:all": "npm run auth:keygen:localapp && npm run auth:keygen:webserver"
+    "auth:keygen:all": "npm run auth:keygen:localapp && npm run auth:keygen:webserver",
+    "sync:agent2": "npm run sync:localapp --workspace localapp2",
+    "check:agent2-sync": "npm run check:localapp-sync --workspace localapp2"
   }
 }

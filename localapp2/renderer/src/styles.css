@@ -1,0 +1,251 @@
+:root {
+  color-scheme: dark;
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  background:
+    radial-gradient(circle at top left, rgba(76, 168, 130, 0.18), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(72, 132, 112, 0.14), transparent 28%),
+    linear-gradient(180deg, #08110e 0%, #0c1713 100%);
+  color: #edf7f2;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 960px;
+  min-height: 100vh;
+  background: transparent;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+code,
+pre {
+  font-family: "Cascadia Code", "Consolas", monospace;
+}
+
+#app {
+  min-height: 100vh;
+}
+
+.shell {
+  min-height: 100vh;
+  padding: 28px;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 20px;
+  align-items: stretch;
+  margin-bottom: 20px;
+}
+
+.eyebrow {
+  margin: 0 0 10px;
+  color: #7fe0b2;
+  font-size: 12px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.hero h1,
+.panel h2 {
+  margin: 0;
+}
+
+.hero-copy {
+  max-width: 72ch;
+  color: #a5c5b6;
+}
+
+.status-card,
+.panel {
+  border: 1px solid rgba(153, 214, 184, 0.16);
+  border-radius: 24px;
+  background: rgba(9, 18, 15, 0.78);
+  backdrop-filter: blur(22px);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+}
+
+.status-card {
+  display: grid;
+  gap: 10px;
+  padding: 22px;
+}
+
+.status-label {
+  display: inline-flex;
+  width: fit-content;
+  padding: 6px 12px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #d7efe3;
+}
+
+.status-label.online {
+  background: rgba(115, 223, 163, 0.16);
+  color: #7ff0b7;
+}
+
+.status-label.connecting,
+.status-label.reconnecting {
+  background: rgba(255, 194, 112, 0.16);
+  color: #ffd08a;
+}
+
+.status-label.offline,
+.status-label.error {
+  background: rgba(255, 136, 136, 0.16);
+  color: #ff9f9f;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+
+.panel {
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+}
+
+.panel.full {
+  grid-column: 1 / -1;
+}
+
+.panel-head,
+.toolbar {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.toolbar {
+  flex-wrap: wrap;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.form-grid label,
+.stacked {
+  display: grid;
+  gap: 8px;
+}
+
+.toggle-grid {
+  display: flex;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.toggle {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  color: #cfe9dc;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid rgba(153, 214, 184, 0.16);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #edf7f2;
+}
+
+textarea {
+  resize: vertical;
+}
+
+button {
+  border: 1px solid rgba(153, 214, 184, 0.18);
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: rgba(255, 255, 255, 0.04);
+  color: #edf7f2;
+  cursor: pointer;
+}
+
+button.primary {
+  background: linear-gradient(135deg, #7fe0b2 0%, #58b688 100%);
+  color: #082315;
+  border-color: rgba(127, 224, 178, 0.36);
+  font-weight: 700;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 0;
+}
+
+.facts div {
+  padding: 14px;
+  border: 1px solid rgba(153, 214, 184, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.facts dt {
+  color: #9bb9ab;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.facts dd {
+  margin: 8px 0 0;
+  color: #edf7f2;
+  word-break: break-word;
+}
+
+.snapshot {
+  margin: 0;
+  padding: 18px;
+  border-radius: 18px;
+  background: rgba(0, 0, 0, 0.32);
+  overflow: auto;
+}
+
+.notice {
+  margin: 18px 0 0;
+  color: #ffd08a;
+}
+
+@media (max-width: 1180px) {
+  body {
+    min-width: 0;
+  }
+
+  .hero,
+  .grid,
+  .form-grid,
+  .facts {
+    grid-template-columns: 1fr;
+  }
+}
