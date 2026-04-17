@@ -448,6 +448,12 @@ server {
 }
 ```
 
+注意：
+
+- 上面的 `80 -> 443` 配置会把 `http://` 和 `ws://` 请求一起重定向到 HTTPS
+- 如果 `localapp` 仍然配置为 `ws://remote.example.com/ws/agent`，握手可能直接收到 `301`，日志通常表现为 `Unexpected server response: 301`
+- 这种情况下应把 `SERVER_WS_URL` 改成 `wss://remote.example.com/ws/agent`
+
 ### 4.7 生产环境验收
 
 建议至少验证以下内容：
@@ -522,6 +528,7 @@ LOCAL_DEBUG_SERVER_ENABLED=false
 说明：
 
 - 如果服务端通过 HTTPS 暴露，`SERVER_WS_URL` 应使用 `wss://`
+- 如果域名通过 Nginx/Caddy 等反向代理强制跳转 HTTPS，而 `SERVER_WS_URL` 仍写成 `ws://...`，`localapp` 会反复重连，并在日志中看到 `Unexpected server response: 301`
 - `AGENT_ID` 必须稳定且唯一
 - `AGENT_SHARED_TOKEN` 必须与服务端一致
 
@@ -789,6 +796,7 @@ journalctl -u remote-localapp -f
 
 - `localapp` 是否已启动
 - `SERVER_WS_URL` 是否正确
+- 如果 `localapp/logs/agent.log` 出现 `Unexpected server response: 301`，通常表示当前用了 `ws://` 连接一个会强制跳转 HTTPS 的域名，应改成 `wss://`
 - `AGENT_SHARED_TOKEN` 是否和服务端一致
 - 服务器的 `/ws/agent` 是否可达
 
@@ -810,15 +818,19 @@ journalctl -u remote-localapp -f
 - `node-pty` 是否安装成功
 - 目标主机是否具备对应 shell
 
-### 8.5 服务端重启后任务记录丢失
-
-这是当前实现的已知行为。
+### 8.5 服务端重启后的记录保留范围
 
 当前持久化到 MySQL 的是：
 
 - 用户
 - 会话
 - `auth_code`
+- 一次性命令摘要
+- 终端会话摘要
+- AI 终端会话的多轮输入与提取结果
 
-命令历史和在线状态当前仍是内存态，服务端重启后不会保留。
+说明：
 
+- 在线设备状态仍是内存态，服务端重启后会重新等待 agent 上线
+- 一次性命令默认只持久化摘要字段，不保存完整 `stdout` / `stderr`
+- AI 会话默认只持久化用户输入和提取出的 `final_text`，不会默认把完整思考流落库

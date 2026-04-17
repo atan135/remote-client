@@ -15,6 +15,14 @@ import { UserService } from "./auth/user-service.js";
 import { loadConfig } from "./config.js";
 import { createMysqlPool } from "./db/mysql.js";
 import { configureLogging, logEvent } from "./logger.js";
+import {
+  CommandHistoryService,
+  summarizeCommandRecord
+} from "./persistence/command-history-service.js";
+import {
+  TerminalSessionHistoryService,
+  summarizeTerminalSessionRecord
+} from "./persistence/terminal-session-history-service.js";
 import { BrowserHub } from "./realtime/browser-hub.js";
 import { SecureCommandService } from "./security/secure-command-service.js";
 import { AgentRegistry } from "./state/agent-registry.js";
@@ -31,6 +39,8 @@ const pool = createMysqlPool(config);
 const userService = new UserService(pool);
 const authCodeService = new AuthCodeService(pool);
 const sessionService = new SessionService(pool, config);
+const commandHistoryService = new CommandHistoryService(pool);
+const terminalSessionHistoryService = new TerminalSessionHistoryService(pool);
 const secureCommandService = new SecureCommandService(config);
 const app = express();
 const server = http.createServer(app);
@@ -450,14 +460,7 @@ app.get("/api/agents", requireAuth, (req, res) => {
 });
 
 app.get("/api/commands", requireAuth, (req, res) => {
-  const limit = Number(req.query.limit) || config.commandHistoryLimit;
-
-  res.json({
-    items: commandStore.list({
-      agentId: req.query.agentId || "",
-      limit
-    })
-  });
+  void handleCommandHistoryRequest(req, res);
 });
 
 app.post("/api/commands", requireAuth, (req, res) => {
@@ -465,10 +468,7 @@ app.post("/api/commands", requireAuth, (req, res) => {
 });
 
 app.get("/api/terminal-sessions", requireAuth, (req, res) => {
-  const limit = Number(req.query.limit) || config.terminalSessionHistoryLimit;
-  res.json({
-    items: terminalSessionStore.list(limit).map(serializeTerminalSession)
-  });
+  void handleTerminalSessionHistoryRequest(req, res);
 });
 
 app.get("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
@@ -536,6 +536,7 @@ async function handleCommandRequest(req, res) {
         securityError: ""
       }
     });
+    void persistCommandRecord(record);
     storeCommandDispatchContext(record, {
       user: req.auth.user,
       authCodeBinding
@@ -559,19 +560,19 @@ async function handleCommandRequest(req, res) {
       ...getRequestContext(req)
     });
 
-    browserHub.broadcast("command.updated", record);
+    browserHub.broadcast("command.updated", serializeCommandRecord(record));
 
     if (dispatchResult === "failed") {
       res.status(500).json({
         message: record.error || "命令安全封装失败",
-        item: record,
+        item: serializeCommandRecord(record),
         queued: false
       });
       return;
     }
 
     res.status(dispatchResult === "dispatched" ? 202 : 201).json({
-      item: record,
+      item: serializeCommandRecord(record),
       queued
     });
   } catch (error) {
@@ -637,6 +638,7 @@ async function handleTerminalSessionCreateRequest(req, res) {
         rows: launchPayload.rows
       }
     });
+    void persistTerminalSessionRecord(record);
     const dispatchResult = dispatchTerminalSessionCreate(record, {
       user: req.auth.user,
       authCodeBinding,
@@ -733,9 +735,10 @@ async function handleTerminalSessionTerminateRequest(req, res) {
       user: req.auth.user,
       authCodeBinding
     });
-    terminalSessionStore.update(sessionId, {
+    const updatedSession = terminalSessionStore.update(sessionId, {
       status: "terminating"
     });
+    void persistTerminalSessionRecord(updatedSession || session);
     browserHub.broadcast(
       "terminal.session.updated",
       serializeTerminalSession(terminalSessionStore.get(sessionId))
@@ -839,10 +842,12 @@ agentSocketServer.on("connection", (socket, _request, url) => {
     }
 
     for (const command of changedCommands) {
-      browserHub.broadcast("command.updated", command);
+      void persistCommandRecord(command);
+      browserHub.broadcast("command.updated", serializeCommandRecord(command));
     }
 
     for (const session of changedSessions) {
+      void persistTerminalSessionRecord(session);
       browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
     }
   });
@@ -855,16 +860,7 @@ browserSocketServer.on("connection", (socket) => {
     username: socket.auth.user.username,
     subscribers: browserHub.sockets.size
   });
-  browserHub.send(socket, "snapshot", {
-    agents: agentRegistry.list(),
-    commands: commandStore.list({
-      agentId: "",
-      limit: config.commandHistoryLimit
-    }),
-    terminalSessions: terminalSessionStore
-      .list(config.terminalSessionHistoryLimit)
-      .map(serializeTerminalSession)
-  });
+  void sendBrowserSnapshot(socket);
 
   socket.on("message", (raw) => {
     void handleBrowserMessage(socket, raw);
@@ -884,6 +880,8 @@ async function bootstrap() {
   try {
     await pool.query("SELECT 1");
     await ensureUserAuthCodesTable();
+    await commandHistoryService.ensureTables();
+    await terminalSessionHistoryService.ensureTables();
     await sessionService.purgeExpiredSessions();
     try {
       const signingKeyInfo = secureCommandService.getSigningKeyInfo();
@@ -960,13 +958,14 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
+      void persistCommandRecord(record);
       logEvent(commandLogger, "info", "command.started", {
         requestId: record.requestId,
         agentId: record.agentId,
         command: record.command,
         startedAt: record.startedAt
       });
-      browserHub.broadcast("command.updated", record);
+      browserHub.broadcast("command.updated", serializeCommandRecord(record));
     }
 
     return;
@@ -986,6 +985,8 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
+      const summary = summarizeCommandRecord(record);
+      void persistCommandRecord(record);
       logEvent(
         commandLogger,
         record.status === "completed" ? "info" : "warn",
@@ -996,16 +997,18 @@ function handleAgentMessage(agentId, socket, message) {
           command: record.command,
           status: record.status,
           exitCode: record.exitCode,
-          stdout: record.stdout,
-          stderr: record.stderr,
-          error: record.error,
+          stdoutChars: summary.stdoutChars,
+          stderrChars: summary.stderrChars,
+          stdoutPreview: summary.stdoutPreview,
+          stderrPreview: summary.stderrPreview,
+          error: summary.error,
           secureStatus: record.secureStatus,
           securityError: record.securityError,
           startedAt: record.startedAt,
           completedAt: record.completedAt
         }
       );
-      browserHub.broadcast("command.updated", record);
+      browserHub.broadcast("command.updated", serializeCommandRecord(record));
     }
 
     return;
@@ -1020,6 +1023,7 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
+      void persistTerminalSessionRecord(record);
       browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
 
@@ -1031,15 +1035,19 @@ function handleAgentMessage(agentId, socket, message) {
 
     if (result) {
       const finalPatch = deriveTerminalSessionDisplayPatch(result.record);
+      let updatedRecord = result.record;
 
       if (finalPatch) {
-        terminalSessionStore.update(result.record.sessionId, finalPatch);
+        updatedRecord =
+          terminalSessionStore.update(result.record.sessionId, finalPatch) || result.record;
       }
 
+      void persistTerminalSessionRecord(updatedRecord);
+      void maybeSyncTerminalSessionTurn(updatedRecord, { allowEmpty: false });
       browserHub.broadcast("terminal.session.output", result.output);
       browserHub.broadcast(
         "terminal.session.updated",
-        serializeTerminalSession(terminalSessionStore.get(result.record.sessionId) || result.record)
+        serializeTerminalSession(terminalSessionStore.get(result.record.sessionId) || updatedRecord)
       );
     }
 
@@ -1055,6 +1063,8 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
+      void persistTerminalSessionRecord(record);
+      void maybeSyncTerminalSessionTurn(record, { allowEmpty: true });
       browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
 
@@ -1068,6 +1078,8 @@ function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
+      void persistTerminalSessionRecord(record);
+      void maybeSyncTerminalSessionTurn(record, { allowEmpty: true });
       browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
   }
@@ -1111,7 +1123,8 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
     });
 
     if (failedRecord) {
-      browserHub.broadcast("command.updated", failedRecord);
+      void persistCommandRecord(failedRecord);
+      browserHub.broadcast("command.updated", serializeCommandRecord(failedRecord));
     }
 
     return "failed";
@@ -1145,7 +1158,8 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
     });
 
     if (failedRecord) {
-      browserHub.broadcast("command.updated", failedRecord);
+      void persistCommandRecord(failedRecord);
+      browserHub.broadcast("command.updated", serializeCommandRecord(failedRecord));
     }
 
     return false;
@@ -1153,7 +1167,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
 
   const dispatchedAt = secureEnvelope.sentAt;
 
-  commandStore.update(command.requestId, {
+  const dispatchedRecord = commandStore.update(command.requestId, {
     status: "dispatched",
     secureStatus: "encrypted",
     securityError: "",
@@ -1162,6 +1176,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
     expiresAt: secureEnvelope.meta.expiresAt,
     webserverSignFingerprint: secureEnvelope.meta.webserverSignFingerprint
   });
+  void persistCommandRecord(dispatchedRecord || command);
 
   logEvent(commandLogger, "info", "command.dispatched", {
     requestId: command.requestId,
@@ -1194,7 +1209,8 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
     });
 
     if (failedRecord) {
-      browserHub.broadcast("command.updated", failedRecord);
+      void persistCommandRecord(failedRecord);
+      browserHub.broadcast("command.updated", serializeCommandRecord(failedRecord));
     }
 
     return "failed";
@@ -1207,10 +1223,11 @@ function dispatchTerminalSessionCreate(sessionRecord, context) {
   const socket = agentRegistry.getSocket(sessionRecord.agentId);
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    terminalSessionStore.update(sessionRecord.sessionId, {
+    const failedRecord = terminalSessionStore.update(sessionRecord.sessionId, {
       status: "failed",
       error: "Agent is offline."
     });
+    void persistTerminalSessionRecord(failedRecord || sessionRecord);
     return "failed";
   }
 
@@ -1223,10 +1240,11 @@ function dispatchTerminalSessionCreate(sessionRecord, context) {
       launchPayload: context.launchPayload
     });
   } catch (error) {
-    terminalSessionStore.update(sessionRecord.sessionId, {
+    const failedRecord = terminalSessionStore.update(sessionRecord.sessionId, {
       status: "failed",
       error: error.message
     });
+    void persistTerminalSessionRecord(failedRecord || sessionRecord);
     logEvent(commandLogger, "error", "terminal.session.secure_dispatch_failed", {
       sessionId: sessionRecord.sessionId,
       agentId: sessionRecord.agentId,
@@ -1236,17 +1254,19 @@ function dispatchTerminalSessionCreate(sessionRecord, context) {
     return "failed";
   }
 
-  terminalSessionStore.update(sessionRecord.sessionId, {
+  const dispatchedRecord = terminalSessionStore.update(sessionRecord.sessionId, {
     status: "dispatched"
   });
+  void persistTerminalSessionRecord(dispatchedRecord || sessionRecord);
 
   try {
     socket.send(JSON.stringify(secureEnvelope));
   } catch (error) {
-    terminalSessionStore.update(sessionRecord.sessionId, {
+    const failedRecord = terminalSessionStore.update(sessionRecord.sessionId, {
       status: "failed",
       error: error.message
     });
+    void persistTerminalSessionRecord(failedRecord || sessionRecord);
     return "failed";
   }
 
@@ -1290,7 +1310,7 @@ function dispatchTerminalSessionTerminate(sessionRecord, context) {
   socket.send(JSON.stringify(secureEnvelope));
 }
 
-async function dispatchTerminalSessionInputForUser({ user, sessionId, input }) {
+async function dispatchTerminalSessionInputForUser({ user, sessionId, input, logicalInput = "" }) {
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedInput = String(input || "");
   let session = terminalSessionStore.get(normalizedSessionId);
@@ -1325,6 +1345,7 @@ async function dispatchTerminalSessionInputForUser({ user, sessionId, input }) {
         finalText: "",
         finalTextUpdatedAt: null
       }) || session;
+    void persistTerminalSessionRecord(session);
     browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
   }
 
@@ -1333,6 +1354,7 @@ async function dispatchTerminalSessionInputForUser({ user, sessionId, input }) {
     authCodeBinding,
     input: normalizedInput
   });
+  void maybeRecordTerminalSessionTurn(session, logicalInput, normalizedInput);
 
   return session;
 }
@@ -1367,6 +1389,7 @@ async function handleBrowserTerminalSessionInput(socket, payload) {
   const inputId = String(payload?.inputId || "").trim();
   const sessionId = String(payload?.sessionId || "").trim();
   const input = String(payload?.input || "");
+  const logicalInput = String(payload?.logicalInput || "");
 
   if (!inputId || !sessionId || !input) {
     sendTerminalSessionInputAck(socket, {
@@ -1393,7 +1416,8 @@ async function handleBrowserTerminalSessionInput(socket, payload) {
     const session = await dispatchTerminalSessionInputForUser({
       user: socket.auth.user,
       sessionId,
-      input
+      input,
+      logicalInput
     });
     const acceptedAt = new Date().toISOString();
     const acceptedReceipt = terminalSessionStore.rememberInputReceipt(sessionId, inputId, {
@@ -1743,6 +1767,35 @@ function looksLikePromptEchoContent(text) {
   return /(用户请求|不要输出中间思考|最终只允许输出|标记包裹)/.test(value);
 }
 
+function serializeCommandRecord(record) {
+  if (!record) {
+    return null;
+  }
+
+  const summary = summarizeCommandRecord(record);
+  return {
+    requestId: summary.requestId,
+    agentId: summary.agentId,
+    operatorUserId: summary.operatorUserId,
+    operatorUsername: summary.operatorUsername,
+    command: summary.command,
+    status: summary.status,
+    secureStatus: summary.secureStatus,
+    securityError: summary.securityError,
+    exitCode: summary.exitCode,
+    error: summary.error,
+    stdout: summary.stdoutPreview,
+    stderr: summary.stderrPreview,
+    stdoutChars: summary.stdoutChars,
+    stderrChars: summary.stderrChars,
+    createdAt: summary.createdAt,
+    updatedAt: summary.updatedAt,
+    dispatchedAt: summary.dispatchedAt,
+    startedAt: summary.startedAt,
+    completedAt: summary.completedAt
+  };
+}
+
 function serializeTerminalSession(session) {
   if (!session) {
     return null;
@@ -1752,11 +1805,74 @@ function serializeTerminalSession(session) {
     rawTranscript: _rawTranscript,
     ...rest
   } = session;
+  const summary = summarizeTerminalSessionRecord(session);
+  const outputs = Array.isArray(session.outputs) ? session.outputs : [];
 
   return {
     ...rest,
-    outputs: Array.isArray(session.outputs) ? session.outputs : []
+    finalText: summary.finalText,
+    finalTextChars: summary.finalTextChars,
+    rawCharCount: summary.rawCharCount,
+    error: summary.error,
+    outputs
   };
+}
+
+async function handleCommandHistoryRequest(req, res) {
+  try {
+    const limit = Number(req.query.limit) || config.commandHistoryLimit;
+    const items = await commandHistoryService.listRecent({
+      agentId: String(req.query.agentId || ""),
+      limit
+    });
+    res.json({ items });
+  } catch (error) {
+    logEvent(serverLogger, "error", "command.history_load_failed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: "加载命令记录失败" });
+  }
+}
+
+async function handleTerminalSessionHistoryRequest(req, res) {
+  try {
+    const limit = Number(req.query.limit) || config.terminalSessionHistoryLimit;
+    const items = await terminalSessionHistoryService.listRecent(limit);
+    res.json({ items });
+  } catch (error) {
+    logEvent(serverLogger, "error", "terminal.session.history_load_failed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: "加载终端会话失败" });
+  }
+}
+
+async function sendBrowserSnapshot(socket) {
+  try {
+    const [commands, terminalSessions] = await Promise.all([
+      commandHistoryService.listRecent({
+        agentId: "",
+        limit: config.commandHistoryLimit
+      }),
+      terminalSessionHistoryService.listRecent(config.terminalSessionHistoryLimit)
+    ]);
+
+    browserHub.send(socket, "snapshot", {
+      agents: agentRegistry.list(),
+      commands,
+      terminalSessions
+    });
+  } catch (error) {
+    logEvent(serverLogger, "error", "browser.snapshot_failed", {
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      error: error.message
+    });
+  }
 }
 
 async function ensureUserAuthCodesTable() {
@@ -1777,6 +1893,83 @@ async function ensureUserAuthCodesTable() {
         ON DELETE CASCADE
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
   `);
+}
+
+function persistCommandRecord(record) {
+  if (!record?.requestId) {
+    return Promise.resolve();
+  }
+
+  return commandHistoryService.update(record).catch((error) => {
+    logEvent(serverLogger, "error", "command.persistence_failed", {
+      requestId: record.requestId,
+      error: error.message
+    });
+  });
+}
+
+function persistTerminalSessionRecord(record) {
+  if (!record?.sessionId) {
+    return Promise.resolve();
+  }
+
+  return terminalSessionHistoryService.upsertSession(record).catch((error) => {
+    logEvent(serverLogger, "error", "terminal.session.persistence_failed", {
+      sessionId: record.sessionId,
+      error: error.message
+    });
+  });
+}
+
+function maybeRecordTerminalSessionTurn(session, logicalInput, rawInput) {
+  if (!session?.sessionId || !["final_only", "hybrid"].includes(String(session.displayMode || ""))) {
+    return;
+  }
+
+  const candidate = String(logicalInput || "").trim() || extractLogicalInputFromWrappedPrompt(rawInput);
+
+  if (!candidate) {
+    return;
+  }
+
+  void terminalSessionHistoryService
+    .beginTurn(session.sessionId, candidate, new Date().toISOString())
+    .then(() =>
+      maybeSyncTerminalSessionTurn(session, {
+        allowEmpty: isTerminalSessionClosedStatus(session.status)
+      })
+    )
+    .catch((error) => {
+      logEvent(serverLogger, "error", "terminal.session.turn_begin_failed", {
+        sessionId: session.sessionId,
+        error: error.message
+      });
+    });
+}
+
+function maybeSyncTerminalSessionTurn(session, options = {}) {
+  if (!session?.sessionId || !["final_only", "hybrid"].includes(String(session.displayMode || ""))) {
+    return Promise.resolve();
+  }
+
+  return terminalSessionHistoryService.syncLatestTurn(session.sessionId, session, options).catch((error) => {
+    logEvent(serverLogger, "error", "terminal.session.turn_finalize_failed", {
+      sessionId: session.sessionId,
+      error: error.message
+    });
+  });
+}
+
+function extractLogicalInputFromWrappedPrompt(input) {
+  const source = String(input || "");
+  const marker = "用户请求：";
+  const markerIndex = source.lastIndexOf(marker);
+
+  if (markerIndex === -1) {
+    return "";
+  }
+
+  return source.slice(markerIndex + marker.length).trim();
 }
 
 function formatUnknownError(reason) {

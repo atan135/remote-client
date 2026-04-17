@@ -660,7 +660,10 @@ async function sendTerminalInput(sessionId = activeTerminalSession.value?.sessio
   try {
     enqueueTerminalSocketInput(
       sessionRecord.sessionId,
-      buildSessionInputPayload(sessionRecord, input)
+      buildSessionInputPayload(sessionRecord, input),
+      {
+        logicalInput: input
+      }
     );
     terminalInput.value = "";
   } catch (error) {
@@ -727,9 +730,10 @@ function flushQueuedTerminalSocketInputs() {
   }
 }
 
-function enqueueTerminalSocketInput(sessionId, input) {
+function enqueueTerminalSocketInput(sessionId, input, options = {}) {
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedInput = String(input || "");
+  const logicalInput = String(options?.logicalInput || "");
   const sessionRecord = terminalSessions.value.find((item) => item.sessionId === normalizedSessionId);
 
   if (
@@ -745,6 +749,7 @@ function enqueueTerminalSocketInput(sessionId, input) {
     inputId: createClientInputId(),
     sessionId: normalizedSessionId,
     input: normalizedInput,
+    logicalInput,
     createdAt: new Date().toISOString(),
     lastSentAt: "",
     sentConnectionId: 0,
@@ -786,7 +791,8 @@ function flushPendingTerminalSocketInputs() {
           payload: {
             inputId: item.inputId,
             sessionId: item.sessionId,
-            input: item.input
+            input: item.input,
+            logicalInput: item.logicalInput || ""
           }
         })
       );
@@ -1186,7 +1192,10 @@ function connectBrowserSocket() {
     if (message.type === "snapshot") {
       agents.value = message.payload.agents || [];
       commands.value = message.payload.commands || [];
-      terminalSessions.value = message.payload.terminalSessions || [];
+      terminalSessions.value = mergeTerminalSessionSnapshot(
+        terminalSessions.value,
+        message.payload.terminalSessions || []
+      );
       ensureSelectedAgent();
       ensureSelectedTerminalProfile();
       ensureSelectedTerminalSession();
@@ -1430,6 +1439,26 @@ function appendTerminalSessionOutput(output) {
   outputs.sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0));
   sessionRecord.outputs = outputs;
   sessionRecord.lastOutputAt = output.sentAt || sessionRecord.lastOutputAt;
+}
+
+function mergeTerminalSessionSnapshot(existingSessions, snapshotSessions) {
+  const existingById = new Map(
+    (Array.isArray(existingSessions) ? existingSessions : [])
+      .filter((item) => item?.sessionId)
+      .map((item) => [item.sessionId, item])
+  );
+
+  return (Array.isArray(snapshotSessions) ? snapshotSessions : []).map((item) => {
+    const existing = existingById.get(item?.sessionId);
+    const existingOutputs = Array.isArray(existing?.outputs) ? existing.outputs : [];
+    const incomingOutputs = Array.isArray(item?.outputs) ? item.outputs : [];
+
+    return {
+      ...(existing || {}),
+      ...(item || {}),
+      outputs: incomingOutputs.length > 0 ? incomingOutputs : existingOutputs
+    };
+  });
 }
 
 function shortFingerprint(fingerprint) {

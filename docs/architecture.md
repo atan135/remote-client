@@ -12,7 +12,7 @@
 
 ## 登录与会话
 
-- `webserver/server` 使用 MySQL 保存用户和会话
+- `webserver/server` 使用 MySQL 保存用户、会话、命令摘要和终端会话摘要
 - 浏览器通过 `/api/auth/login` 提交用户名和密码
 - 浏览器可通过 `/api/auth/register` 公开注册账号
 - 服务端验证成功后写入 HTTP-only session cookie
@@ -38,6 +38,9 @@
 - `users`：控制台登录用户
 - `user_sessions`：浏览器登录会话
 - `user_auth_codes`：用户与 `agent` 的公钥绑定关系，作为安全命令加密设计中的新增表
+- `command_runs`：一次性命令的持久化摘要记录
+- `terminal_sessions`：终端会话摘要，包含 AI 会话提取出的 `final_text`
+- `terminal_session_turns`：AI 终端会话的多轮输入与提取结果
 
 ## 模块划分
 
@@ -139,7 +142,9 @@
 
 ## 当前实现边界
 
-- 命令记录为内存存储，重启后不会保留
+- 命令记录和终端会话摘要会持久化到 MySQL，但在线状态和原始终端流仍以内存为主
+- 一次性命令默认仅保存输出摘要，不保存完整 `stdout` / `stderr`
+- AI 终端会话默认保存用户输入与提取出的 `final_text`，不默认持久化完整思考流
 - 当前提供基础用户名密码登录，不包含更细粒度的 RBAC 权限模型
 - 默认不做命令白名单，生产环境建议补上策略控制
 - 当前前端面向单控制台使用场景，适合先验证链路与功能
