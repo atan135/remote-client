@@ -46,6 +46,19 @@ export class TerminalSessionStore {
     return this.sessions.get(sessionId) || null;
   }
 
+  remove(sessionId) {
+    const record = this.sessions.get(sessionId);
+
+    if (!record) {
+      return null;
+    }
+
+    this.sessions.delete(sessionId);
+    this.inputReceipts.delete(sessionId);
+    this.order = this.order.filter((candidate) => candidate !== sessionId);
+    return record;
+  }
+
   getInputReceipt(sessionId, inputId) {
     const bucket = this.inputReceipts.get(sessionId);
     return bucket?.items.get(inputId) || null;

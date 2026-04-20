@@ -91,6 +91,10 @@ const props = defineProps({
   terminatingTerminalSessionId: {
     type: String,
     default: ""
+  },
+  deletingTerminalSessionId: {
+    type: String,
+    default: ""
   }
 });
 
@@ -105,7 +109,8 @@ const emit = defineEmits([
   "create-terminal-session",
   "send-terminal-input",
   "send-terminal-raw-input",
-  "terminate-terminal-session"
+  "terminate-terminal-session",
+  "delete-terminal-session"
 ]);
 
 const activeMode = ref("command");
@@ -218,6 +223,14 @@ function statusType(status) {
 
 function isTerminalSessionClosed(status) {
   return ["completed", "failed", "terminated", "connection_lost"].includes(String(status || ""));
+}
+
+function canDeleteSession(session) {
+  return Boolean(
+    session &&
+      isTerminalSessionClosed(session.status) &&
+      props.deletingTerminalSessionId !== session.sessionId
+  );
 }
 
 function queryCommonWorkingDirectories(queryString, callback) {
@@ -454,17 +467,34 @@ watch(currentSession, (session) => {
             </div>
 
             <div v-if="terminalSessions.length" class="session-list explore-session-list">
-              <button v-for="session in terminalSessions" :key="session.sessionId" class="session-item"
-                :class="{ active: session.sessionId === currentSession?.sessionId }" type="button"
-                @click="openSessionDetail(session.sessionId)">
-                <span class="stack-text">
-                  <strong>{{ session.profile }}</strong>
-                  <small>{{ session.createdAt }}</small>
-                </span>
-                <el-tag :type="statusType(session.status)" effect="dark" round>
-                  {{ session.status }}
-                </el-tag>
-              </button>
+              <div v-for="session in terminalSessions" :key="session.sessionId" class="session-item"
+                :class="{ active: session.sessionId === currentSession?.sessionId }">
+                <button class="session-item-main" type="button" @click="openSessionDetail(session.sessionId)">
+                  <span class="stack-text">
+                    <strong>{{ session.profile }}</strong>
+                    <small>{{ session.createdAt }}</small>
+                  </span>
+                </button>
+                <div class="session-item-actions">
+                  <el-tag :type="statusType(session.status)" effect="dark" round>
+                    {{ session.status }}
+                  </el-tag>
+                  <el-button
+                    v-if="isTerminalSessionClosed(session.status)"
+                    round
+                    plain
+                    size="small"
+                    :disabled="!canDeleteSession(session)"
+                    @click="emit('delete-terminal-session', session.sessionId)"
+                  >
+                    {{
+                      deletingTerminalSessionId === session.sessionId
+                        ? "删除中..."
+                        : "删除"
+                    }}
+                  </el-button>
+                </div>
+              </div>
             </div>
             <p v-else class="muted compact-stack">先创建会话，再在这里选择和切换终端实例。</p>
           </div>

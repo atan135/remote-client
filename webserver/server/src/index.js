@@ -495,6 +495,10 @@ app.post("/api/terminal-sessions/:sessionId/terminate", requireAuth, (req, res) 
   void handleTerminalSessionTerminateRequest(req, res);
 });
 
+app.delete("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
+  void handleTerminalSessionDeleteRequest(req, res);
+});
+
 async function handleCommandRequest(req, res) {
   const command = String(req.body?.command || "").trim();
   const agentId = String(req.body?.agentId || "").trim();
@@ -806,6 +810,60 @@ async function handleTerminalSessionTerminateRequest(req, res) {
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "会话终止下发失败" });
+  }
+}
+
+async function handleTerminalSessionDeleteRequest(req, res) {
+  const sessionId = String(req.params.sessionId || "").trim();
+  const activeSession = terminalSessionStore.get(sessionId);
+  const storedSession = activeSession
+    ? null
+    : await terminalSessionHistoryService.getBySessionId(sessionId);
+  const session = activeSession || storedSession;
+
+  if (!session) {
+    res.status(404).json({ message: "会话不存在" });
+    return;
+  }
+
+  if (!isTerminalSessionClosedStatus(session.status)) {
+    res.status(409).json({ message: "仅允许删除已结束的终端会话" });
+    return;
+  }
+
+  try {
+    const removedActiveSession = terminalSessionStore.remove(sessionId);
+    const deletedFromHistory = await terminalSessionHistoryService.deleteSession(sessionId);
+    const payload = {
+      sessionId,
+      agentId: String(session.agentId || removedActiveSession?.agentId || ""),
+      deletedAt: new Date().toISOString()
+    };
+
+    logEvent(commandLogger, "info", "terminal.session.deleted", {
+      sessionId,
+      agentId: payload.agentId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      deletedFromHistory,
+      removedActiveSession: Boolean(removedActiveSession)
+    });
+
+    browserHub.broadcast("terminal.session.deleted", payload);
+    res.json({
+      ok: true,
+      sessionId,
+      deletedFromHistory,
+      removedActiveSession: Boolean(removedActiveSession)
+    });
+  } catch (error) {
+    logEvent(commandLogger, "error", "terminal.session.delete_failed", {
+      sessionId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: error.message || "终端会话删除失败" });
   }
 }
 

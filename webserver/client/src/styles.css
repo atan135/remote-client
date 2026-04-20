@@ -949,13 +949,11 @@ textarea {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  width: 100%;
   padding: 12px 14px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   background: rgba(255, 255, 255, 0.03);
   color: var(--text);
-  cursor: pointer;
   transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
 }
 
@@ -968,6 +966,24 @@ textarea {
 .session-item.active {
   border-color: rgba(242, 166, 90, 0.36);
   background: rgba(242, 166, 90, 0.1);
+}
+
+.session-item-main {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .terminal-emulator {

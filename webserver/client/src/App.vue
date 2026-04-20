@@ -79,6 +79,7 @@ const updatingUserId = ref(null);
 const savingAuthCodeId = ref(null);
 const deletingAuthCodeId = ref(null);
 const terminatingTerminalSessionId = ref(null);
+const deletingTerminalSessionId = ref(null);
 const session = ref(null);
 const authMode = ref("login");
 
@@ -895,6 +896,74 @@ async function terminateTerminalSession(sessionId = activeTerminalSession.value?
   }
 }
 
+async function deleteTerminalSession(sessionId = activeTerminalSession.value?.sessionId) {
+  if (!sessionId) {
+    return;
+  }
+
+  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
+
+  if (!sessionRecord) {
+    removeTerminalSession(sessionId);
+    ensureSelectedTerminalSession();
+    return;
+  }
+
+  if (!isTerminalSessionClosedStatus(sessionRecord.status)) {
+    wsState.error = "仅允许删除已结束的终端会话";
+    return;
+  }
+
+  try {
+    await ElMessageBox.confirm(
+      `确认删除会话 ${sessionRecord.profile || sessionId} 吗？删除后将从列表中移除。`,
+      "删除会话",
+      {
+        type: "warning",
+        confirmButtonText: "删除",
+        cancelButtonText: "取消"
+      }
+    );
+  } catch {
+    return;
+  }
+
+  deletingTerminalSessionId.value = sessionId;
+  wsState.error = "";
+
+  try {
+    const response = await fetch(`/api/terminal-sessions/${sessionId}`, {
+      method: "DELETE"
+    });
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        removeTerminalSession(sessionId);
+        ensureSelectedTerminalSession();
+        ElMessage.warning("会话已不存在，已从列表移除");
+        return;
+      }
+
+      throw new Error(payload.message || "终端会话删除失败");
+    }
+
+    removeTerminalSession(sessionId);
+    ensureSelectedTerminalSession();
+    ElMessage.success("终端会话已删除");
+  } catch (error) {
+    wsState.error = error.message;
+  } finally {
+    deletingTerminalSessionId.value = null;
+  }
+}
+
 async function createAuthCode() {
   if (!authCodeForm.agentId.trim() || !authCodeForm.authCode.trim()) {
     wsState.error = "请填写设备标识和 RSA 公钥";
@@ -1240,6 +1309,12 @@ function connectBrowserSocket() {
       return;
     }
 
+    if (message.type === "terminal.session.deleted") {
+      removeTerminalSession(message.payload?.sessionId);
+      ensureSelectedTerminalSession();
+      return;
+    }
+
     if (message.type === "terminal.session.output") {
       appendTerminalSessionOutput(message.payload);
       return;
@@ -1440,6 +1515,30 @@ function upsertTerminalSession(item) {
   terminalSessions.value.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
 }
 
+function removeTerminalSession(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  terminalSessions.value = terminalSessions.value.filter(
+    (item) => item.sessionId !== normalizedSessionId
+  );
+
+  for (let index = terminalSocketInputQueue.length - 1; index >= 0; index -= 1) {
+    if (terminalSocketInputQueue[index]?.sessionId === normalizedSessionId) {
+      terminalSocketInputQueue.splice(index, 1);
+    }
+  }
+
+  for (let index = pendingTerminalSocketInputs.length - 1; index >= 0; index -= 1) {
+    if (pendingTerminalSocketInputs[index]?.sessionId === normalizedSessionId) {
+      pendingTerminalSocketInputs.splice(index, 1);
+    }
+  }
+}
+
 function appendTerminalSessionOutput(output) {
   const sessionRecord = terminalSessions.value.find(
     (item) => item.sessionId === output?.sessionId
@@ -1634,6 +1733,7 @@ function useSelectedAgentIdForAuthCode() {
           :creating-terminal-session="creatingTerminalSession"
           :sending-terminal-input="sendingTerminalInput"
           :terminating-terminal-session-id="terminatingTerminalSessionId || ''"
+          :deleting-terminal-session-id="deletingTerminalSessionId || ''"
           @update:selected-agent-id="selectedAgentId = $event"
           @update:command-input="commandInput = $event"
           @update:terminal-profile="terminalProfile = $event"
@@ -1645,6 +1745,7 @@ function useSelectedAgentIdForAuthCode() {
           @send-terminal-input="sendTerminalInput"
           @send-terminal-raw-input="queueTerminalRawInput($event)"
           @terminate-terminal-session="terminateTerminalSession"
+          @delete-terminal-session="deleteTerminalSession"
         />
 
         <TasksTab

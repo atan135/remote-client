@@ -367,6 +367,24 @@ export class TerminalSessionHistoryService {
 
     return this.getBySessionId(normalizedSessionId);
   }
+
+  async deleteSession(sessionId) {
+    const normalizedSessionId = String(sessionId || "").trim();
+
+    if (!normalizedSessionId) {
+      return false;
+    }
+
+    const [result] = await this.pool.execute(
+      `
+        DELETE FROM terminal_sessions
+        WHERE session_id = ?
+      `,
+      [normalizedSessionId]
+    );
+
+    return Number(result?.affectedRows || 0) > 0;
+  }
 }
 
 export function summarizeTerminalSessionRecord(record) {
