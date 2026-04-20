@@ -599,8 +599,8 @@ async function handleTerminalSessionCreateRequest(req, res) {
   const launchPayload = {
     cwd: String(req.body?.cwd || "").trim(),
     env: isPlainObject(req.body?.env) ? req.body.env : {},
-    cols: Number(req.body?.cols) || 120,
-    rows: Number(req.body?.rows) || 30
+    cols: normalizeTerminalDimension(req.body?.cols) || 120,
+    rows: normalizeTerminalDimension(req.body?.rows) || 30
   };
 
   if (!agentId || !profile) {
@@ -1255,6 +1255,20 @@ async function handleAgentMessage(agentId, socket, message) {
     return;
   }
 
+  if (message.type === "terminal.session.resized") {
+    const record = terminalSessionStore.update(message.payload.sessionId, {
+      cols: normalizeTerminalDimension(message.payload.cols) || null,
+      rows: normalizeTerminalDimension(message.payload.rows) || null
+    });
+
+    if (record) {
+      void persistTerminalSessionRecord(record);
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
+    }
+
+    return;
+  }
+
   if (message.type === "terminal.session.output") {
     const result = terminalSessionStore.appendOutput(message.payload.sessionId, message.payload);
 
@@ -1615,6 +1629,26 @@ function dispatchTerminalSessionInput(sessionRecord, context) {
   socket.send(JSON.stringify(secureEnvelope));
 }
 
+function dispatchTerminalSessionResize(sessionRecord, context) {
+  const socket = agentRegistry.getSocket(sessionRecord.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw new Error("Agent is offline.");
+  }
+
+  const secureEnvelope = secureCommandService.createTerminalSessionResizeEnvelope({
+    requestId: randomUUID(),
+    agentId: sessionRecord.agentId,
+    sessionId: sessionRecord.sessionId,
+    cols: context.cols,
+    rows: context.rows,
+    operatorUser: context.user,
+    authCodeBinding: context.authCodeBinding
+  });
+
+  socket.send(JSON.stringify(secureEnvelope));
+}
+
 function dispatchTerminalSessionTerminate(sessionRecord, context) {
   const socket = agentRegistry.getSocket(sessionRecord.agentId);
 
@@ -1682,6 +1716,46 @@ async function dispatchTerminalSessionInputForUser({ user, sessionId, input, log
   return session;
 }
 
+async function dispatchTerminalSessionResizeForUser({ user, sessionId, cols, rows }) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  const normalizedCols = normalizeTerminalDimension(cols);
+  const normalizedRows = normalizeTerminalDimension(rows);
+  const session = terminalSessionStore.get(normalizedSessionId);
+
+  if (!session) {
+    throw createHttpError(404, "会话不存在");
+  }
+
+  if (!normalizedCols || !normalizedRows) {
+    throw createHttpError(400, "cols and rows are required");
+  }
+
+  if (isTerminalSessionClosedStatus(session.status)) {
+    throw createHttpError(409, "会话已关闭，不能继续调整尺寸");
+  }
+
+  const socket = agentRegistry.getSocket(session.agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createHttpError(409, "目标 agent 当前不在线");
+  }
+
+  const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, session.agentId);
+
+  if (!authCodeBinding) {
+    throw createHttpError(400, "当前用户未为该设备配置 auth_code");
+  }
+
+  dispatchTerminalSessionResize(session, {
+    user,
+    authCodeBinding,
+    cols: normalizedCols,
+    rows: normalizedRows
+  });
+
+  return session;
+}
+
 async function handleBrowserMessage(socket, raw) {
   let message;
 
@@ -1698,6 +1772,11 @@ async function handleBrowserMessage(socket, raw) {
 
   if (message.type === "terminal.session.input") {
     await handleBrowserTerminalSessionInput(socket, message.payload || {});
+    return;
+  }
+
+  if (message.type === "terminal.session.resize") {
+    await handleBrowserTerminalSessionResize(socket, message.payload || {});
     return;
   }
 
@@ -1760,6 +1839,41 @@ async function handleBrowserTerminalSessionInput(socket, payload) {
       sessionId,
       status: "rejected",
       error: error.message || "会话输入下发失败"
+    });
+  }
+}
+
+async function handleBrowserTerminalSessionResize(socket, payload) {
+  const sessionId = String(payload?.sessionId || "").trim();
+  const cols = normalizeTerminalDimension(payload?.cols);
+  const rows = normalizeTerminalDimension(payload?.rows);
+
+  if (!sessionId || !cols || !rows) {
+    logEvent(commandLogger, "warn", "terminal.session.resize_invalid", {
+      sessionId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      cols: payload?.cols ?? null,
+      rows: payload?.rows ?? null
+    });
+    return;
+  }
+
+  try {
+    await dispatchTerminalSessionResizeForUser({
+      user: socket.auth.user,
+      sessionId,
+      cols,
+      rows
+    });
+  } catch (error) {
+    logEvent(commandLogger, "warn", "terminal.session.resize_rejected", {
+      sessionId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      cols,
+      rows,
+      error: error.message
     });
   }
 }
@@ -1944,6 +2058,11 @@ function createHttpError(statusCode, message) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+function normalizeTerminalDimension(value) {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function isTerminalSessionClosedStatus(status) {

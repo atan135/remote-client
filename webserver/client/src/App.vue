@@ -127,6 +127,9 @@ const terminalSocketInputQueue = [];
 const pendingTerminalSocketInputs = [];
 let flushingTerminalSocketInput = false;
 let terminalSocketInputFlushTimer = null;
+const pendingTerminalResizes = new Map();
+let flushingTerminalResize = false;
+let terminalResizeFlushTimer = null;
 let browserSocketConnectionId = 0;
 let browserReconnectTimer = null;
 
@@ -774,6 +777,76 @@ function enqueueTerminalSocketInput(sessionId, input, options = {}) {
   flushPendingTerminalSocketInputs();
 }
 
+function queueTerminalResize(payload) {
+  const sessionId = String(payload?.sessionId || "").trim();
+  const cols = normalizeTerminalDimension(payload?.cols);
+  const rows = normalizeTerminalDimension(payload?.rows);
+  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
+
+  if (
+    !sessionRecord ||
+    !cols ||
+    !rows ||
+    isTerminalSessionClosedStatus(sessionRecord.status)
+  ) {
+    return;
+  }
+
+  const pending = pendingTerminalResizes.get(sessionId);
+
+  if (pending?.cols === cols && pending?.rows === rows) {
+    return;
+  }
+
+  pendingTerminalResizes.set(sessionId, {
+    sessionId,
+    cols,
+    rows
+  });
+
+  if (terminalResizeFlushTimer) {
+    return;
+  }
+
+  terminalResizeFlushTimer = window.setTimeout(() => {
+    terminalResizeFlushTimer = null;
+    flushQueuedTerminalResizes();
+  }, 80);
+}
+
+function flushQueuedTerminalResizes() {
+  if (flushingTerminalResize || pendingTerminalResizes.size === 0) {
+    return;
+  }
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  flushingTerminalResize = true;
+  const items = [...pendingTerminalResizes.values()];
+  pendingTerminalResizes.clear();
+
+  try {
+    for (const item of items) {
+      socket.send(
+        JSON.stringify({
+          type: "terminal.session.resize",
+          payload: item
+        })
+      );
+    }
+  } catch (error) {
+    for (const item of items) {
+      pendingTerminalResizes.set(item.sessionId, item);
+    }
+
+    wsState.error = error.message || "终端尺寸同步失败";
+  } finally {
+    flushingTerminalResize = false;
+  }
+}
+
 function flushPendingTerminalSocketInputs() {
   if (flushingTerminalSocketInput) {
     return;
@@ -1269,6 +1342,7 @@ function connectBrowserSocket() {
     wsState.connected = true;
     wsState.error = "";
     flushPendingTerminalSocketInputs();
+    flushQueuedTerminalResizes();
   });
 
   socket.addEventListener("message", (event) => {
@@ -1461,6 +1535,12 @@ function resetAuthedState() {
     window.clearTimeout(terminalSocketInputFlushTimer);
     terminalSocketInputFlushTimer = null;
   }
+  pendingTerminalResizes.clear();
+  flushingTerminalResize = false;
+  if (terminalResizeFlushTimer) {
+    window.clearTimeout(terminalResizeFlushTimer);
+    terminalResizeFlushTimer = null;
+  }
   if (browserReconnectTimer) {
     window.clearTimeout(browserReconnectTimer);
     browserReconnectTimer = null;
@@ -1537,6 +1617,8 @@ function removeTerminalSession(sessionId) {
       pendingTerminalSocketInputs.splice(index, 1);
     }
   }
+
+  pendingTerminalResizes.delete(normalizedSessionId);
 }
 
 function appendTerminalSessionOutput(output) {
@@ -1615,6 +1697,11 @@ function shortFingerprint(fingerprint) {
 
 function normalizeAgentId(value) {
   return String(value || "").trim().toLowerCase();
+}
+
+function normalizeTerminalDimension(value) {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
 function isTerminalSessionClosedStatus(status) {
@@ -1744,6 +1831,7 @@ function useSelectedAgentIdForAuthCode() {
           @create-terminal-session="createTerminalSession"
           @send-terminal-input="sendTerminalInput"
           @send-terminal-raw-input="queueTerminalRawInput($event)"
+          @resize-terminal-session="queueTerminalResize($event)"
           @terminate-terminal-session="terminateTerminalSession"
           @delete-terminal-session="deleteTerminalSession"
         />

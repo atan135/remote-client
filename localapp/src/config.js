@@ -23,6 +23,14 @@ function toBoolean(value, fallback = false) {
   return ["1", "true", "yes", "on"].includes(String(value).trim().toLowerCase());
 }
 
+function toOptionalBoolean(value) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  return toBoolean(value, false);
+}
+
 function toList(value) {
   return String(value || "")
     .split(/[,;]/)
@@ -106,6 +114,7 @@ export function loadConfig() {
       webserverSignPublicKeyPathConfig.configuredInEnvFile,
     defaultShell:
       process.env.DEFAULT_SHELL || (os.platform() === "win32" ? "powershell.exe" : "/bin/bash"),
+    windowsUseConpty: toOptionalBoolean(process.env.WINDOWS_USE_CONPTY),
     maxTerminalSessions: toNumber(process.env.MAX_TERMINAL_SESSIONS, 4),
     sessionIdleTimeoutMs: toNumber(process.env.SESSION_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
     sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 200),

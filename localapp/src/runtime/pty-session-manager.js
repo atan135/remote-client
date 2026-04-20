@@ -7,7 +7,7 @@ export class PtySessionManager {
     this.commandLogger = loggers.commandLogger;
     this.profileRegistry = profileRegistry;
     this.sessionStore = sessionStore;
-    this.runner = new TerminalSessionRunner();
+    this.runner = new TerminalSessionRunner(config);
     this.handles = new Map();
   }
 
@@ -155,6 +155,41 @@ export class PtySessionManager {
     return this.sessionStore.get(sessionId);
   }
 
+  resizeSession(sessionId, cols, rows) {
+    const handle = this.getRequiredHandle(sessionId);
+    const normalizedCols = normalizeTerminalDimension(cols);
+    const normalizedRows = normalizeTerminalDimension(rows);
+
+    if (!normalizedCols || !normalizedRows) {
+      throw new Error("终端尺寸无效");
+    }
+
+    handle.ptyProcess.resize(normalizedCols, normalizedRows);
+    this.touchSession(handle);
+    const session = this.sessionStore.update(sessionId, {
+      cols: normalizedCols,
+      rows: normalizedRows
+    });
+
+    logEvent(this.commandLogger, "info", "terminal.session.resized", {
+      sessionId,
+      agentId: handle.agentId,
+      cols: normalizedCols,
+      rows: normalizedRows
+    });
+
+    this.emit(handle, "terminal.session.resized", {
+      sessionId,
+      agentId: handle.agentId,
+      profile: handle.profileName,
+      cols: normalizedCols,
+      rows: normalizedRows,
+      resizedAt: session?.updatedAt || new Date().toISOString()
+    }, true);
+
+    return session;
+  }
+
   terminateSession(sessionId, reason = "terminated") {
     const handle = this.getRequiredHandle(sessionId);
     handle.terminatingReason = reason;
@@ -287,4 +322,9 @@ export class PtySessionManager {
 
 function isClosedSessionStatus(status) {
   return ["completed", "failed", "terminated"].includes(String(status || ""));
+}
+
+function normalizeTerminalDimension(value) {
+  const parsed = Math.floor(Number(value));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }

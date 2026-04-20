@@ -340,6 +340,11 @@ function hasRequiredField(payload, fieldName) {
     return typeof payload.input === "string" && payload.input.length > 0;
   }
 
+  if (fieldName === "cols" || fieldName === "rows") {
+    const parsed = Math.floor(Number(payload[fieldName]));
+    return Number.isFinite(parsed) && parsed > 0;
+  }
+
   return Boolean(String(payload[fieldName] || "").trim());
 }
 

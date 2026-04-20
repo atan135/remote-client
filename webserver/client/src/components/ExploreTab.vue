@@ -109,6 +109,7 @@ const emit = defineEmits([
   "create-terminal-session",
   "send-terminal-input",
   "send-terminal-raw-input",
+  "resize-terminal-session",
   "terminate-terminal-session",
   "delete-terminal-session"
 ]);
@@ -204,6 +205,15 @@ const shouldPreferFinalAnswer = computed(
 const hasFinalAnswer = computed(() => Boolean(String(currentSession.value?.finalText || "").trim()));
 
 const rawTerminalPanels = ref([]);
+const transcriptExpanded = ref(false);
+const transcriptClearedSeqBySession = ref({});
+const currentTranscriptStartSeq = computed(() =>
+  getTranscriptStartSeq(currentSession.value?.sessionId)
+);
+const terminalTranscript = computed(() =>
+  buildTerminalTranscript(currentSession.value?.outputs || [], currentTranscriptStartSeq.value)
+);
+const hasTerminalTranscript = computed(() => Boolean(terminalTranscript.value));
 
 function createPresetCommandKey(label, command, index) {
   return `${index}:${label}\u0000${command}`;
@@ -302,6 +312,92 @@ function goBackToSessionList() {
   sessionScreen.value = "main";
 }
 
+function toggleTranscriptExpanded() {
+  transcriptExpanded.value = !transcriptExpanded.value;
+}
+
+function clearTerminalTranscript() {
+  const sessionId = String(currentSession.value?.sessionId || "").trim();
+
+  if (!sessionId) {
+    return;
+  }
+
+  const outputs = normalizeTranscriptOutputs(currentSession.value?.outputs || []);
+  const lastSeq = outputs[outputs.length - 1]?.seq || 0;
+
+  transcriptClearedSeqBySession.value = {
+    ...transcriptClearedSeqBySession.value,
+    [sessionId]: lastSeq
+  };
+}
+
+function getTranscriptStartSeq(sessionId) {
+  const key = String(sessionId || "").trim();
+  return key ? Number(transcriptClearedSeqBySession.value[key] || 0) : 0;
+}
+
+function buildTerminalTranscript(outputs, startSeq = 0) {
+  const source = normalizeTranscriptOutputs(outputs, startSeq)
+    .map((item) => item.chunk)
+    .join("");
+
+  return normalizeTranscriptText(stripAnsiSequences(source)).trim();
+}
+
+function normalizeTranscriptOutputs(outputs, startSeq = 0) {
+  if (!Array.isArray(outputs) || outputs.length === 0) {
+    return [];
+  }
+
+  const minSeq = Number(startSeq || 0);
+
+  return outputs
+    .map((item) => ({
+      seq: Number(item?.seq || 0),
+      chunk: String(item?.chunk || "")
+    }))
+    .filter((item) => item.seq > minSeq && item.chunk)
+    .sort((left, right) => left.seq - right.seq);
+}
+
+function stripAnsiSequences(text) {
+  return String(text || "")
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001bP[\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-_]/g, "");
+}
+
+function normalizeTranscriptText(text) {
+  let normalized = "";
+
+  for (const char of String(text || "")) {
+    if (char === "\b") {
+      normalized = normalized.slice(0, -1);
+      continue;
+    }
+
+    if (char === "\r") {
+      if (!normalized.endsWith("\n")) {
+        normalized += "\n";
+      }
+      continue;
+    }
+
+    if (char === "\u0000") {
+      continue;
+    }
+
+    normalized += char;
+  }
+
+  return normalized
+    .split("\n")
+    .map((line) => line.replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "").replace(/\s+$/g, ""))
+    .join("\n");
+}
+
 watch(
   () => props.selectedAgentId,
   () => {
@@ -349,6 +445,13 @@ watch(currentSession, (session) => {
   detailSessionId.value = "";
   selectedSessionPresetCommandKey.value = "";
 });
+
+watch(
+  () => currentSession.value?.sessionId || "",
+  () => {
+    transcriptExpanded.value = false;
+  }
+);
 </script>
 
 <template>
@@ -629,9 +732,42 @@ watch(currentSession, (session) => {
                     sessionId: currentSession.sessionId
                   })
                 "
+                @terminal-resize="emit('resize-terminal-session', $event)"
               />
             </el-collapse-item>
           </el-collapse>
+
+          <div
+            v-if="currentSession"
+            class="console-block explore-transcript-panel"
+          >
+            <div class="explore-transcript-head">
+              <h4>可滚动文本回放</h4>
+              <div class="explore-transcript-actions">
+                <el-button
+                  round
+                  plain
+                  size="small"
+                  :disabled="!hasTerminalTranscript"
+                  @click="clearTerminalTranscript"
+                >
+                  清空
+                </el-button>
+                <el-button
+                  round
+                  plain
+                  size="small"
+                  @click="toggleTranscriptExpanded"
+                >
+                  {{ transcriptExpanded ? "折叠" : "展开" }}
+                </el-button>
+              </div>
+            </div>
+            <pre v-if="transcriptExpanded && hasTerminalTranscript">{{ terminalTranscript }}</pre>
+            <p v-else-if="transcriptExpanded" class="muted explore-transcript-empty">
+              已清空，等待新的终端输出...
+            </p>
+          </div>
         </div>
         <p v-else class="muted">当前会话不可用，请返回会话列表重新选择。</p>
 

@@ -137,6 +137,43 @@ export class SecureCommandService {
     });
   }
 
+  createTerminalSessionResizeEnvelope({
+    requestId,
+    agentId,
+    sessionId,
+    cols,
+    rows,
+    operatorUser,
+    authCodeBinding
+  }) {
+    const issuedAt = new Date();
+    const sentAt = issuedAt.toISOString();
+    const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
+
+    return this.createEncryptedEnvelope({
+      messageType: "terminal.session.resize.secure",
+      requestId,
+      agentId,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId,
+        sessionId,
+        agentId,
+        cols,
+        rows,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
+      expiresAt,
+      metaExtra: {
+        sessionId
+      }
+    });
+  }
+
   createTerminalSessionTerminateEnvelope({
     requestId,
     agentId,

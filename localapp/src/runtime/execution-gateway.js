@@ -18,6 +18,10 @@ export class ExecutionGateway {
     return this.ptySessionManager.writeInput(sessionId, input);
   }
 
+  resizeTerminalSession(sessionId, cols, rows) {
+    return this.ptySessionManager.resizeSession(sessionId, cols, rows);
+  }
+
   terminateTerminalSession(sessionId, reason) {
     return this.ptySessionManager.terminateSession(sessionId, reason);
   }

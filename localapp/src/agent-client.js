@@ -112,6 +112,11 @@ export class AgentClient {
       return;
     }
 
+    if (message.type === "terminal.session.resize.secure") {
+      this.handleSecureTerminalSessionResize(message);
+      return;
+    }
+
     if (message.type === "terminal.session.terminate.secure") {
       this.handleSecureTerminalSessionTerminate(message);
       return;
@@ -470,6 +475,34 @@ export class AgentClient {
     }
   }
 
+  handleSecureTerminalSessionResize(message) {
+    let payload;
+
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "terminal.session.resize.secure",
+        requiredFields: ["sessionId", "cols", "rows"]
+      });
+      payload = unwrapped.payload;
+      this.executionGateway.resizeTerminalSession(
+        String(payload.sessionId),
+        Number(payload.cols),
+        Number(payload.rows)
+      );
+    } catch (error) {
+      this.send(
+        "terminal.session.error",
+        {
+          requestId: String(payload?.requestId || message?.payload?.requestId || ""),
+          agentId: this.config.agentId,
+          sessionId: String(payload?.sessionId || ""),
+          error: error.message
+        },
+        true
+      );
+    }
+  }
+
   rejectInsecureCommand(payload) {
     const error = new Error("已拒绝未加密命令，当前 agent 仅接受 command.execute.secure");
     const requestId = String(payload.requestId || "");
@@ -581,6 +614,8 @@ export class AgentClient {
       closedAt: session?.closedAt || null,
       exitCode: typeof session?.exitCode === "number" ? session.exitCode : null,
       error: String(session?.error || ""),
+      cols: typeof session?.cols === "number" ? session.cols : null,
+      rows: typeof session?.rows === "number" ? session.rows : null,
       createdAt: session?.createdAt || null,
       updatedAt: session?.updatedAt || session?.lastOutputAt || session?.createdAt || null,
       outputs: Array.isArray(session?.outputs)

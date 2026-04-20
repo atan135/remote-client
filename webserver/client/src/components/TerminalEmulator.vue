@@ -18,7 +18,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(["terminal-data"]);
+const emit = defineEmits(["terminal-data", "terminal-resize"]);
 
 const terminalHost = ref(null);
 
@@ -28,9 +28,10 @@ let terminal = null;
 let fitAddon = null;
 let fitFrameId = 0;
 let renderedSessionId = "";
-let renderedSeqs = new Set();
+let renderedMaxSeq = 0;
 let resizeObserver = null;
 let observedHostWidth = 0;
+let reportedTerminalSizeKey = "";
 
 onMounted(async () => {
   createTerminal();
@@ -47,17 +48,19 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   resizeObserver = null;
   observedHostWidth = 0;
+  reportedTerminalSizeKey = "";
   window.removeEventListener("resize", handleWindowResize);
   terminalHost.value?.removeEventListener("click", focusTerminal);
   terminal?.dispose();
   terminal = null;
   fitAddon = null;
-  renderedSeqs = new Set();
+  renderedMaxSeq = 0;
 });
 
 watch(
   () => props.sessionId,
   async () => {
+    reportedTerminalSizeKey = "";
     await nextTick();
     syncOutputs();
     scheduleFitTerminal();
@@ -126,7 +129,7 @@ function createTerminal() {
   window.addEventListener("resize", handleWindowResize);
   if (typeof ResizeObserver === "function") {
     resizeObserver = new ResizeObserver(() => {
-      const nextWidth = Math.round(terminalHost.value?.getBoundingClientRect().width || 0);
+      const nextWidth = getHostWidth();
 
       if (nextWidth <= 0 || nextWidth === observedHostWidth) {
         return;
@@ -135,7 +138,7 @@ function createTerminal() {
       observedHostWidth = nextWidth;
       scheduleFitTerminal();
     });
-    observedHostWidth = Math.round(terminalHost.value.getBoundingClientRect().width || 0);
+    observedHostWidth = getHostWidth();
     resizeObserver.observe(terminalHost.value);
   }
 }
@@ -147,6 +150,7 @@ function fitTerminal() {
 
   try {
     fitAddon.fit();
+    emitTerminalResize();
   } catch {
     // The container may still be hidden while the tab is not active.
   }
@@ -173,6 +177,36 @@ function focusTerminal() {
   }
 }
 
+function emitTerminalResize() {
+  if (!terminal || !props.sessionId) {
+    return;
+  }
+
+  const cols = Number(terminal.cols || 0);
+  const rows = Number(terminal.rows || 0);
+
+  if (!Number.isFinite(cols) || !Number.isFinite(rows) || cols <= 0 || rows <= 0) {
+    return;
+  }
+
+  const nextKey = `${props.sessionId}:${cols}x${rows}`;
+
+  if (nextKey === reportedTerminalSizeKey) {
+    return;
+  }
+
+  reportedTerminalSizeKey = nextKey;
+  emit("terminal-resize", {
+    sessionId: props.sessionId,
+    cols,
+    rows
+  });
+}
+
+function getHostWidth() {
+  return Math.round(terminalHost.value?.getBoundingClientRect().width || 0);
+}
+
 function syncOutputs(forceReplay = false) {
   if (!terminal) {
     return;
@@ -185,30 +219,20 @@ function syncOutputs(forceReplay = false) {
     return;
   }
 
-  if (outputs.length < renderedSeqs.size) {
-    replayOutputs(outputs);
+  if (outputs.length === 0) {
     return;
   }
 
-  const availableSeqs = new Set(outputs.map((item) => item.seq));
+  const nextOutputs = outputs.filter((output) => output.seq > renderedMaxSeq);
 
-  for (const seq of renderedSeqs) {
-    if (!availableSeqs.has(seq)) {
-      replayOutputs(outputs);
-      return;
-    }
-  }
-
-  for (const output of outputs) {
-    if (renderedSeqs.has(output.seq)) {
-      continue;
-    }
-
+  for (const output of nextOutputs) {
     terminal.write(output.chunk);
-    renderedSeqs.add(output.seq);
+    renderedMaxSeq = output.seq;
   }
 
-  terminal.scrollToBottom();
+  if (nextOutputs.length > 0) {
+    terminal.scrollToBottom();
+  }
 }
 
 function replayOutputs(outputs) {
@@ -218,11 +242,11 @@ function replayOutputs(outputs) {
 
   terminal.reset();
   renderedSessionId = props.sessionId;
-  renderedSeqs = new Set();
+  renderedMaxSeq = 0;
 
   for (const output of outputs) {
     terminal.write(output.chunk);
-    renderedSeqs.add(output.seq);
+    renderedMaxSeq = output.seq;
   }
 
   terminal.scrollToBottom();
