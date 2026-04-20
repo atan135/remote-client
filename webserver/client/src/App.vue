@@ -546,8 +546,9 @@ async function loadUsers() {
   }
 }
 
-async function submitCommand() {
-  const command = commandInput.value.trim();
+async function submitCommand(commandOverride) {
+  const commandSource = commandOverride === undefined ? commandInput.value : commandOverride;
+  const command = String(commandSource || "").trim();
 
   if (!selectedAgentId.value || !command) {
     return;
@@ -646,9 +647,17 @@ async function createTerminalSession() {
   }
 }
 
-async function sendTerminalInput(sessionId = activeTerminalSession.value?.sessionId) {
+async function sendTerminalInput(payloadOrSessionId = activeTerminalSession.value?.sessionId) {
+  const payload =
+    payloadOrSessionId && typeof payloadOrSessionId === "object"
+      ? payloadOrSessionId
+      : {
+          sessionId: payloadOrSessionId,
+          input: terminalInput.value
+        };
+  const sessionId = String(payload?.sessionId || activeTerminalSession.value?.sessionId || "").trim();
   const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
-  const input = terminalInput.value;
+  const input = String(payload?.input || "");
 
   if (!sessionRecord || !input) {
     return;

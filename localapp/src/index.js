@@ -23,6 +23,7 @@ logEvent(loggers.agentLogger, "info", "agent.boot", {
   serverWsUrl: config.serverWsUrl,
   envFilePath: config.envFilePath,
   logDir: loggers.logDir,
+  presetCommandCount: Array.isArray(config.presetCommands) ? config.presetCommands.length : 0,
   authPrivateKeyPath: config.authPrivateKeyPath,
   webserverSignPublicKeyPath: config.webserverSignPublicKeyPath,
   webserverSignPublicKeyEnvVarName: config.webserverSignPublicKeyEnvVarName,

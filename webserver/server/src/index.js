@@ -1087,6 +1087,7 @@ async function handleAgentMessage(agentId, socket, message) {
       hostname: agent.hostname,
       platform: agent.platform,
       arch: agent.arch,
+      presetCommandCount: Array.isArray(agent.presetCommands) ? agent.presetCommands.length : 0,
       commonWorkingDirectoryCount: agent.commonWorkingDirectories.length,
       activeTerminalSessionCount: syncedTerminalSessions.length,
       recoveredTerminalSessionCount: pendingDisconnect ? syncedTerminalSessions.length : 0,

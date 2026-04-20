@@ -34,6 +34,42 @@ function toUniqueList(value) {
   return Array.from(new Set(toList(value)));
 }
 
+function toPresetCommands(value) {
+  const seen = new Set();
+  const presets = [];
+
+  for (const rawEntry of String(value || "").split(/\r?\n|\|\|/)) {
+    const entry = String(rawEntry || "").trim();
+
+    if (!entry) {
+      continue;
+    }
+
+    const separatorIndex = entry.indexOf("::");
+    const label = separatorIndex >= 0 ? entry.slice(0, separatorIndex).trim() : "";
+    const command = separatorIndex >= 0 ? entry.slice(separatorIndex + 2).trim() : entry;
+
+    if (!command) {
+      continue;
+    }
+
+    const normalizedLabel = label || command;
+    const dedupeKey = `${normalizedLabel}\u0000${command}`;
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    presets.push({
+      label: normalizedLabel,
+      command
+    });
+  }
+
+  return presets;
+}
+
 export function loadConfig() {
   const hostname = os.hostname();
   const authPrivateKeyPathConfig = resolvePathConfig(
@@ -76,6 +112,7 @@ export function loadConfig() {
     taskProfileConfigPath:
       process.env.TASK_PROFILE_CONFIG_PATH || "./config/tool-profiles.json",
     commonWorkingDirectories: toUniqueList(process.env.COMMON_WORK_DIRS),
+    presetCommands: toPresetCommands(process.env.PRESET_COMMANDS),
     allowedCwdRoots: toList(process.env.ALLOWED_CWD_ROOTS),
     localDebugServerEnabled: toBoolean(process.env.LOCAL_DEBUG_SERVER_ENABLED, false),
     localDebugServerHost: process.env.LOCAL_DEBUG_SERVER_HOST || "127.0.0.1",

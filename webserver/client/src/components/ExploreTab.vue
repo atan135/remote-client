@@ -127,6 +127,60 @@ const activeDeviceBindText = computed(() =>
   props.activeAuthCodeBinding ? "已绑定公钥" : "缺少公钥"
 );
 
+const presetCommands = computed(() => {
+  const items = Array.isArray(props.activeAgent?.presetCommands) ? props.activeAgent.presetCommands : [];
+
+  return items
+    .map((item, index) => {
+      const command = String(item?.command || "").trim();
+      const label = String(item?.label || "").trim() || command;
+
+      if (!command) {
+        return null;
+      }
+
+      return {
+        key: createPresetCommandKey(label, command, index),
+        label,
+        command
+      };
+    })
+    .filter(Boolean);
+});
+
+const selectedPresetCommandKey = ref("");
+
+const selectedPresetCommand = computed(
+  () => presetCommands.value.find((item) => item.key === selectedPresetCommandKey.value) || null
+);
+
+const canSubmitPresetCommand = computed(
+  () =>
+    Boolean(
+      props.selectedAgentId &&
+        selectedPresetCommand.value &&
+        props.activeAuthCodeBinding &&
+        !props.submitting
+    )
+);
+
+const selectedSessionPresetCommandKey = ref("");
+
+const selectedSessionPresetCommand = computed(
+  () =>
+    presetCommands.value.find((item) => item.key === selectedSessionPresetCommandKey.value) || null
+);
+
+const canSendSessionPresetInput = computed(
+  () =>
+    Boolean(
+      currentSession.value &&
+        selectedSessionPresetCommand.value &&
+        !isTerminalSessionClosed(currentSession.value.status) &&
+        !props.sendingTerminalInput
+    )
+);
+
 const canTerminateCurrentSession = computed(
   () =>
     Boolean(
@@ -145,6 +199,10 @@ const shouldPreferFinalAnswer = computed(
 const hasFinalAnswer = computed(() => Boolean(String(currentSession.value?.finalText || "").trim()));
 
 const rawTerminalPanels = ref([]);
+
+function createPresetCommandKey(label, command, index) {
+  return `${index}:${label}\u0000${command}`;
+}
 
 function statusType(status) {
   if (["running", "completed"].includes(status)) {
@@ -179,6 +237,45 @@ function queryCommonWorkingDirectories(queryString, callback) {
   callback(suggestions);
 }
 
+function handlePresetCommandChange(nextValue) {
+  selectedPresetCommandKey.value = String(nextValue || "");
+
+  if (!selectedPresetCommand.value) {
+    return;
+  }
+
+  emit("update:commandInput", selectedPresetCommand.value.command);
+}
+
+function submitSelectedPresetCommand() {
+  if (!selectedPresetCommand.value) {
+    return;
+  }
+
+  emit("submitCommand", selectedPresetCommand.value.command);
+}
+
+function handleSessionPresetCommandChange(nextValue) {
+  selectedSessionPresetCommandKey.value = String(nextValue || "");
+
+  if (!selectedSessionPresetCommand.value) {
+    return;
+  }
+
+  emit("update:terminalInput", selectedSessionPresetCommand.value.command);
+}
+
+function sendSelectedSessionPresetInput() {
+  if (!currentSession.value || !selectedSessionPresetCommand.value) {
+    return;
+  }
+
+  emit("send-terminal-input", {
+    sessionId: currentSession.value.sessionId,
+    input: selectedSessionPresetCommand.value.command
+  });
+}
+
 function openSessionDetail(sessionId) {
   detailSessionId.value = sessionId;
   sessionMetaPanels.value = [];
@@ -195,12 +292,27 @@ function goBackToSessionList() {
 watch(
   () => props.selectedAgentId,
   () => {
+    selectedPresetCommandKey.value = "";
+    selectedSessionPresetCommandKey.value = "";
     sessionMetaPanels.value = [];
     rawTerminalPanels.value = [];
     sessionScreen.value = "main";
     detailSessionId.value = "";
   }
 );
+
+watch(presetCommands, (items) => {
+  if (items.some((item) => item.key === selectedPresetCommandKey.value)) {
+  } else {
+    selectedPresetCommandKey.value = "";
+  }
+
+  if (items.some((item) => item.key === selectedSessionPresetCommandKey.value)) {
+    return;
+  }
+
+  selectedSessionPresetCommandKey.value = "";
+});
 
 watch(currentSession, (session) => {
   if (session) {
@@ -222,6 +334,7 @@ watch(currentSession, (session) => {
   sessionMetaPanels.value = [];
   rawTerminalPanels.value = [];
   detailSessionId.value = "";
+  selectedSessionPresetCommandKey.value = "";
 });
 </script>
 
@@ -243,6 +356,29 @@ watch(currentSession, (session) => {
               </div>
             </div>
 
+            <label v-if="presetCommands.length" class="field-block field-block-tight">
+              <span>预设命令</span>
+              <el-select
+                :model-value="selectedPresetCommandKey"
+                clearable
+                placeholder="选择当前设备 localapp/.env 中的预设命令"
+                @update:model-value="handlePresetCommandChange"
+              >
+                <el-option
+                  v-for="preset in presetCommands"
+                  :key="preset.key"
+                  :label="preset.label"
+                  :value="preset.key"
+                />
+              </el-select>
+              <p v-if="selectedPresetCommand" class="muted explore-preset-command-preview">
+                {{ selectedPresetCommand.command }}
+              </p>
+            </label>
+            <p v-else-if="selectedAgentId" class="muted explore-preset-command-empty">
+              当前设备未配置 PRESET_COMMANDS，仍可直接手动输入命令。
+            </p>
+
             <label class="field-block field-block-tight">
               <span>命令内容</span>
               <el-input :model-value="commandInput" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }"
@@ -250,6 +386,15 @@ watch(currentSession, (session) => {
             </label>
 
             <div class="hero-actions explore-actions">
+              <el-button
+                v-if="presetCommands.length"
+                round
+                plain
+                :disabled="!canSubmitPresetCommand"
+                @click="submitSelectedPresetCommand"
+              >
+                {{ submitting ? "提交中..." : "直接调用预设" }}
+              </el-button>
               <el-button type="primary" round :disabled="!canSubmitCommand" @click="emit('submitCommand')">
                 {{ submitting ? "提交中..." : "发送安全命令" }}
               </el-button>
@@ -385,6 +530,25 @@ watch(currentSession, (session) => {
             class="field-block field-block-tight explore-session-input"
           >
             <span>{{ shouldPreferFinalAnswer ? "继续提问" : "发送输入" }}</span>
+            <div v-if="presetCommands.length" class="field-block field-block-tight explore-session-preset-field">
+              <span>预设输入</span>
+              <el-select
+                :model-value="selectedSessionPresetCommandKey"
+                clearable
+                placeholder="选择当前设备 localapp/.env 中的预设输入"
+                @update:model-value="handleSessionPresetCommandChange"
+              >
+                <el-option
+                  v-for="preset in presetCommands"
+                  :key="`session-${preset.key}`"
+                  :label="preset.label"
+                  :value="preset.key"
+                />
+              </el-select>
+              <p v-if="selectedSessionPresetCommand" class="muted explore-preset-command-preview">
+                {{ selectedSessionPresetCommand.command }}
+              </p>
+            </div>
             <div class="explore-session-input-row">
               <el-input
                 :model-value="terminalInput"
@@ -397,6 +561,17 @@ watch(currentSession, (session) => {
                 "
                 @update:model-value="emit('update:terminalInput', $event)"
               />
+            </div>
+            <div class="hero-actions explore-session-input-actions">
+              <el-button
+                v-if="presetCommands.length"
+                round
+                plain
+                :disabled="!canSendSessionPresetInput"
+                @click="sendSelectedSessionPresetInput"
+              >
+                {{ sendingTerminalInput ? "发送中..." : "发送预设输入" }}
+              </el-button>
               <el-button
                 type="primary"
                 round

@@ -220,6 +220,9 @@ export class AgentClient {
       agentId: this.config.agentId,
       label: this.config.agentLabel,
       activeRemoteTerminalSessionCount: activeTerminalSessions.length,
+      presetCommandCount: Array.isArray(this.config.presetCommands)
+        ? this.config.presetCommands.length
+        : 0,
       commonWorkingDirectoryCount: Array.isArray(this.config.commonWorkingDirectories)
         ? this.config.commonWorkingDirectories.length
         : 0
@@ -234,6 +237,12 @@ export class AgentClient {
       pid: process.pid,
       activeTerminalSessions,
       terminalProfiles: this.listTerminalProfiles(),
+      presetCommands: Array.isArray(this.config.presetCommands)
+        ? this.config.presetCommands.map((item) => ({
+            label: String(item?.label || "").trim(),
+            command: String(item?.command || "").trim()
+          }))
+        : [],
       commonWorkingDirectories: Array.isArray(this.config.commonWorkingDirectories)
         ? [...this.config.commonWorkingDirectories]
         : []

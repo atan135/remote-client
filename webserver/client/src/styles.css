@@ -553,6 +553,16 @@ textarea {
   margin-top: 12px;
 }
 
+.explore-preset-command-preview,
+.explore-preset-command-empty {
+  line-height: 1.5;
+}
+
+.explore-preset-command-preview {
+  font-family: "Cascadia Code", Consolas, monospace;
+  word-break: break-word;
+}
+
 .explore-session-list {
   max-height: min(36vh, 280px);
   margin-top: 10px;
@@ -733,9 +743,17 @@ textarea {
   margin-top: 0;
 }
 
+.explore-session-preset-field {
+  margin-top: 0;
+}
+
 .explore-session-input-row {
   display: grid;
   gap: 10px;
+}
+
+.explore-session-input-actions {
+  margin-top: 10px;
 }
 
 .explore-raw-terminal {

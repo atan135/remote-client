@@ -8,6 +8,8 @@ export class AgentRegistry {
     const now = new Date().toISOString();
     const previous = this.agents.get(payload.agentId);
     const terminalProfiles = normalizeTerminalProfiles(payload.terminalProfiles);
+    const hasPresetCommands = Array.isArray(payload.presetCommands);
+    const presetCommands = normalizePresetCommands(payload.presetCommands);
     const hasCommonWorkingDirectories = Array.isArray(payload.commonWorkingDirectories);
     const commonWorkingDirectories = normalizeDirectoryList(payload.commonWorkingDirectories);
 
@@ -18,6 +20,7 @@ export class AgentRegistry {
       platform: payload.platform || "",
       arch: payload.arch || "",
       pid: payload.pid || null,
+      presetCommands: hasPresetCommands ? presetCommands : previous?.presetCommands || [],
       commonWorkingDirectories: hasCommonWorkingDirectories
         ? commonWorkingDirectories
         : previous?.commonWorkingDirectories || [],
@@ -78,6 +81,39 @@ export class AgentRegistry {
       left.label.localeCompare(right.label)
     );
   }
+}
+
+function normalizePresetCommands(presetCommands) {
+  if (!Array.isArray(presetCommands)) {
+    return [];
+  }
+
+  const seen = new Set();
+  const normalized = [];
+
+  for (const item of presetCommands) {
+    const label = String(item?.label || "").trim();
+    const command = String(item?.command || "").trim();
+
+    if (!command) {
+      continue;
+    }
+
+    const resolvedLabel = label || command;
+    const dedupeKey = `${resolvedLabel}\u0000${command}`;
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    normalized.push({
+      label: resolvedLabel,
+      command
+    });
+  }
+
+  return normalized;
 }
 
 function normalizeTerminalProfiles(profiles) {
