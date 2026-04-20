@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
-    "build": "node scripts/build-single-core.mjs",
+    "build": "vite build",
+    "zip:dist": "node scripts/zip-dist.mjs",
+    "package:dist": "npm run build && npm run zip:dist",
     "preview": "vite preview --host 0.0.0.0"
   },
   "dependencies": {

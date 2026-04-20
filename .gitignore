@@ -1,5 +1,6 @@
 node_modules/
 dist/
+webserver/client/remote-webserver-client-dist.zip
 logs/
 **/logs/
 localapp/keys/
