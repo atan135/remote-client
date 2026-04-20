@@ -29,6 +29,8 @@ let fitAddon = null;
 let fitFrameId = 0;
 let renderedSessionId = "";
 let renderedSeqs = new Set();
+let resizeObserver = null;
+let observedHostWidth = 0;
 
 onMounted(async () => {
   createTerminal();
@@ -42,6 +44,9 @@ onBeforeUnmount(() => {
     window.cancelAnimationFrame(fitFrameId);
     fitFrameId = 0;
   }
+  resizeObserver?.disconnect();
+  resizeObserver = null;
+  observedHostWidth = 0;
   window.removeEventListener("resize", handleWindowResize);
   terminalHost.value?.removeEventListener("click", focusTerminal);
   terminal?.dispose();
@@ -119,6 +124,20 @@ function createTerminal() {
 
   terminalHost.value.addEventListener("click", focusTerminal);
   window.addEventListener("resize", handleWindowResize);
+  if (typeof ResizeObserver === "function") {
+    resizeObserver = new ResizeObserver(() => {
+      const nextWidth = Math.round(terminalHost.value?.getBoundingClientRect().width || 0);
+
+      if (nextWidth <= 0 || nextWidth === observedHostWidth) {
+        return;
+      }
+
+      observedHostWidth = nextWidth;
+      scheduleFitTerminal();
+    });
+    observedHostWidth = Math.round(terminalHost.value.getBoundingClientRect().width || 0);
+    resizeObserver.observe(terminalHost.value);
+  }
 }
 
 function fitTerminal() {

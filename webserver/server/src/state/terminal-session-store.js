@@ -94,6 +94,26 @@ export class TerminalSessionStore {
     return record;
   }
 
+  upsert(sessionLike) {
+    const normalized = normalizeSessionRecord(sessionLike, this.outputLimit);
+
+    if (!normalized) {
+      return null;
+    }
+
+    const existing = this.sessions.get(normalized.sessionId);
+
+    if (!existing) {
+      this.sessions.set(normalized.sessionId, normalized);
+      this.order.unshift(normalized.sessionId);
+      this.prune();
+      return normalized;
+    }
+
+    Object.assign(existing, normalized);
+    return existing;
+  }
+
   appendOutput(sessionId, payload) {
     const record = this.sessions.get(sessionId);
 
@@ -165,4 +185,116 @@ function clampTextTail(value, maxLength) {
   }
 
   return text.slice(text.length - maxLength);
+}
+
+function normalizeSessionRecord(sessionLike, outputLimit) {
+  const sessionId = String(sessionLike?.sessionId || "").trim();
+
+  if (!sessionId) {
+    return null;
+  }
+
+  const createdAt = normalizeIsoTimestamp(sessionLike?.createdAt) || new Date().toISOString();
+  const outputs = normalizeOutputs(sessionLike?.outputs, outputLimit, sessionId);
+  const rawTranscriptSource =
+    typeof sessionLike?.rawTranscript === "string"
+      ? sessionLike.rawTranscript
+      : outputs.map((output) => output.chunk).join("");
+
+  return {
+    sessionId,
+    requestId: String(sessionLike?.requestId || ""),
+    agentId: String(sessionLike?.agentId || ""),
+    operatorUserId:
+      typeof sessionLike?.operatorUserId === "number" && Number.isFinite(sessionLike.operatorUserId)
+        ? sessionLike.operatorUserId
+        : null,
+    operatorUsername: String(sessionLike?.operatorUsername || ""),
+    authCodeId:
+      typeof sessionLike?.authCodeId === "number" && Number.isFinite(sessionLike.authCodeId)
+        ? sessionLike.authCodeId
+        : null,
+    authCodeFingerprint: String(sessionLike?.authCodeFingerprint || ""),
+    authCodeRemark: String(sessionLike?.authCodeRemark || ""),
+    sessionType: String(sessionLike?.sessionType || "llm_cli"),
+    profile: String(sessionLike?.profile || ""),
+    status: String(sessionLike?.status || "created"),
+    createdAt,
+    updatedAt:
+      normalizeIsoTimestamp(sessionLike?.updatedAt) ||
+      normalizeIsoTimestamp(sessionLike?.lastOutputAt) ||
+      createdAt,
+    startedAt: normalizeIsoTimestamp(sessionLike?.startedAt),
+    lastInputAt: normalizeIsoTimestamp(sessionLike?.lastInputAt),
+    lastOutputAt: normalizeIsoTimestamp(sessionLike?.lastOutputAt),
+    closedAt: normalizeIsoTimestamp(sessionLike?.closedAt),
+    exitCode:
+      typeof sessionLike?.exitCode === "number" && Number.isFinite(sessionLike.exitCode)
+        ? sessionLike.exitCode
+        : null,
+    error: String(sessionLike?.error || ""),
+    displayMode: String(sessionLike?.displayMode || "terminal"),
+    finalOutputMarkers: normalizeFinalOutputMarkers(sessionLike?.finalOutputMarkers),
+    finalText: String(sessionLike?.finalText || ""),
+    finalTextUpdatedAt: normalizeIsoTimestamp(sessionLike?.finalTextUpdatedAt),
+    rawTranscript: clampTextTail(rawTranscriptSource, 200000),
+    outputs,
+    cwd: String(sessionLike?.cwd || ""),
+    envKeys: Array.isArray(sessionLike?.envKeys)
+      ? sessionLike.envKeys.map((item) => String(item))
+      : [],
+    cols:
+      typeof sessionLike?.cols === "number" && Number.isFinite(sessionLike.cols)
+        ? sessionLike.cols
+        : null,
+    rows:
+      typeof sessionLike?.rows === "number" && Number.isFinite(sessionLike.rows)
+        ? sessionLike.rows
+        : null,
+    pid: typeof sessionLike?.pid === "number" && Number.isFinite(sessionLike.pid) ? sessionLike.pid : null,
+    source: String(sessionLike?.source || "")
+  };
+}
+
+function normalizeOutputs(outputs, outputLimit, sessionId) {
+  if (!Array.isArray(outputs) || outputs.length === 0) {
+    return [];
+  }
+
+  return outputs
+    .map((output, index) => ({
+      sessionId: String(output?.sessionId || sessionId),
+      stream: String(output?.stream || "stdout"),
+      chunk: String(output?.chunk || ""),
+      seq: Number.isFinite(Number(output?.seq)) ? Number(output.seq) : index + 1,
+      sentAt: normalizeIsoTimestamp(output?.sentAt) || new Date().toISOString()
+    }))
+    .sort((left, right) => left.seq - right.seq)
+    .slice(-outputLimit);
+}
+
+function normalizeIsoTimestamp(value) {
+  const normalized = String(value || "").trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function normalizeFinalOutputMarkers(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+
+  const start = String(value.start || "").trim();
+  const end = String(value.end || "").trim();
+
+  if (!start || !end) {
+    return null;
+  }
+
+  return { start, end };
 }

@@ -182,6 +182,15 @@ export class PtySessionManager {
     return this.sessionStore.list();
   }
 
+  listRemoteSessions(options = {}) {
+    const activeOnly = options.activeOnly === true;
+
+    return this.sessionStore
+      .list()
+      .filter((session) => session?.source === "remote")
+      .filter((session) => !activeOnly || !isClosedSessionStatus(session.status));
+  }
+
   getRequiredHandle(sessionId) {
     const handle = this.handles.get(sessionId);
 
@@ -274,4 +283,8 @@ export class PtySessionManager {
       });
     }
   }
+}
+
+function isClosedSessionStatus(status) {
+  return ["completed", "failed", "terminated"].includes(String(status || ""));
 }

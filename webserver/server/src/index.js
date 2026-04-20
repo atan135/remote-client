@@ -52,6 +52,7 @@ const terminalSessionStore = new TerminalSessionStore(
 );
 const browserHub = new BrowserHub();
 const commandDispatchContextSymbol = Symbol("commandDispatchContext");
+const pendingAgentDisconnects = new Map();
 
 const agentSocketServer = new WebSocketServer({ noServer: true });
 const browserSocketServer = new WebSocketServer({ noServer: true });
@@ -701,15 +702,69 @@ async function handleTerminalSessionInputRequest(req, res) {
 
 async function handleTerminalSessionTerminateRequest(req, res) {
   const sessionId = String(req.params.sessionId || "");
+  const now = new Date().toISOString();
   const session = terminalSessionStore.get(sessionId);
 
   if (!session) {
-    res.status(404).json({ message: "会话不存在" });
+    try {
+      const storedSession = await terminalSessionHistoryService.getBySessionId(sessionId);
+
+      if (!storedSession) {
+        res.status(404).json({ message: "会话不存在" });
+        return;
+      }
+
+      if (isTerminalSessionClosedStatus(storedSession.status)) {
+        res.json({
+          ok: true,
+          alreadyClosed: true,
+          sessionId,
+          item: storedSession
+        });
+        return;
+      }
+
+      const reconciledSession = await terminalSessionHistoryService.updateSession(sessionId, {
+        status: "terminated",
+        error: storedSession.error || "终端会话已不在活动列表中，按已结束处理。",
+        updatedAt: now,
+        closedAt: storedSession.closedAt || now
+      });
+
+      const item =
+        reconciledSession || {
+          ...storedSession,
+          status: "terminated",
+          error: storedSession.error || "终端会话已不在活动列表中，按已结束处理。",
+          updatedAt: now,
+          closedAt: storedSession.closedAt || now
+        };
+      browserHub.broadcast("terminal.session.updated", item);
+      res.json({
+        ok: true,
+        reconciled: true,
+        sessionId,
+        item
+      });
+    } catch (error) {
+      logEvent(commandLogger, "error", "terminal.session.terminate_reconcile_failed", {
+        sessionId,
+        userId: req.auth.user.id,
+        username: req.auth.user.username,
+        error: error.message
+      });
+      res.status(500).json({ message: error.message || "终端会话终止失败" });
+    }
     return;
   }
 
   if (isTerminalSessionClosedStatus(session.status)) {
-    res.status(409).json({ message: "会话已关闭" });
+    res.json({
+      ok: true,
+      alreadyClosed: true,
+      sessionId,
+      item: serializeTerminalSession(session)
+    });
     return;
   }
 
@@ -746,7 +801,8 @@ async function handleTerminalSessionTerminateRequest(req, res) {
 
     res.status(202).json({
       ok: true,
-      sessionId
+      sessionId,
+      item: serializeTerminalSession(updatedSession || session)
     });
   } catch (error) {
     res.status(500).json({ message: error.message || "会话终止下发失败" });
@@ -816,7 +872,14 @@ agentSocketServer.on("connection", (socket, _request, url) => {
   socket.on("message", (raw) => {
     try {
       const message = JSON.parse(String(raw));
-      handleAgentMessage(agentId, socket, message);
+      void handleAgentMessage(agentId, socket, message).catch((error) => {
+        logEvent(serverLogger, "error", "agent.message_handle_failed", {
+          agentId,
+          type: String(message?.type || ""),
+          error: error.message,
+          stack: error.stack || ""
+        });
+      });
     } catch (error) {
       logEvent(serverLogger, "error", "agent.invalid_message", {
         agentId,
@@ -826,29 +889,30 @@ agentSocketServer.on("connection", (socket, _request, url) => {
     }
   });
 
-  socket.on("close", () => {
+  socket.on("error", (error) => {
+    logEvent(serverLogger, "error", "agent.websocket_error", {
+      agentId,
+      error: error.message
+    });
+  });
+
+  socket.on("close", (code, reasonBuffer) => {
     const agent = agentRegistry.disconnect(agentId);
-    const changedCommands = commandStore.markAgentDisconnected(agentId);
-    const changedSessions = terminalSessionStore.markAgentDisconnected(agentId);
+    const reason = normalizeSocketCloseReason(reasonBuffer);
+    scheduleAgentDisconnectHandling(agentId, {
+      closeCode: code,
+      closeReason: reason
+    });
 
     logEvent(serverLogger, "warn", "agent.websocket_disconnected", {
       agentId,
-      affectedCommands: changedCommands.length,
-      affectedSessions: changedSessions.length
+      closeCode: code,
+      closeReason: reason,
+      disconnectGraceMs: config.agentDisconnectGraceMs
     });
 
     if (agent) {
       browserHub.broadcast("agent.updated", agent);
-    }
-
-    for (const command of changedCommands) {
-      void persistCommandRecord(command);
-      browserHub.broadcast("command.updated", serializeCommandRecord(command));
-    }
-
-    for (const session of changedSessions) {
-      void persistTerminalSessionRecord(session);
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
     }
   });
 });
@@ -924,19 +988,121 @@ process.on("unhandledRejection", (reason) => {
   });
 });
 
-function handleAgentMessage(agentId, socket, message) {
+function scheduleAgentDisconnectHandling(agentId, meta = {}) {
+  clearPendingAgentDisconnect(agentId);
+
+  const timer = setTimeout(() => {
+    pendingAgentDisconnects.delete(agentId);
+
+    const socket = agentRegistry.getSocket(agentId);
+
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      return;
+    }
+
+    const changedCommands = commandStore.markAgentDisconnected(agentId);
+    const changedSessions = terminalSessionStore.markAgentDisconnected(agentId);
+
+    logEvent(serverLogger, "warn", "agent.disconnect_grace_expired", {
+      agentId,
+      closeCode: meta.closeCode ?? null,
+      closeReason: meta.closeReason || "",
+      affectedCommands: changedCommands.length,
+      affectedSessions: changedSessions.length
+    });
+
+    for (const command of changedCommands) {
+      void persistCommandRecord(command);
+      browserHub.broadcast("command.updated", serializeCommandRecord(command));
+    }
+
+    for (const session of changedSessions) {
+      void persistTerminalSessionRecord(session);
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+    }
+  }, config.agentDisconnectGraceMs);
+
+  pendingAgentDisconnects.set(agentId, {
+    timer,
+    disconnectedAt: new Date().toISOString(),
+    ...meta
+  });
+}
+
+function clearPendingAgentDisconnect(agentId) {
+  const pending = pendingAgentDisconnects.get(agentId) || null;
+
+  if (pending?.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  pendingAgentDisconnects.delete(agentId);
+  return pending;
+}
+
+function reconcileMissingAgentTerminalSessions(agentId, syncedTerminalSessions) {
+  const activeSessionIds = new Set(
+    (Array.isArray(syncedTerminalSessions) ? syncedTerminalSessions : [])
+      .map((session) => String(session?.sessionId || ""))
+      .filter(Boolean)
+  );
+
+  return terminalSessionStore
+    .list(config.terminalSessionHistoryLimit)
+    .filter(Boolean)
+    .filter((session) => session.agentId === agentId)
+    .filter((session) => ["created", "dispatched", "running", "terminating"].includes(session.status))
+    .filter((session) => !activeSessionIds.has(session.sessionId))
+    .map((session) =>
+      terminalSessionStore.update(session.sessionId, {
+        status: "connection_lost",
+        error: "Agent reconnected, but the terminal session was not found on the agent. It likely ended during disconnect or localapp restart."
+      })
+    )
+    .filter(Boolean);
+}
+
+function normalizeSocketCloseReason(reasonBuffer) {
+  const reason = Buffer.isBuffer(reasonBuffer)
+    ? reasonBuffer.toString("utf8")
+    : String(reasonBuffer || "");
+
+  return reason.trim();
+}
+
+async function handleAgentMessage(agentId, socket, message) {
   if (message.type === "agent.register") {
     const agent = agentRegistry.register(message.payload, socket);
+    const pendingDisconnect = clearPendingAgentDisconnect(agent.agentId);
+    const syncedTerminalSessions = await syncAgentTerminalSessions(
+      agent.agentId,
+      message.payload.activeTerminalSessions
+    );
+    const missingTerminalSessions = pendingDisconnect
+      ? reconcileMissingAgentTerminalSessions(agent.agentId, syncedTerminalSessions)
+      : [];
     logEvent(serverLogger, "info", "agent.registered", {
       agentId: agent.agentId,
       label: agent.label,
       hostname: agent.hostname,
       platform: agent.platform,
       arch: agent.arch,
-      commonWorkingDirectoryCount: agent.commonWorkingDirectories.length
+      commonWorkingDirectoryCount: agent.commonWorkingDirectories.length,
+      activeTerminalSessionCount: syncedTerminalSessions.length,
+      recoveredTerminalSessionCount: pendingDisconnect ? syncedTerminalSessions.length : 0,
+      missingTerminalSessionCount: missingTerminalSessions.length,
+      reconnectedWithinGrace: Boolean(pendingDisconnect)
     });
     browserHub.broadcast("agent.updated", agent);
-    dispatchQueuedCommands(agentId);
+    for (const session of syncedTerminalSessions) {
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+      void persistTerminalSessionRecord(session);
+    }
+    for (const session of missingTerminalSessions) {
+      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+      void persistTerminalSessionRecord(session);
+    }
+    dispatchQueuedCommands(agent.agentId);
     return;
   }
 
@@ -1036,6 +1202,17 @@ function handleAgentMessage(agentId, socket, message) {
     if (result) {
       const finalPatch = deriveTerminalSessionDisplayPatch(result.record);
       let updatedRecord = result.record;
+      const reconnectPatch =
+        result.record.status === "connection_lost"
+          ? {
+              status: "running",
+              error: ""
+            }
+          : null;
+
+      if (reconnectPatch) {
+        updatedRecord = terminalSessionStore.update(result.record.sessionId, reconnectPatch) || updatedRecord;
+      }
 
       if (finalPatch) {
         updatedRecord =
@@ -1044,11 +1221,31 @@ function handleAgentMessage(agentId, socket, message) {
 
       void persistTerminalSessionRecord(updatedRecord);
       void maybeSyncTerminalSessionTurn(updatedRecord, { allowEmpty: false });
+      logEvent(commandLogger, "info", "terminal.session.output_forwarded", {
+        sessionId: result.record.sessionId,
+        requestId: result.record.requestId,
+        agentId: result.record.agentId,
+        profile: result.record.profile,
+        seq: result.output.seq,
+        chunkLength: String(result.output.chunk || "").length,
+        outputsInMemory: Array.isArray(updatedRecord.outputs) ? updatedRecord.outputs.length : 0,
+        lastOutputAt: updatedRecord.lastOutputAt || result.output.sentAt,
+        browserSubscribers: browserHub.sockets.size
+      });
       browserHub.broadcast("terminal.session.output", result.output);
       browserHub.broadcast(
         "terminal.session.updated",
         serializeTerminalSession(terminalSessionStore.get(result.record.sessionId) || updatedRecord)
       );
+    }
+
+    if (!result) {
+      logEvent(commandLogger, "warn", "terminal.session.output_dropped", {
+        sessionId: String(message.payload?.sessionId || ""),
+        agentId,
+        seq: Number(message.payload?.seq || 0),
+        chunkLength: String(message.payload?.chunk || "").length
+      });
     }
 
     return;
@@ -1083,6 +1280,73 @@ function handleAgentMessage(agentId, socket, message) {
       browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
     }
   }
+}
+
+async function syncAgentTerminalSessions(agentId, sessions) {
+  if (!Array.isArray(sessions) || sessions.length === 0) {
+    return [];
+  }
+
+  const synced = [];
+  const agent = agentRegistry.get(agentId);
+  const terminalProfiles = Array.isArray(agent?.terminalProfiles) ? agent.terminalProfiles : [];
+
+  for (const sessionLike of sessions) {
+    if (String(sessionLike?.agentId || agentId) !== agentId) {
+      continue;
+    }
+
+    const sessionId = String(sessionLike?.sessionId || "");
+    const existing =
+      terminalSessionStore.get(sessionId) ||
+      (await terminalSessionHistoryService.getBySessionId(sessionId));
+    const profile = String(sessionLike?.profile || existing?.profile || "");
+    const profileConfig = terminalProfiles.find((item) => item.name === profile) || null;
+    const nextStatus = resolveResyncedTerminalSessionStatus(sessionLike?.status);
+    const syncedRecord = terminalSessionStore.upsert({
+      ...(existing || {}),
+      ...sessionLike,
+      sessionId,
+      agentId,
+      profile,
+      displayMode: normalizeProfileOutputMode(
+        sessionLike?.displayMode || existing?.displayMode || profileConfig?.outputMode
+      ),
+      finalOutputMarkers:
+        normalizeFinalOutputMarkers(sessionLike?.finalOutputMarkers) ||
+        existing?.finalOutputMarkers ||
+        normalizeFinalOutputMarkers(profileConfig?.finalOutputMarkers),
+      status: nextStatus,
+      error: nextStatus === "running" ? "" : String(sessionLike?.error || existing?.error || "")
+    });
+
+    if (!syncedRecord) {
+      continue;
+    }
+
+    logEvent(commandLogger, "info", "terminal.session.resynced", {
+      sessionId: syncedRecord.sessionId,
+      requestId: syncedRecord.requestId,
+      agentId: syncedRecord.agentId,
+      status: syncedRecord.status,
+      outputsInMemory: Array.isArray(syncedRecord.outputs) ? syncedRecord.outputs.length : 0,
+      lastOutputAt: syncedRecord.lastOutputAt || ""
+    });
+
+    synced.push(syncedRecord);
+  }
+
+  return synced;
+}
+
+function resolveResyncedTerminalSessionStatus(status) {
+  const normalized = String(status || "");
+
+  if (normalized === "terminating") {
+    return "terminating";
+  }
+
+  return isTerminalSessionClosedStatus(normalized) ? "terminated" : "running";
 }
 
 function dispatchQueuedCommands(agentId) {
@@ -1853,13 +2117,35 @@ async function handleTerminalSessionHistoryRequest(req, res) {
 
 async function sendBrowserSnapshot(socket) {
   try {
-    const [commands, terminalSessions] = await Promise.all([
+    const [commands, terminalSessionHistory] = await Promise.all([
       commandHistoryService.listRecent({
         agentId: "",
         limit: config.commandHistoryLimit
       }),
       terminalSessionHistoryService.listRecent(config.terminalSessionHistoryLimit)
     ]);
+    const activeTerminalSessions = terminalSessionStore.list(config.terminalSessionHistoryLimit);
+    const terminalSessionMap = new Map(
+      terminalSessionHistory
+        .filter((item) => item?.sessionId)
+        .map((item) => [item.sessionId, item])
+    );
+
+    for (const session of activeTerminalSessions) {
+      terminalSessionMap.set(session.sessionId, serializeTerminalSession(session));
+    }
+
+    const terminalSessions = Array.from(terminalSessionMap.values()).sort((left, right) =>
+      String(right?.createdAt || "").localeCompare(String(left?.createdAt || ""))
+    );
+
+    logEvent(serverLogger, "info", "browser.snapshot_sent", {
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      commandCount: commands.length,
+      terminalSessionCount: terminalSessions.length,
+      activeTerminalSessionCount: activeTerminalSessions.length
+    });
 
     browserHub.send(socket, "snapshot", {
       agents: agentRegistry.list(),

@@ -276,6 +276,97 @@ export class TerminalSessionHistoryService {
 
     return rows.map(serializeStoredTerminalSession);
   }
+
+  async getBySessionId(sessionId) {
+    const normalizedSessionId = String(sessionId || "").trim();
+
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          session_id,
+          request_id,
+          agent_id,
+          operator_user_id,
+          operator_username,
+          profile,
+          session_type,
+          display_mode,
+          cwd,
+          status,
+          exit_code,
+          error_message,
+          final_text,
+          final_text_chars,
+          raw_char_count,
+          created_at,
+          updated_at,
+          started_at,
+          last_output_at,
+          closed_at
+        FROM terminal_sessions
+        WHERE session_id = ?
+        LIMIT 1
+      `,
+      [normalizedSessionId]
+    );
+
+    return rows[0] ? serializeStoredTerminalSession(rows[0]) : null;
+  }
+
+  async updateSession(sessionId, patch = {}) {
+    const normalizedSessionId = String(sessionId || "").trim();
+
+    if (!normalizedSessionId) {
+      return null;
+    }
+
+    const assignments = [];
+    const values = [];
+
+    if (Object.prototype.hasOwnProperty.call(patch, "status")) {
+      assignments.push("status = ?");
+      values.push(String(patch.status || ""));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "exitCode")) {
+      assignments.push("exit_code = ?");
+      values.push(toNullableNumber(patch.exitCode));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "error")) {
+      assignments.push("error_message = ?");
+      values.push(clampText(String(patch.error || ""), 4000));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "updatedAt")) {
+      assignments.push("updated_at = ?");
+      values.push(toMysqlDateTime(patch.updatedAt));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "closedAt")) {
+      assignments.push("closed_at = ?");
+      values.push(toMysqlDateTime(patch.closedAt));
+    }
+
+    if (assignments.length === 0) {
+      return this.getBySessionId(normalizedSessionId);
+    }
+
+    await this.pool.execute(
+      `
+        UPDATE terminal_sessions
+        SET ${assignments.join(", ")}
+        WHERE session_id = ?
+      `,
+      [...values, normalizedSessionId]
+    );
+
+    return this.getBySessionId(normalizedSessionId);
+  }
 }
 
 export function summarizeTerminalSessionRecord(record) {

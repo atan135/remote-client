@@ -78,12 +78,13 @@ export class AgentClient {
       }
     });
 
-    this.socket.on("close", () => {
+    this.socket.on("close", (code, reasonBuffer) => {
       logEvent(this.agentLogger, "warn", "agent.disconnected", {
-        agentId: this.config.agentId
+        agentId: this.config.agentId,
+        closeCode: code,
+        closeReason: normalizeSocketCloseReason(reasonBuffer)
       });
       this.stopHeartbeat();
-      this.executionGateway.terminateRemoteSessions("agent_disconnected");
       this.scheduleReconnect();
     });
 
@@ -213,9 +214,12 @@ export class AgentClient {
   }
 
   sendRegister() {
+    const activeTerminalSessions = this.listActiveRemoteTerminalSessions();
+
     logEvent(this.agentLogger, "info", "agent.registering", {
       agentId: this.config.agentId,
       label: this.config.agentLabel,
+      activeRemoteTerminalSessionCount: activeTerminalSessions.length,
       commonWorkingDirectoryCount: Array.isArray(this.config.commonWorkingDirectories)
         ? this.config.commonWorkingDirectories.length
         : 0
@@ -228,6 +232,7 @@ export class AgentClient {
       platform: os.platform(),
       arch: os.arch(),
       pid: process.pid,
+      activeTerminalSessions,
       terminalProfiles: this.listTerminalProfiles(),
       commonWorkingDirectories: Array.isArray(this.config.commonWorkingDirectories)
         ? [...this.config.commonWorkingDirectories]
@@ -291,6 +296,19 @@ export class AgentClient {
 
   send(type, payload, persistIfOffline = false) {
     const message = createMessage(type, payload);
+
+    if (type === "terminal.session.output") {
+      logEvent(this.commandLogger, "info", "terminal.session.output_dispatch", {
+        sessionId: String(payload?.sessionId || ""),
+        agentId: this.config.agentId,
+        seq: Number(payload?.seq || 0),
+        chunkLength: String(payload?.chunk || "").length,
+        persistIfOffline,
+        socketOpen: this.isOpen(),
+        bufferedAmount: this.socket?.bufferedAmount ?? 0,
+        outboxSize: this.outbox.length
+      });
+    }
 
     if (this.isOpen()) {
       this.socket.send(message);
@@ -529,4 +547,50 @@ export class AgentClient {
       .listProfiles()
       .filter((profile) => profile.runner === "pty");
   }
+
+  listActiveRemoteTerminalSessions() {
+    if (
+      !this.executionGateway ||
+      typeof this.executionGateway.listActiveRemoteTerminalSessions !== "function"
+    ) {
+      return [];
+    }
+
+    return this.executionGateway.listActiveRemoteTerminalSessions().map((session) => ({
+      sessionId: String(session?.sessionId || ""),
+      requestId: String(session?.requestId || ""),
+      agentId: String(session?.agentId || this.config.agentId),
+      source: String(session?.source || "remote"),
+      profile: String(session?.profile || ""),
+      sessionType: String(session?.sessionType || "pty"),
+      cwd: String(session?.cwd || ""),
+      status: String(session?.status || ""),
+      pid: typeof session?.pid === "number" ? session.pid : null,
+      startedAt: session?.startedAt || null,
+      lastInputAt: session?.lastInputAt || null,
+      lastOutputAt: session?.lastOutputAt || null,
+      closedAt: session?.closedAt || null,
+      exitCode: typeof session?.exitCode === "number" ? session.exitCode : null,
+      error: String(session?.error || ""),
+      createdAt: session?.createdAt || null,
+      updatedAt: session?.updatedAt || session?.lastOutputAt || session?.createdAt || null,
+      outputs: Array.isArray(session?.outputs)
+        ? session.outputs.map((output) => ({
+            sessionId: String(output?.sessionId || session?.sessionId || ""),
+            stream: String(output?.stream || "stdout"),
+            chunk: String(output?.chunk || ""),
+            seq: Number(output?.seq || 0),
+            sentAt: output?.sentAt || null
+          }))
+        : []
+    }));
+  }
+}
+
+function normalizeSocketCloseReason(reasonBuffer) {
+  const reason = Buffer.isBuffer(reasonBuffer)
+    ? reasonBuffer.toString("utf8")
+    : String(reasonBuffer || "");
+
+  return reason.trim();
 }

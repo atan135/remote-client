@@ -33,4 +33,10 @@ export class ExecutionGateway {
   listTerminalSessions() {
     return this.ptySessionManager.listSessions();
   }
+
+  listActiveRemoteTerminalSessions() {
+    return this.ptySessionManager.listRemoteSessions({
+      activeOnly: true
+    });
+  }
 }

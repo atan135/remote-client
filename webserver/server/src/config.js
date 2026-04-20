@@ -14,6 +14,7 @@ export function loadConfig() {
     commandHistoryLimit: toNumber(process.env.COMMAND_HISTORY_LIMIT, 100),
     terminalSessionHistoryLimit: toNumber(process.env.TERMINAL_SESSION_HISTORY_LIMIT, 100),
     terminalSessionOutputLimit: toNumber(process.env.TERMINAL_SESSION_OUTPUT_LIMIT, 200),
+    agentDisconnectGraceMs: toNumber(process.env.AGENT_DISCONNECT_GRACE_MS, 8000),
     secureCommandTtlMs: toNumber(process.env.SECURE_COMMAND_TTL_MS, 60000),
     logLevel: process.env.LOG_LEVEL || "info",
     logDir: process.env.LOG_DIR || "logs",

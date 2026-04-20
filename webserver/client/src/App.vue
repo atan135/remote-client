@@ -866,7 +866,18 @@ async function terminateTerminalSession(sessionId = activeTerminalSession.value?
     const payload = await response.json().catch(() => ({}));
 
     if (!response.ok) {
+      if (response.status === 404 && payload.message === "会话不存在") {
+        reconcileMissingTerminalSession(sessionId);
+        ElMessage.warning("会话已不存在，界面已按结束处理");
+        return;
+      }
+
       throw new Error(payload.message || "终端会话终止失败");
+    }
+
+    if (payload?.item?.sessionId) {
+      upsertTerminalSession(payload.item);
+      ensureSelectedTerminalSession();
     }
   } catch (error) {
     wsState.error = error.message;
@@ -1459,6 +1470,25 @@ function mergeTerminalSessionSnapshot(existingSessions, snapshotSessions) {
       outputs: incomingOutputs.length > 0 ? incomingOutputs : existingOutputs
     };
   });
+}
+
+function reconcileMissingTerminalSession(sessionId) {
+  const index = terminalSessions.value.findIndex((item) => item.sessionId === sessionId);
+
+  if (index === -1) {
+    return;
+  }
+
+  const current = terminalSessions.value[index];
+  const now = new Date().toISOString();
+
+  terminalSessions.value[index] = {
+    ...current,
+    status: "terminated",
+    error: current.error || "终端会话已不存在，已按结束处理。",
+    updatedAt: now,
+    closedAt: current.closedAt || now
+  };
 }
 
 function shortFingerprint(fingerprint) {
