@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -15,10 +16,11 @@ const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "../..");
 
 export class SecureCommandError extends Error {
-  constructor(message, code) {
+  constructor(message, code, details = {}) {
     super(message);
     this.name = "SecureCommandError";
     this.code = code;
+    this.details = isPlainObject(details) ? details : {};
   }
 }
 
@@ -26,6 +28,26 @@ export class SecureCommandService {
   constructor(config) {
     this.config = config;
     this.nonceCache = new Map();
+  }
+
+  inspectLocalKeyMaterial() {
+    const webserverPublicKeyInfo = this.loadWebserverPublicKey();
+    const authPrivateKeyInfo = this.loadAuthPrivateKey();
+
+    return {
+      configEnvFilePath: this.config.envFilePath || "",
+      webserverSignPublicKeyEnvVarName:
+        this.config.webserverSignPublicKeyEnvVarName || "WEBSERVER_SIGN_PUBLIC_KEY_PATH",
+      webserverSignPublicKeyPathSource: this.config.webserverSignPublicKeyPathSource || "default",
+      webserverSignPublicKeyConfiguredInEnvFile: Boolean(
+        this.config.webserverSignPublicKeyConfiguredInEnvFile
+      ),
+      trustedWebserverSignPublicKeyPath: webserverPublicKeyInfo.path,
+      trustedWebserverSignFingerprint: webserverPublicKeyInfo.fingerprint,
+      authPrivateKeyPath: authPrivateKeyInfo.path,
+      authPublicKeyFingerprint: authPrivateKeyInfo.publicKeyFingerprint,
+      suggestedAuthPublicKeyPath: authPrivateKeyInfo.suggestedAuthPublicKeyPath
+    };
   }
 
   unwrapMessage(message, options = {}) {
@@ -48,6 +70,10 @@ export class SecureCommandService {
     }
 
     const webserverPublicKeyInfo = this.loadWebserverPublicKey();
+    const claimedWebserverSignFingerprint = normalizeOptionalString(
+      message?.meta?.webserverSignFingerprint
+    );
+    const claimedAuthCodeFingerprint = normalizeOptionalString(message?.meta?.authCodeFingerprint);
     const signatureValid = verifySecureEnvelopeSignature({
       payload,
       sentAt,
@@ -56,11 +82,45 @@ export class SecureCommandService {
     });
 
     if (!signatureValid) {
-      throw new SecureCommandError("消息签名校验失败", "invalid_signature");
+      throw createInvalidSignatureError({
+        expectedType,
+        payload,
+        sentAt,
+        configEnvFilePath: this.config.envFilePath || "",
+        webserverSignPublicKeyEnvVarName:
+          this.config.webserverSignPublicKeyEnvVarName || "WEBSERVER_SIGN_PUBLIC_KEY_PATH",
+        webserverSignPublicKeyPathSource: this.config.webserverSignPublicKeyPathSource || "default",
+        webserverSignPublicKeyConfiguredInEnvFile: Boolean(
+          this.config.webserverSignPublicKeyConfiguredInEnvFile
+        ),
+        trustedWebserverSignFingerprint: webserverPublicKeyInfo.fingerprint,
+        trustedWebserverSignPublicKeyPath: webserverPublicKeyInfo.path,
+        claimedWebserverSignFingerprint
+      });
     }
 
     const authPrivateKeyInfo = this.loadAuthPrivateKey();
-    const plaintext = decryptSecureCommandPayload(payload, authPrivateKeyInfo.privateKey);
+    let plaintext;
+
+    try {
+      plaintext = decryptSecureCommandPayload(payload, authPrivateKeyInfo.privateKey);
+    } catch (error) {
+      throw createDecryptFailureError({
+        expectedType,
+        payload,
+        sentAt,
+        configEnvFilePath: this.config.envFilePath || "",
+        authPrivateKeyEnvVarName: "AUTH_PRIVATE_KEY_PATH",
+        authPrivateKeyPathSource: this.config.authPrivateKeyPathSource || "default",
+        authPrivateKeyConfiguredInEnvFile: Boolean(this.config.authPrivateKeyConfiguredInEnvFile),
+        authPrivateKeyPath: authPrivateKeyInfo.path,
+        localAuthPublicKeyFingerprint: authPrivateKeyInfo.publicKeyFingerprint,
+        suggestedAuthPublicKeyPath: authPrivateKeyInfo.suggestedAuthPublicKeyPath,
+        claimedAuthCodeFingerprint,
+        authCodeId: payload.authCodeId ?? null,
+        rawError: error
+      });
+    }
 
     this.validatePlaintextPayload(plaintext, options.requiredFields || []);
 
@@ -70,7 +130,11 @@ export class SecureCommandService {
         authCodeId: payload.authCodeId ?? null,
         encryptKeyVersion: payload.encryptKeyVersion ?? null,
         signKeyVersion: payload.signKeyVersion ?? null,
-        webserverSignFingerprint: webserverPublicKeyInfo.fingerprint
+        webserverSignFingerprint: webserverPublicKeyInfo.fingerprint,
+        trustedWebserverSignFingerprint: webserverPublicKeyInfo.fingerprint,
+        claimedWebserverSignFingerprint: claimedWebserverSignFingerprint || null,
+        authCodeFingerprint: claimedAuthCodeFingerprint || null,
+        localAuthPublicKeyFingerprint: authPrivateKeyInfo.publicKeyFingerprint
       }
     };
   }
@@ -97,7 +161,9 @@ export class SecureCommandService {
 
     return {
       privateKey,
-      path: privateKeyPath
+      path: privateKeyPath,
+      publicKeyFingerprint: createPublicKeyFingerprint(exportPublicKeyPemFromPrivateKey(privateKey)),
+      suggestedAuthPublicKeyPath: suggestAuthPublicKeyPath(privateKeyPath)
     };
   }
 
@@ -156,6 +222,107 @@ function resolvePackagePath(filePath) {
   return path.resolve(packageRoot, filePath);
 }
 
+function createInvalidSignatureError({
+  expectedType,
+  payload,
+  sentAt,
+  configEnvFilePath,
+  webserverSignPublicKeyEnvVarName,
+  webserverSignPublicKeyPathSource,
+  webserverSignPublicKeyConfiguredInEnvFile,
+  trustedWebserverSignFingerprint,
+  trustedWebserverSignPublicKeyPath,
+  claimedWebserverSignFingerprint
+}) {
+  const details = {
+    expectedType,
+    payloadMessageType: String(payload?.messageType || ""),
+    requestId: String(payload?.requestId || ""),
+    agentId: String(payload?.agentId || ""),
+    signKeyVersion: payload?.signKeyVersion ?? null,
+    sentAt,
+    configEnvFilePath,
+    webserverSignPublicKeyEnvVarName,
+    webserverSignPublicKeyPathSource,
+    webserverSignPublicKeyConfiguredInEnvFile,
+    trustedWebserverSignFingerprint,
+    trustedWebserverSignPublicKeyPath,
+    claimedWebserverSignFingerprint: claimedWebserverSignFingerprint || null
+  };
+
+  let message = `消息签名校验失败：localapp 当前信任的服务端签名公钥指纹为 ${trustedWebserverSignFingerprint}`;
+  const envCheckHint = `请检查 ${configEnvFilePath || "localapp/.env"} 中的 ${webserverSignPublicKeyEnvVarName || "WEBSERVER_SIGN_PUBLIC_KEY_PATH"} 是否配置为当前 webserver 的 webserver_sign_public.pem`;
+
+  if (claimedWebserverSignFingerprint) {
+    if (claimedWebserverSignFingerprint !== trustedWebserverSignFingerprint) {
+      message += `，消息附带的调试签名指纹为 ${claimedWebserverSignFingerprint}，二者不一致，${envCheckHint}`;
+    } else {
+      message += "，消息附带的调试签名指纹与本地一致，请继续检查服务端私钥是否和该公钥配套，或消息是否被篡改";
+    }
+  } else {
+    message += `，消息未附带可对照的调试签名指纹，${envCheckHint}`;
+  }
+
+  return new SecureCommandError(message, "invalid_signature", details);
+}
+
+function createDecryptFailureError({
+  expectedType,
+  payload,
+  sentAt,
+  configEnvFilePath,
+  authPrivateKeyEnvVarName,
+  authPrivateKeyPathSource,
+  authPrivateKeyConfiguredInEnvFile,
+  authPrivateKeyPath,
+  localAuthPublicKeyFingerprint,
+  suggestedAuthPublicKeyPath,
+  claimedAuthCodeFingerprint,
+  authCodeId,
+  rawError
+}) {
+  const cryptoError = rawError instanceof Error ? rawError.message : String(rawError);
+  const details = {
+    expectedType,
+    payloadMessageType: String(payload?.messageType || ""),
+    requestId: String(payload?.requestId || ""),
+    agentId: String(payload?.agentId || ""),
+    authCodeId,
+    encryptKeyVersion: payload?.encryptKeyVersion ?? null,
+    sentAt,
+    configEnvFilePath,
+    authPrivateKeyEnvVarName,
+    authPrivateKeyPathSource,
+    authPrivateKeyConfiguredInEnvFile,
+    authPrivateKeyPath,
+    localAuthPublicKeyFingerprint,
+    suggestedAuthPublicKeyPath,
+    claimedAuthCodeFingerprint: claimedAuthCodeFingerprint || null,
+    cryptoError
+  };
+
+  const authCodeCheckHint = `请检查 web 端当前设备保存的 auth_code 是否录入了 ${suggestedAuthPublicKeyPath || "当前 localapp 的 auth_public.pem"}，并确认它和 ${authPrivateKeyEnvVarName || "AUTH_PRIVATE_KEY_PATH"} 指向的私钥属于同一套密钥`;
+  let message = `安全消息解密失败：localapp 当前 auth 私钥对应的公钥指纹为 ${localAuthPublicKeyFingerprint}`;
+  let code = "decrypt_failed";
+
+  if (claimedAuthCodeFingerprint) {
+    if (claimedAuthCodeFingerprint !== localAuthPublicKeyFingerprint) {
+      message += `，web 端本次下发使用的 auth_code 指纹为 ${claimedAuthCodeFingerprint}，二者不一致，${authCodeCheckHint}`;
+      code = "auth_code_mismatch";
+    } else {
+      message += `，web 端本次下发使用的 auth_code 指纹同样为 ${claimedAuthCodeFingerprint}，但消息仍无法解密，${authCodeCheckHint}，同时检查消息是否损坏`;
+    }
+  } else {
+    message += `，消息未附带可对照的 auth_code 指纹，${authCodeCheckHint}`;
+  }
+
+  if (cryptoError) {
+    message += `；底层错误: ${cryptoError}`;
+  }
+
+  return new SecureCommandError(message, code, details);
+}
+
 function readTextFile(filePath) {
   try {
     return fs.readFileSync(filePath, "utf8");
@@ -174,4 +341,26 @@ function hasRequiredField(payload, fieldName) {
   }
 
   return Boolean(String(payload[fieldName] || "").trim());
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeOptionalString(value) {
+  const normalized = String(value || "").trim();
+  return normalized || "";
+}
+
+function exportPublicKeyPemFromPrivateKey(privateKey) {
+  return String(
+    crypto.createPublicKey(privateKey).export({
+      type: "spki",
+      format: "pem"
+    })
+  ).trimEnd();
+}
+
+function suggestAuthPublicKeyPath(authPrivateKeyPath) {
+  return path.join(path.dirname(authPrivateKeyPath), "auth_public.pem");
 }

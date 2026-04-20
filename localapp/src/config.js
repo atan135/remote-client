@@ -1,7 +1,14 @@
 import dotenv from "dotenv";
 import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-dotenv.config();
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const packageRoot = path.resolve(__dirname, "..");
+const envFilePath = path.join(packageRoot, ".env");
+const envLoadResult = dotenv.config({ path: envFilePath });
+const parsedEnv = isPlainObject(envLoadResult.parsed) ? envLoadResult.parsed : {};
 
 function toNumber(value, fallback) {
   const parsed = Number(value);
@@ -29,8 +36,18 @@ function toUniqueList(value) {
 
 export function loadConfig() {
   const hostname = os.hostname();
+  const authPrivateKeyPathConfig = resolvePathConfig(
+    "AUTH_PRIVATE_KEY_PATH",
+    "./keys/auth_private.pem"
+  );
+  const webserverSignPublicKeyPathConfig = resolvePathConfig(
+    "WEBSERVER_SIGN_PUBLIC_KEY_PATH",
+    "./keys/webserver_sign_public.pem"
+  );
 
   return {
+    envFilePath,
+    envFileLoaded: !envLoadResult.error,
     serverWsUrl: process.env.SERVER_WS_URL || "ws://localhost:3100/ws/agent",
     agentId: process.env.AGENT_ID || hostname,
     agentLabel: process.env.AGENT_LABEL || hostname,
@@ -42,10 +59,15 @@ export function loadConfig() {
     logLevel: process.env.LOG_LEVEL || "info",
     logDir: process.env.LOG_DIR || "logs",
     windowsOutputEncoding: process.env.WINDOWS_OUTPUT_ENCODING || "cp936",
-    authPrivateKeyPath: process.env.AUTH_PRIVATE_KEY_PATH || "./keys/auth_private.pem",
+    authPrivateKeyPath: authPrivateKeyPathConfig.value,
+    authPrivateKeyPathSource: authPrivateKeyPathConfig.source,
+    authPrivateKeyConfiguredInEnvFile: authPrivateKeyPathConfig.configuredInEnvFile,
     authPrivateKeyPassphrase: process.env.AUTH_PRIVATE_KEY_PASSPHRASE || "",
-    webserverSignPublicKeyPath:
-      process.env.WEBSERVER_SIGN_PUBLIC_KEY_PATH || "./keys/webserver_sign_public.pem",
+    webserverSignPublicKeyPath: webserverSignPublicKeyPathConfig.value,
+    webserverSignPublicKeyEnvVarName: "WEBSERVER_SIGN_PUBLIC_KEY_PATH",
+    webserverSignPublicKeyPathSource: webserverSignPublicKeyPathConfig.source,
+    webserverSignPublicKeyConfiguredInEnvFile:
+      webserverSignPublicKeyPathConfig.configuredInEnvFile,
     defaultShell:
       process.env.DEFAULT_SHELL || (os.platform() === "win32" ? "powershell.exe" : "/bin/bash"),
     maxTerminalSessions: toNumber(process.env.MAX_TERMINAL_SESSIONS, 4),
@@ -60,4 +82,24 @@ export function loadConfig() {
     localDebugServerPort: toNumber(process.env.LOCAL_DEBUG_SERVER_PORT, 3210),
     localDebugToken: process.env.LOCAL_DEBUG_TOKEN || ""
   };
+}
+
+function resolvePathConfig(envVarName, fallback) {
+  const runtimeValue = String(process.env[envVarName] || "").trim();
+  const envFileValue = String(parsedEnv[envVarName] || "").trim();
+  const normalizedValue = runtimeValue || fallback;
+
+  return {
+    value: normalizedValue,
+    source: envFileValue
+      ? "localapp_env"
+      : runtimeValue
+        ? "process_env"
+        : "default",
+    configuredInEnvFile: Boolean(envFileValue)
+  };
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

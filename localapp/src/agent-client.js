@@ -35,6 +35,10 @@ export class AgentClient {
     this.connect();
   }
 
+  inspectSecurityKeyMaterial() {
+    return this.secureCommandService.inspectLocalKeyMaterial();
+  }
+
   connect() {
     const url = new URL(this.config.serverWsUrl);
     url.searchParams.set("agentId", this.config.agentId);
@@ -317,6 +321,10 @@ export class AgentClient {
         ...unwrapped.payload,
         secureStatus: "verified",
         webserverSignFingerprint: unwrapped.meta.webserverSignFingerprint,
+        trustedWebserverSignFingerprint: unwrapped.meta.trustedWebserverSignFingerprint,
+        claimedWebserverSignFingerprint: unwrapped.meta.claimedWebserverSignFingerprint,
+        authCodeFingerprint: unwrapped.meta.authCodeFingerprint,
+        localAuthPublicKeyFingerprint: unwrapped.meta.localAuthPublicKeyFingerprint,
         authCodeId: unwrapped.meta.authCodeId
       };
 
@@ -326,7 +334,10 @@ export class AgentClient {
         agentId: this.config.agentId,
         command: payload.command,
         authCodeId: payload.authCodeId,
+        authCodeFingerprint: payload.authCodeFingerprint,
+        localAuthPublicKeyFingerprint: payload.localAuthPublicKeyFingerprint,
         webserverSignFingerprint: payload.webserverSignFingerprint,
+        claimedWebserverSignFingerprint: payload.claimedWebserverSignFingerprint,
         queueLength: this.commandQueue.length
       });
       this.processQueue();
@@ -471,12 +482,18 @@ export class AgentClient {
     const requestId = String(payload.requestId || "");
     const now = new Date().toISOString();
     const message = error instanceof Error ? error.message : String(error);
+    const details =
+      error && typeof error === "object" && error.details && typeof error.details === "object"
+        ? error.details
+        : {};
 
     logEvent(this.commandLogger, "warn", "command.secure_rejected", {
       requestId,
       agentId: this.config.agentId,
       authCodeId: payload.authCodeId ?? null,
-      error: message
+      errorCode: error?.code || "",
+      error: message,
+      ...details
     });
 
     if (!requestId) {

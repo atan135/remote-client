@@ -15,15 +15,44 @@ const profileRegistry = new ToolProfileRegistry(config);
 const sessionStore = new SessionStore(config.maxTerminalSessions * 4, config.sessionOutputLimit);
 const ptySessionManager = new PtySessionManager(config, loggers, profileRegistry, sessionStore);
 const executionGateway = new ExecutionGateway(config, ptySessionManager);
+const agent = new AgentClient(config, loggers, executionGateway, profileRegistry);
+const localDebugServer = new LocalDebugServer(config, loggers, executionGateway, profileRegistry);
 
 logEvent(loggers.agentLogger, "info", "agent.boot", {
   agentId: config.agentId,
   serverWsUrl: config.serverWsUrl,
+  envFilePath: config.envFilePath,
   logDir: loggers.logDir,
   authPrivateKeyPath: config.authPrivateKeyPath,
   webserverSignPublicKeyPath: config.webserverSignPublicKeyPath,
+  webserverSignPublicKeyEnvVarName: config.webserverSignPublicKeyEnvVarName,
+  webserverSignPublicKeyPathSource: config.webserverSignPublicKeyPathSource,
+  webserverSignPublicKeyConfiguredInEnvFile: config.webserverSignPublicKeyConfiguredInEnvFile,
   localDebugServerEnabled: config.localDebugServerEnabled
 });
+
+if (!config.webserverSignPublicKeyConfiguredInEnvFile) {
+  logEvent(loggers.agentLogger, "warn", "security.local_key_env_check", {
+    envFilePath: config.envFilePath,
+    envVarName: config.webserverSignPublicKeyEnvVarName,
+    configuredInEnvFile: config.webserverSignPublicKeyConfiguredInEnvFile,
+    effectivePath: config.webserverSignPublicKeyPath,
+    pathSource: config.webserverSignPublicKeyPathSource,
+    message:
+      "未在 localapp/.env 中显式配置服务端签名公钥路径，切换本地/线上服务端时请优先检查该配置"
+  });
+}
+
+try {
+  const securityKeyMaterial = agent.inspectSecurityKeyMaterial();
+  logEvent(loggers.agentLogger, "info", "security.local_key_ready", securityKeyMaterial);
+} catch (error) {
+  logEvent(loggers.agentLogger, "warn", "security.local_key_invalid", {
+    errorCode: error?.code || "",
+    error: error instanceof Error ? error.message : String(error),
+    ...(error?.details && typeof error.details === "object" ? error.details : {})
+  });
+}
 
 process.on("uncaughtException", (error) => {
   logEvent(loggers.agentLogger, "error", "process.uncaught_exception", {
@@ -37,9 +66,6 @@ process.on("unhandledRejection", (reason) => {
     reason: formatUnknownError(reason)
   });
 });
-
-const agent = new AgentClient(config, loggers, executionGateway, profileRegistry);
-const localDebugServer = new LocalDebugServer(config, loggers, executionGateway, profileRegistry);
 
 agent.start();
 localDebugServer.start();
