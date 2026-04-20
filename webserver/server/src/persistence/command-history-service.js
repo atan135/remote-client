@@ -139,9 +139,9 @@ export class CommandHistoryService {
             FROM command_runs
             WHERE agent_id = ?
             ORDER BY created_at DESC
-            LIMIT ?
+            LIMIT ${normalizedLimit}
           `,
-          [String(agentId || ""), normalizedLimit]
+          [String(agentId || "")]
         )
       : await this.pool.execute(
           `
@@ -167,9 +167,8 @@ export class CommandHistoryService {
               completed_at
             FROM command_runs
             ORDER BY created_at DESC
-            LIMIT ?
-          `,
-          [normalizedLimit]
+            LIMIT ${normalizedLimit}
+          `
         );
 
     return rows.map(serializeStoredCommandRun);

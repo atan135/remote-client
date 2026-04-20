@@ -269,9 +269,8 @@ export class TerminalSessionHistoryService {
           closed_at
         FROM terminal_sessions
         ORDER BY created_at DESC
-        LIMIT ?
-      `,
-      [normalizedLimit]
+        LIMIT ${normalizedLimit}
+      `
     );
 
     return rows.map(serializeStoredTerminalSession);
