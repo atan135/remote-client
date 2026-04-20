@@ -787,39 +787,6 @@ textarea {
   padding-bottom: 0;
 }
 
-.explore-transcript-panel {
-  margin-top: 0;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-}
-
-.explore-transcript-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.explore-transcript-head h4 {
-  margin: 0;
-}
-
-.explore-transcript-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-.explore-transcript-panel pre {
-  margin-top: 10px;
-  max-height: min(48vh, 420px);
-  overflow: auto;
-  padding-right: 6px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  scrollbar-width: thin;
-}
-
 .explore-transcript-empty {
   margin-top: 10px;
 }

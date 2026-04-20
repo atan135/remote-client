@@ -51,6 +51,7 @@ const fallbackTerminalProfiles = Object.freeze([
     envAllowlist: []
   }
 ]);
+const TERMINAL_OUTPUT_BUFFER_LIMIT = 200;
 
 const agents = ref([]);
 const commands = ref([]);
@@ -1639,7 +1640,10 @@ function upsertTerminalSession(item) {
   );
 
   if (index === -1) {
-    terminalSessions.value.unshift(item);
+    terminalSessions.value.unshift({
+      ...item,
+      outputs: clampTerminalOutputs(Array.isArray(item.outputs) ? item.outputs : [])
+    });
   } else {
     const currentOutputs = Array.isArray(terminalSessions.value[index].outputs)
       ? terminalSessions.value[index].outputs
@@ -1653,7 +1657,7 @@ function upsertTerminalSession(item) {
         typeof item.finalText === "string"
           ? item.finalText
           : terminalSessions.value[index].finalText || "",
-      outputs: incomingOutputs.length > 0 ? incomingOutputs : currentOutputs
+      outputs: clampTerminalOutputs(incomingOutputs.length > 0 ? incomingOutputs : currentOutputs)
     };
   }
 
@@ -1707,7 +1711,7 @@ function appendTerminalSessionOutput(output) {
 
   outputs.push(output);
   outputs.sort((left, right) => Number(left.seq || 0) - Number(right.seq || 0));
-  sessionRecord.outputs = outputs;
+  sessionRecord.outputs = clampTerminalOutputs(outputs);
   sessionRecord.lastOutputAt = output.sentAt || sessionRecord.lastOutputAt;
 }
 
@@ -1726,9 +1730,19 @@ function mergeTerminalSessionSnapshot(existingSessions, snapshotSessions) {
     return {
       ...(existing || {}),
       ...(item || {}),
-      outputs: incomingOutputs.length > 0 ? incomingOutputs : existingOutputs
+      outputs: clampTerminalOutputs(
+        incomingOutputs.length > 0 ? incomingOutputs : existingOutputs
+      )
     };
   });
+}
+
+function clampTerminalOutputs(outputs) {
+  if (!Array.isArray(outputs) || outputs.length === 0) {
+    return [];
+  }
+
+  return outputs.slice(-TERMINAL_OUTPUT_BUFFER_LIMIT);
 }
 
 function reconcileMissingTerminalSession(sessionId) {
