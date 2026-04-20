@@ -803,6 +803,87 @@ textarea {
   margin-top: 14px;
 }
 
+.timeline-card > .el-card__body {
+  padding: 14px 16px;
+}
+
+.timeline-summary {
+  display: grid;
+  gap: 10px;
+}
+
+.timeline-summary-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.timeline-summary-top h3 {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.98rem;
+  line-height: 1.35;
+}
+
+.timeline-summary-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.timeline-summary-item {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding: 5px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+  line-height: 1.2;
+}
+
+.timeline-summary-label {
+  flex-shrink: 0;
+  color: var(--text-dim);
+}
+
+.timeline-summary-item strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.timeline-summary-device {
+  max-width: 100%;
+}
+
+.timeline-toggle {
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.timeline-details {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
 .nested-card > .el-card__body {
   padding: 16px;
 }
@@ -1044,6 +1125,41 @@ textarea {
 
   .explore-session-top-actions {
     flex-shrink: 0;
+  }
+
+  .timeline-card > .el-card__body {
+    padding: 12px 14px;
+  }
+
+  .timeline-summary {
+    gap: 8px;
+  }
+
+  .timeline-summary-top {
+    align-items: flex-start;
+  }
+
+  .timeline-summary-top h3 {
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .timeline-summary-meta {
+    gap: 6px;
+  }
+
+  .timeline-summary-item {
+    max-width: 100%;
+  }
+
+  .timeline-summary-device {
+    flex: 1 1 100%;
+  }
+
+  .timeline-toggle {
+    margin-left: 0;
   }
 
   .explore-mode-tabs > .el-tabs__header {
