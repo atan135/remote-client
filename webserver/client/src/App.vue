@@ -64,11 +64,13 @@ const commandInput = ref("");
 const terminalProfile = ref("");
 const terminalCwd = ref("");
 const terminalInput = ref("");
+const remoteFilePath = ref("");
 const bootstrapping = ref(true);
 const authenticating = ref(false);
 const submitting = ref(false);
 const creatingTerminalSession = ref(false);
 const sendingTerminalInput = ref(false);
+const readingRemoteFile = ref(false);
 const loadingUsers = ref(false);
 const loadingAuthCodes = ref(false);
 const creatingUser = ref(false);
@@ -82,6 +84,8 @@ const terminatingTerminalSessionId = ref(null);
 const deletingTerminalSessionId = ref(null);
 const session = ref(null);
 const authMode = ref("login");
+const remoteFileError = ref("");
+const remoteFileViewer = ref(createEmptyRemoteFileViewer());
 
 const loginForm = reactive({
   username: "",
@@ -273,6 +277,7 @@ const currentTab = computed(
 watch(selectedAgentId, () => {
   ensureSelectedTerminalProfile();
   ensureSelectedTerminalSession();
+  resetRemoteFileViewer();
 });
 
 watch(availableTerminalProfiles, () => {
@@ -683,6 +688,65 @@ async function sendTerminalInput(payloadOrSessionId = activeTerminalSession.valu
     wsState.error = error.message;
   } finally {
     sendingTerminalInput.value = false;
+  }
+}
+
+function updateRemoteFilePath(value) {
+  remoteFilePath.value = String(value || "");
+  remoteFileError.value = "";
+}
+
+async function openRemoteFile(payload = {}) {
+  const sessionId = String(payload?.sessionId || activeTerminalSession.value?.sessionId || "").trim();
+  const filePath = String(payload?.filePath || remoteFilePath.value || "").trim();
+
+  if (!selectedAgentId.value || !sessionId) {
+    return;
+  }
+
+  if (!filePath) {
+    remoteFileError.value = "请输入要打开的文件路径";
+    return;
+  }
+
+  if (!activeAuthCodeBinding.value) {
+    remoteFileError.value = "请先为当前设备配置 auth_code，再读取文件";
+    return;
+  }
+
+  readingRemoteFile.value = true;
+  remoteFileError.value = "";
+
+  try {
+    const response = await fetch("/api/remote-files/read", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        agentId: selectedAgentId.value,
+        sessionId,
+        filePath
+      })
+    });
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      return;
+    }
+
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(result.message || "远程读取文件失败");
+    }
+
+    remoteFileViewer.value = normalizeRemoteFileViewer(result.item, sessionId);
+    remoteFilePath.value = remoteFileViewer.value.filePath || filePath;
+  } catch (error) {
+    remoteFileError.value = error.message;
+  } finally {
+    readingRemoteFile.value = false;
   }
 }
 
@@ -1528,6 +1592,7 @@ function resetAuthedState() {
   terminalProfile.value = "";
   terminalCwd.value = "";
   terminalInput.value = "";
+  resetRemoteFileViewer();
   terminalSocketInputQueue.length = 0;
   pendingTerminalSocketInputs.length = 0;
   flushingTerminalSocketInput = false;
@@ -1619,6 +1684,10 @@ function removeTerminalSession(sessionId) {
   }
 
   pendingTerminalResizes.delete(normalizedSessionId);
+
+  if (remoteFileViewer.value.sessionId === normalizedSessionId) {
+    resetRemoteFileViewer({ preservePath: true });
+  }
 }
 
 function appendTerminalSessionOutput(output) {
@@ -1751,6 +1820,51 @@ function normalizeFinalOutputMarkers(markers) {
   return { start, end };
 }
 
+function resetRemoteFileViewer({ preservePath = false } = {}) {
+  remoteFileViewer.value = createEmptyRemoteFileViewer();
+  remoteFileError.value = "";
+
+  if (!preservePath) {
+    remoteFilePath.value = "";
+  }
+}
+
+function createEmptyRemoteFileViewer() {
+  return {
+    sessionId: "",
+    requestId: "",
+    agentId: "",
+    filePath: "",
+    resolvedPath: "",
+    content: "",
+    truncated: false,
+    bytesRead: 0,
+    totalBytes: 0,
+    encoding: "utf8",
+    modifiedAt: null,
+    readAt: null,
+    openedAt: ""
+  };
+}
+
+function normalizeRemoteFileViewer(item, sessionId) {
+  return {
+    sessionId: String(sessionId || ""),
+    requestId: String(item?.requestId || ""),
+    agentId: String(item?.agentId || ""),
+    filePath: String(item?.filePath || ""),
+    resolvedPath: String(item?.resolvedPath || ""),
+    content: String(item?.content || ""),
+    truncated: Boolean(item?.truncated),
+    bytesRead: Number(item?.bytesRead || 0),
+    totalBytes: Number(item?.totalBytes || 0),
+    encoding: String(item?.encoding || "utf8"),
+    modifiedAt: item?.modifiedAt || null,
+    readAt: item?.readAt || null,
+    openedAt: new Date().toISOString()
+  };
+}
+
 function useSelectedAgentIdForAuthCode() {
   if (!selectedAgentId.value) {
     wsState.error = "请先选择设备";
@@ -1809,6 +1923,9 @@ function useSelectedAgentIdForAuthCode() {
           :terminal-profile="terminalProfile"
           :terminal-cwd="terminalCwd"
           :terminal-input="terminalInput"
+          :remote-file-path="remoteFilePath"
+          :remote-file-viewer="remoteFileViewer"
+          :remote-file-error="remoteFileError"
           :available-terminal-profiles="availableTerminalProfiles"
           :terminal-sessions="visibleTerminalSessions"
           :active-terminal-session="activeTerminalSession"
@@ -1819,6 +1936,7 @@ function useSelectedAgentIdForAuthCode() {
           :submitting="submitting"
           :creating-terminal-session="creatingTerminalSession"
           :sending-terminal-input="sendingTerminalInput"
+          :reading-remote-file="readingRemoteFile"
           :terminating-terminal-session-id="terminatingTerminalSessionId || ''"
           :deleting-terminal-session-id="deletingTerminalSessionId || ''"
           @update:selected-agent-id="selectedAgentId = $event"
@@ -1826,11 +1944,13 @@ function useSelectedAgentIdForAuthCode() {
           @update:terminal-profile="terminalProfile = $event"
           @update:terminal-cwd="terminalCwd = $event"
           @update:terminal-input="terminalInput = $event"
+          @update:remote-file-path="updateRemoteFilePath"
           @select:terminal-session="selectedTerminalSessionId = $event"
           @submit-command="submitCommand"
           @create-terminal-session="createTerminalSession"
           @send-terminal-input="sendTerminalInput"
           @send-terminal-raw-input="queueTerminalRawInput($event)"
+          @open-remote-file="openRemoteFile"
           @resize-terminal-session="queueTerminalResize($event)"
           @terminate-terminal-session="terminateTerminalSession"
           @delete-terminal-session="deleteTerminalSession"

@@ -115,6 +115,7 @@ export function loadConfig() {
     defaultShell:
       process.env.DEFAULT_SHELL || (os.platform() === "win32" ? "powershell.exe" : "/bin/bash"),
     windowsUseConpty: toOptionalBoolean(process.env.WINDOWS_USE_CONPTY),
+    remoteFileMaxBytes: toNumber(process.env.REMOTE_FILE_MAX_BYTES, 1024 * 1024),
     maxTerminalSessions: toNumber(process.env.MAX_TERMINAL_SESSIONS, 4),
     sessionIdleTimeoutMs: toNumber(process.env.SESSION_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
     sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 200),

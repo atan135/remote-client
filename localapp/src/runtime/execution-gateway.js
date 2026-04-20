@@ -1,4 +1,5 @@
 import { runCommand } from "../command-runner.js";
+import { readTextFilePreview } from "../file-reader.js";
 
 export class ExecutionGateway {
   constructor(config, ptySessionManager) {
@@ -8,6 +9,27 @@ export class ExecutionGateway {
 
   executeCommand(command) {
     return runCommand(command, this.config);
+  }
+
+  async readTextFile(filePath, options = {}) {
+    const baseCwd = await this.resolveRemoteFileBaseCwd(options.sessionId, filePath);
+
+    return readTextFilePreview(filePath, {
+      baseCwd,
+      maxBytes: this.config.remoteFileMaxBytes,
+      windowsEncoding: this.config.windowsOutputEncoding
+    });
+  }
+
+  async resolveRemoteFileBaseCwd(sessionId, filePath) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedFilePath = String(filePath || "").trim();
+
+    if (!normalizedSessionId || !normalizedFilePath) {
+      return "";
+    }
+
+    return this.ptySessionManager.querySessionCwd(normalizedSessionId, normalizedFilePath);
   }
 
   createTerminalSession(options) {

@@ -1,5 +1,9 @@
+import path from "node:path";
+
 import { logEvent } from "../logger.js";
 import { TerminalSessionRunner } from "./runners/terminal-session-runner.js";
+
+const SESSION_CWD_QUERY_TIMEOUT_MS = 4000;
 
 export class PtySessionManager {
   constructor(config, loggers, profileRegistry, sessionStore) {
@@ -9,6 +13,7 @@ export class PtySessionManager {
     this.sessionStore = sessionStore;
     this.runner = new TerminalSessionRunner(config);
     this.handles = new Map();
+    this.pendingCwdQueries = new Map();
   }
 
   createSession({
@@ -226,6 +231,28 @@ export class PtySessionManager {
       .filter((session) => !activeOnly || !isClosedSessionStatus(session.status));
   }
 
+  querySessionCwd(sessionId, filePath = "") {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedFilePath = String(filePath || "").trim();
+
+    if (!normalizedSessionId || !normalizedFilePath || path.isAbsolute(normalizedFilePath)) {
+      return Promise.resolve("");
+    }
+
+    const pending = this.pendingCwdQueries.get(normalizedSessionId);
+
+    if (pending) {
+      return pending;
+    }
+
+    const promise = this.querySessionCwdInternal(normalizedSessionId).finally(() => {
+      this.pendingCwdQueries.delete(normalizedSessionId);
+    });
+
+    this.pendingCwdQueries.set(normalizedSessionId, promise);
+    return promise;
+  }
+
   getRequiredHandle(sessionId) {
     const handle = this.handles.get(sessionId);
 
@@ -254,6 +281,25 @@ export class PtySessionManager {
 
   touchSession(handle) {
     this.armIdleTimer(handle);
+  }
+
+  async querySessionCwdInternal(sessionId) {
+    const handle = this.getRequiredHandle(sessionId);
+    const profile = this.profileRegistry.getProfile(handle.profileName);
+    const probe = createSessionCwdProbe(profile.command);
+
+    if (!probe) {
+      throw new Error("当前终端类型暂不支持自动获取实时目录，请直接输入绝对路径");
+    }
+
+    this.touchSession(handle);
+    const cwd = await readSessionCwdFromPty(handle.ptyProcess, probe);
+
+    if (!cwd) {
+      throw new Error("当前终端目录为空，无法解析相对路径");
+    }
+
+    return cwd;
   }
 
   handleExit(handle, exitCode, signal) {
@@ -327,4 +373,115 @@ function isClosedSessionStatus(status) {
 function normalizeTerminalDimension(value) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function createSessionCwdProbe(command) {
+  const startMarker = String.fromCharCode(30);
+  const endMarker = String.fromCharCode(31);
+  const executableName = path.basename(String(command || "").trim()).toLowerCase();
+
+  if (["powershell", "powershell.exe", "pwsh", "pwsh.exe"].includes(executableName)) {
+    return {
+      startMarker,
+      endMarker,
+      input: `Write-Output ([char]30 + (pwd | Select-Object -ExpandProperty Path) + [char]31)\r`
+    };
+  }
+
+  if (executableName === "cmd" || executableName === "cmd.exe") {
+    return {
+      startMarker,
+      endMarker,
+      input: `for /f "delims=" %i in ('cd') do <nul set /p=${startMarker}%i${endMarker} & echo.\r`
+    };
+  }
+
+  if (["bash", "sh", "zsh", "fish"].includes(executableName)) {
+    return {
+      startMarker,
+      endMarker,
+      input: `printf '\\036'; pwd | tr -d '\\r\\n'; printf '\\037\\n'\r`
+    };
+  }
+
+  return null;
+}
+
+function readSessionCwdFromPty(ptyProcess, probe) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let output = "";
+    let timeout = null;
+    let subscription = null;
+
+    const cleanup = () => {
+      if (timeout) {
+        clearTimeout(timeout);
+        timeout = null;
+      }
+
+      if (subscription?.dispose) {
+        subscription.dispose();
+      }
+    };
+
+    const finish = (callback) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    subscription = ptyProcess.onData((chunk) => {
+      output += String(chunk || "");
+      const cwd = extractSessionCwdFromOutput(output, probe.startMarker, probe.endMarker);
+
+      if (!cwd) {
+        return;
+      }
+
+      finish(() => resolve(cwd));
+    });
+
+    timeout = setTimeout(() => {
+      finish(() =>
+        reject(new Error("获取当前终端目录超时，请确认当前会话仍可交互"))
+      );
+    }, SESSION_CWD_QUERY_TIMEOUT_MS);
+
+    try {
+      ptyProcess.write(probe.input);
+    } catch (error) {
+      finish(() => reject(error));
+    }
+  });
+}
+
+function extractSessionCwdFromOutput(output, startMarker, endMarker) {
+  const text = stripAnsiSequences(String(output || ""));
+  const startIndex = text.lastIndexOf(startMarker);
+
+  if (startIndex < 0) {
+    return "";
+  }
+
+  const endIndex = text.indexOf(endMarker, startIndex + startMarker.length);
+
+  if (endIndex < 0) {
+    return "";
+  }
+
+  const rawValue = text.slice(startIndex + startMarker.length, endIndex);
+  return rawValue.replace(/[\r\n]+/g, "").trim();
+}
+
+function stripAnsiSequences(text) {
+  return String(text || "")
+    .replace(/\u001b\][^\u0007]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001bP[\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b[@-_]/g, "");
 }

@@ -24,6 +24,8 @@ export class CommandStore {
       exitCode: null,
       stdout: "",
       stderr: "",
+      stdoutChars: 0,
+      stderrChars: 0,
       error: ""
     };
 

@@ -1,5 +1,7 @@
 import WebSocket from "ws";
 
+const MAX_BROWSER_SOCKET_BUFFER_BYTES = 4 * 1024 * 1024;
+
 function createMessage(type, payload) {
   return JSON.stringify({
     type,
@@ -22,17 +24,40 @@ export class BrowserHub {
   }
 
   send(socket, type, payload) {
-    if (socket.readyState !== WebSocket.OPEN) {
-      return;
-    }
-
-    socket.send(createMessage(type, payload));
+    this.sendRaw(socket, createMessage(type, payload));
   }
 
   broadcast(type, payload) {
+    const message = createMessage(type, payload);
+
     for (const socket of this.sockets) {
-      this.send(socket, type, payload);
+      this.sendRaw(socket, message);
     }
   }
-}
 
+  sendRaw(socket, message) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      this.remove(socket);
+      return;
+    }
+
+    if (Number(socket.bufferedAmount || 0) > MAX_BROWSER_SOCKET_BUFFER_BYTES) {
+      this.drop(socket);
+      return;
+    }
+
+    try {
+      socket.send(message);
+    } catch {
+      this.drop(socket);
+    }
+  }
+
+  drop(socket) {
+    this.remove(socket);
+
+    try {
+      socket.terminate();
+    } catch {}
+  }
+}

@@ -17,6 +17,7 @@ import { createMysqlPool } from "./db/mysql.js";
 import { configureLogging, logEvent } from "./logger.js";
 import {
   CommandHistoryService,
+  createCommandOutputPreview,
   summarizeCommandRecord
 } from "./persistence/command-history-service.js";
 import {
@@ -53,6 +54,8 @@ const terminalSessionStore = new TerminalSessionStore(
 const browserHub = new BrowserHub();
 const commandDispatchContextSymbol = Symbol("commandDispatchContext");
 const pendingAgentDisconnects = new Map();
+const pendingRemoteFileReads = new Map();
+const remoteFileReadTimeoutMs = Math.max(5000, Math.min(config.secureCommandTtlMs, 20000));
 
 const agentSocketServer = new WebSocketServer({ noServer: true });
 const browserSocketServer = new WebSocketServer({ noServer: true });
@@ -499,6 +502,10 @@ app.delete("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
   void handleTerminalSessionDeleteRequest(req, res);
 });
 
+app.post("/api/remote-files/read", requireAuth, (req, res) => {
+  void handleRemoteFileReadRequest(req, res);
+});
+
 async function handleCommandRequest(req, res) {
   const command = String(req.body?.command || "").trim();
   const agentId = String(req.body?.agentId || "").trim();
@@ -660,7 +667,7 @@ async function handleTerminalSessionCreateRequest(req, res) {
       username: req.auth.user.username
     });
 
-    browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
+    broadcastTerminalSessionUpdate(record);
 
     if (dispatchResult === "failed") {
       res.status(500).json({
@@ -743,7 +750,7 @@ async function handleTerminalSessionTerminateRequest(req, res) {
           updatedAt: now,
           closedAt: storedSession.closedAt || now
         };
-      browserHub.broadcast("terminal.session.updated", item);
+      broadcastTerminalSessionUpdate(item);
       res.json({
         ok: true,
         reconciled: true,
@@ -798,10 +805,7 @@ async function handleTerminalSessionTerminateRequest(req, res) {
       status: "terminating"
     });
     void persistTerminalSessionRecord(updatedSession || session);
-    browserHub.broadcast(
-      "terminal.session.updated",
-      serializeTerminalSession(terminalSessionStore.get(sessionId))
-    );
+    broadcastTerminalSessionUpdate(terminalSessionStore.get(sessionId));
 
     res.status(202).json({
       ok: true,
@@ -864,6 +868,38 @@ async function handleTerminalSessionDeleteRequest(req, res) {
       error: error.message
     });
     res.status(500).json({ message: error.message || "终端会话删除失败" });
+  }
+}
+
+async function handleRemoteFileReadRequest(req, res) {
+  const agentId = String(req.body?.agentId || "").trim();
+  const sessionId = String(req.body?.sessionId || "").trim();
+  const filePath = normalizeRemoteFilePath(req.body?.filePath);
+
+  if (!agentId || !filePath) {
+    res.status(400).json({ message: "agentId and filePath are required" });
+    return;
+  }
+
+  try {
+    const item = await dispatchRemoteFileReadForUser({
+      user: req.auth.user,
+      agentId,
+      sessionId,
+      filePath
+    });
+
+    res.json({ item });
+  } catch (error) {
+    logEvent(commandLogger, "warn", "file.read.request_failed", {
+      agentId,
+      sessionId,
+      filePath,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(error.statusCode || 500).json({ message: error.message || "远程读取文件失败" });
   }
 }
 
@@ -988,6 +1024,16 @@ browserSocketServer.on("connection", (socket) => {
     void handleBrowserMessage(socket, raw);
   });
 
+  socket.on("error", (error) => {
+    browserHub.remove(socket);
+    logEvent(serverLogger, "warn", "browser.websocket_error", {
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      error: error.message,
+      subscribers: browserHub.sockets.size
+    });
+  });
+
   socket.on("close", () => {
     browserHub.remove(socket);
     logEvent(serverLogger, "info", "browser.websocket_disconnected", {
@@ -1060,6 +1106,7 @@ function scheduleAgentDisconnectHandling(agentId, meta = {}) {
 
     const changedCommands = commandStore.markAgentDisconnected(agentId);
     const changedSessions = terminalSessionStore.markAgentDisconnected(agentId);
+    rejectPendingRemoteFileReadsByAgent(agentId, "目标 agent 已断开连接，文件读取未完成");
 
     logEvent(serverLogger, "warn", "agent.disconnect_grace_expired", {
       agentId,
@@ -1076,7 +1123,7 @@ function scheduleAgentDisconnectHandling(agentId, meta = {}) {
 
     for (const session of changedSessions) {
       void persistTerminalSessionRecord(session);
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+      broadcastTerminalSessionUpdate(session);
     }
   }, config.agentDisconnectGraceMs);
 
@@ -1096,6 +1143,142 @@ function clearPendingAgentDisconnect(agentId) {
 
   pendingAgentDisconnects.delete(agentId);
   return pending;
+}
+
+function createPendingRemoteFileRead({ requestId, agentId, filePath, user }) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingRemoteFileReads.delete(requestId);
+      logEvent(commandLogger, "warn", "file.read.timeout", {
+        requestId,
+        agentId,
+        filePath,
+        userId: user.id,
+        username: user.username,
+        timeoutMs: remoteFileReadTimeoutMs
+      });
+      reject(createHttpError(504, "远程读取文件超时"));
+    }, remoteFileReadTimeoutMs);
+
+    pendingRemoteFileReads.set(requestId, {
+      requestId,
+      agentId,
+      filePath,
+      userId: user.id,
+      username: user.username,
+      timer,
+      resolve,
+      reject
+    });
+  });
+}
+
+function cancelPendingRemoteFileRead(requestId) {
+  const pending = pendingRemoteFileReads.get(String(requestId || "").trim());
+
+  if (!pending) {
+    return null;
+  }
+
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  pendingRemoteFileReads.delete(pending.requestId);
+  return pending;
+}
+
+function resolveRemoteFileReadRequest(payload) {
+  const requestId = String(payload?.requestId || "").trim();
+  const pending = cancelPendingRemoteFileRead(requestId);
+
+  if (!pending) {
+    return;
+  }
+
+  const item = {
+    requestId,
+    agentId: String(payload?.agentId || pending.agentId || ""),
+    filePath: String(payload?.filePath || pending.filePath || ""),
+    resolvedPath: String(payload?.resolvedPath || payload?.filePath || ""),
+    content: String(payload?.content || ""),
+    truncated: Boolean(payload?.truncated),
+    bytesRead: Number(payload?.bytesRead || 0),
+    totalBytes: Number(payload?.totalBytes || 0),
+    encoding: String(payload?.encoding || "utf8"),
+    modifiedAt: payload?.modifiedAt || null,
+    readAt: payload?.readAt || new Date().toISOString()
+  };
+
+  logEvent(commandLogger, "info", "file.read.completed", {
+    requestId,
+    agentId: item.agentId,
+    filePath: item.filePath,
+    resolvedPath: item.resolvedPath,
+    truncated: item.truncated,
+    bytesRead: item.bytesRead,
+    totalBytes: item.totalBytes,
+    encoding: item.encoding,
+    userId: pending.userId,
+    username: pending.username
+  });
+
+  pending.resolve(item);
+}
+
+function rejectRemoteFileReadRequest(payload) {
+  const requestId = String(payload?.requestId || "").trim();
+  const pending = cancelPendingRemoteFileRead(requestId);
+
+  if (!pending) {
+    return;
+  }
+
+  const errorMessage = String(payload?.error || "远程读取文件失败");
+  const errorCode = String(payload?.errorCode || "");
+
+  logEvent(commandLogger, "warn", "file.read.failed", {
+    requestId,
+    agentId: String(payload?.agentId || pending.agentId || ""),
+    filePath: String(payload?.filePath || pending.filePath || ""),
+    errorCode,
+    error: errorMessage,
+    userId: pending.userId,
+    username: pending.username
+  });
+
+  pending.reject(createHttpError(mapRemoteFileReadErrorCode(errorCode), errorMessage));
+}
+
+function rejectPendingRemoteFileReadsByAgent(agentId, errorMessage) {
+  const normalizedAgentId = String(agentId || "").trim();
+
+  if (!normalizedAgentId) {
+    return;
+  }
+
+  for (const [requestId, pending] of pendingRemoteFileReads.entries()) {
+    if (pending.agentId !== normalizedAgentId) {
+      continue;
+    }
+
+    cancelPendingRemoteFileRead(requestId);
+    pending.reject(createHttpError(409, errorMessage));
+  }
+}
+
+function mapRemoteFileReadErrorCode(errorCode) {
+  const normalized = String(errorCode || "").trim().toUpperCase();
+
+  if (normalized === "ENOENT") {
+    return 404;
+  }
+
+  if (normalized === "EACCES" || normalized === "EPERM") {
+    return 403;
+  }
+
+  return 400;
 }
 
 function reconcileMissingAgentTerminalSessions(agentId, syncedTerminalSessions) {
@@ -1154,11 +1337,11 @@ async function handleAgentMessage(agentId, socket, message) {
     });
     browserHub.broadcast("agent.updated", agent);
     for (const session of syncedTerminalSessions) {
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+      broadcastTerminalSessionUpdate(session);
       void persistTerminalSessionRecord(session);
     }
     for (const session of missingTerminalSessions) {
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+      broadcastTerminalSessionUpdate(session);
       void persistTerminalSessionRecord(session);
     }
     dispatchQueuedCommands(agent.agentId);
@@ -1197,12 +1380,16 @@ async function handleAgentMessage(agentId, socket, message) {
   }
 
   if (message.type === "command.finished") {
+    const stdout = String(message.payload.stdout || "");
+    const stderr = String(message.payload.stderr || "");
     const record = commandStore.update(message.payload.requestId, {
       status: message.payload.status,
       secureStatus: message.payload.secureStatus || inferSecureStatusFromResult(message.payload),
       exitCode: message.payload.exitCode,
-      stdout: message.payload.stdout || "",
-      stderr: message.payload.stderr || "",
+      stdout: createCommandOutputPreview(stdout),
+      stderr: createCommandOutputPreview(stderr),
+      stdoutChars: stdout.length,
+      stderrChars: stderr.length,
       error: message.payload.error || "",
       securityError: message.payload.securityError || "",
       startedAt: message.payload.startedAt || null,
@@ -1239,6 +1426,16 @@ async function handleAgentMessage(agentId, socket, message) {
     return;
   }
 
+  if (message.type === "file.read.completed") {
+    resolveRemoteFileReadRequest(message.payload);
+    return;
+  }
+
+  if (message.type === "file.read.error") {
+    rejectRemoteFileReadRequest(message.payload);
+    return;
+  }
+
   if (message.type === "terminal.session.created") {
     const record = terminalSessionStore.update(message.payload.sessionId, {
       status: "running",
@@ -1249,7 +1446,7 @@ async function handleAgentMessage(agentId, socket, message) {
 
     if (record) {
       void persistTerminalSessionRecord(record);
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
+      broadcastTerminalSessionUpdate(record);
     }
 
     return;
@@ -1263,7 +1460,7 @@ async function handleAgentMessage(agentId, socket, message) {
 
     if (record) {
       void persistTerminalSessionRecord(record);
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
+      broadcastTerminalSessionUpdate(record);
     }
 
     return;
@@ -1306,10 +1503,12 @@ async function handleAgentMessage(agentId, socket, message) {
         browserSubscribers: browserHub.sockets.size
       });
       browserHub.broadcast("terminal.session.output", result.output);
-      browserHub.broadcast(
-        "terminal.session.updated",
-        serializeTerminalSession(terminalSessionStore.get(result.record.sessionId) || updatedRecord)
-      );
+
+      if (reconnectPatch || finalPatch) {
+        broadcastTerminalSessionUpdate(
+          terminalSessionStore.get(result.record.sessionId) || updatedRecord
+        );
+      }
     }
 
     if (!result) {
@@ -1335,7 +1534,7 @@ async function handleAgentMessage(agentId, socket, message) {
     if (record) {
       void persistTerminalSessionRecord(record);
       void maybeSyncTerminalSessionTurn(record, { allowEmpty: true });
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
+      broadcastTerminalSessionUpdate(record);
     }
 
     return;
@@ -1350,7 +1549,7 @@ async function handleAgentMessage(agentId, socket, message) {
     if (record) {
       void persistTerminalSessionRecord(record);
       void maybeSyncTerminalSessionTurn(record, { allowEmpty: true });
-      browserHub.broadcast("terminal.session.updated", serializeTerminalSession(record));
+      broadcastTerminalSessionUpdate(record);
     }
   }
 }
@@ -1667,6 +1866,39 @@ function dispatchTerminalSessionTerminate(sessionRecord, context) {
   socket.send(JSON.stringify(secureEnvelope));
 }
 
+function dispatchRemoteFileRead(agentId, context) {
+  const socket = agentRegistry.getSocket(agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createHttpError(409, "目标 agent 当前不在线");
+  }
+
+  const requestId = randomUUID();
+  const secureEnvelope = secureCommandService.createFileReadEnvelope({
+    requestId,
+    agentId,
+    sessionId: context.sessionId,
+    filePath: context.filePath,
+    operatorUser: context.user,
+    authCodeBinding: context.authCodeBinding
+  });
+  const pendingPromise = createPendingRemoteFileRead({
+    requestId,
+    agentId,
+    filePath: context.filePath,
+    user: context.user
+  });
+
+  try {
+    socket.send(JSON.stringify(secureEnvelope));
+  } catch (error) {
+    cancelPendingRemoteFileRead(requestId);
+    throw error;
+  }
+
+  return pendingPromise;
+}
+
 async function dispatchTerminalSessionInputForUser({ user, sessionId, input, logicalInput = "" }) {
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedInput = String(input || "");
@@ -1703,7 +1935,7 @@ async function dispatchTerminalSessionInputForUser({ user, sessionId, input, log
         finalTextUpdatedAt: null
       }) || session;
     void persistTerminalSessionRecord(session);
-    browserHub.broadcast("terminal.session.updated", serializeTerminalSession(session));
+    broadcastTerminalSessionUpdate(session);
   }
 
   dispatchTerminalSessionInput(session, {
@@ -1754,6 +1986,47 @@ async function dispatchTerminalSessionResizeForUser({ user, sessionId, cols, row
   });
 
   return session;
+}
+
+async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePath }) {
+  const normalizedAgentId = String(agentId || "").trim();
+  const normalizedSessionId = String(sessionId || "").trim();
+  const normalizedFilePath = normalizeRemoteFilePath(filePath);
+
+  if (!normalizedAgentId || !normalizedFilePath) {
+    throw createHttpError(400, "agentId and filePath are required");
+  }
+
+  const socket = agentRegistry.getSocket(normalizedAgentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createHttpError(409, "目标 agent 当前不在线");
+  }
+
+  const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, normalizedAgentId);
+
+  if (!authCodeBinding) {
+    throw createHttpError(400, "当前用户未为该设备配置 auth_code");
+  }
+
+  logEvent(commandLogger, "info", "file.read.requested", {
+    agentId: normalizedAgentId,
+    sessionId: normalizedSessionId,
+    filePath: normalizedFilePath,
+    userId: user.id,
+    username: user.username
+  });
+
+  try {
+    return await dispatchRemoteFileRead(normalizedAgentId, {
+      user,
+      authCodeBinding,
+      sessionId: normalizedSessionId,
+      filePath: normalizedFilePath
+    });
+  } catch (error) {
+    throw createHttpError(error.statusCode || 500, error.message || "远程读取文件失败");
+  }
 }
 
 async function handleBrowserMessage(socket, raw) {
@@ -2060,6 +2333,20 @@ function createHttpError(statusCode, message) {
   return error;
 }
 
+function normalizeRemoteFilePath(value) {
+  const trimmed = String(value || "").trim();
+
+  if (
+    trimmed.length >= 2 &&
+    ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+      (trimmed.startsWith("'") && trimmed.endsWith("'")))
+  ) {
+    return trimmed.slice(1, -1).trim();
+  }
+
+  return trimmed;
+}
+
 function normalizeTerminalDimension(value) {
   const parsed = Math.floor(Number(value));
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -2238,11 +2525,12 @@ function serializeCommandRecord(record) {
   };
 }
 
-function serializeTerminalSession(session) {
+function serializeTerminalSession(session, options = {}) {
   if (!session) {
     return null;
   }
 
+  const includeOutputs = options.includeOutputs !== false;
   const {
     rawTranscript: _rawTranscript,
     ...rest
@@ -2256,8 +2544,22 @@ function serializeTerminalSession(session) {
     finalTextChars: summary.finalTextChars,
     rawCharCount: summary.rawCharCount,
     error: summary.error,
-    outputs
+    outputs: includeOutputs ? outputs : []
   };
+}
+
+function serializeTerminalSessionUpdate(session) {
+  return serializeTerminalSession(session, { includeOutputs: false });
+}
+
+function broadcastTerminalSessionUpdate(session) {
+  const payload = serializeTerminalSessionUpdate(session);
+
+  if (!payload) {
+    return;
+  }
+
+  browserHub.broadcast("terminal.session.updated", payload);
 }
 
 async function handleCommandHistoryRequest(req, res) {

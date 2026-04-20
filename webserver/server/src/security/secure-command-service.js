@@ -207,6 +207,42 @@ export class SecureCommandService {
     });
   }
 
+  createFileReadEnvelope({
+    requestId,
+    agentId,
+    sessionId,
+    filePath,
+    operatorUser,
+    authCodeBinding
+  }) {
+    const issuedAt = new Date();
+    const sentAt = issuedAt.toISOString();
+    const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
+
+    return this.createEncryptedEnvelope({
+      messageType: "file.read.secure",
+      requestId,
+      agentId,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId,
+        agentId,
+        sessionId: String(sessionId || ""),
+        filePath,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
+      expiresAt,
+      metaExtra: {
+        sessionId: String(sessionId || ""),
+        filePath
+      }
+    });
+  }
+
   createEncryptedEnvelope({
     messageType,
     requestId,

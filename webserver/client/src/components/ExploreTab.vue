@@ -13,7 +13,14 @@ import {
   ElTabs,
   ElTag
 } from "element-plus";
+import MarkdownIt from "markdown-it";
 import TerminalEmulator from "./TerminalEmulator.vue";
+
+const markdownRenderer = new MarkdownIt({
+  html: false,
+  linkify: true,
+  breaks: true
+});
 
 const props = defineProps({
   agents: {
@@ -47,6 +54,18 @@ const props = defineProps({
   terminalInput: {
     type: String,
     required: true
+  },
+  remoteFilePath: {
+    type: String,
+    required: true
+  },
+  remoteFileViewer: {
+    type: Object,
+    default: null
+  },
+  remoteFileError: {
+    type: String,
+    default: ""
   },
   availableTerminalProfiles: {
     type: Array,
@@ -88,6 +107,10 @@ const props = defineProps({
     type: Boolean,
     required: true
   },
+  readingRemoteFile: {
+    type: Boolean,
+    required: true
+  },
   terminatingTerminalSessionId: {
     type: String,
     default: ""
@@ -104,11 +127,13 @@ const emit = defineEmits([
   "update:terminalProfile",
   "update:terminalCwd",
   "update:terminalInput",
+  "update:remoteFilePath",
   "select:terminalSession",
   "submitCommand",
   "create-terminal-session",
   "send-terminal-input",
   "send-terminal-raw-input",
+  "open-remote-file",
   "resize-terminal-session",
   "terminate-terminal-session",
   "delete-terminal-session"
@@ -203,6 +228,65 @@ const shouldPreferFinalAnswer = computed(
 );
 
 const hasFinalAnswer = computed(() => Boolean(String(currentSession.value?.finalText || "").trim()));
+const canOpenRemoteFile = computed(
+  () =>
+    Boolean(
+      currentSession.value &&
+        props.activeAuthCodeBinding &&
+        String(props.remoteFilePath || "").trim() &&
+        !props.readingRemoteFile
+    )
+);
+const currentRemoteFileViewer = computed(() => {
+  const viewer = props.remoteFileViewer && typeof props.remoteFileViewer === "object"
+    ? props.remoteFileViewer
+    : null;
+
+  if (!viewer) {
+    return null;
+  }
+
+  if (String(viewer.sessionId || "") !== String(currentSession.value?.sessionId || "")) {
+    return null;
+  }
+
+  return viewer;
+});
+const remoteFileMetaPanels = ref([]);
+const isMarkdownFile = computed(() => {
+  const viewer = currentRemoteFileViewer.value;
+  const targetPath = String(viewer?.resolvedPath || viewer?.filePath || "");
+  return /\.(md|markdown|mdown|mkd|mkdn)$/i.test(targetPath);
+});
+const remoteFileSummary = computed(() => {
+  const viewer = currentRemoteFileViewer.value;
+
+  if (!viewer) {
+    return "";
+  }
+
+  const encoding = String(viewer.encoding || "utf8");
+  const sizeText = `${Number(viewer.bytesRead || 0)} / ${Number(viewer.totalBytes || 0)} 字节`;
+  const modifiedAt = viewer.modifiedAt ? formatCompactDateTime(viewer.modifiedAt) : "修改时间未知";
+  const extra = viewer.truncated ? "，已截断" : "";
+  return `${encoding} · ${sizeText} · ${modifiedAt}${extra}`;
+});
+const renderedRemoteFileHtml = computed(() => {
+  if (!currentRemoteFileViewer.value || !isMarkdownFile.value) {
+    return "";
+  }
+
+  return markdownRenderer.render(String(currentRemoteFileViewer.value.content || ""));
+});
+const shouldShowResolvedPathSeparately = computed(() => {
+  const viewer = currentRemoteFileViewer.value;
+
+  if (!viewer) {
+    return false;
+  }
+
+  return String(viewer.filePath || "").trim() !== String(viewer.resolvedPath || "").trim();
+});
 
 const rawTerminalPanels = ref([]);
 const transcriptExpanded = ref(false);
@@ -312,6 +396,10 @@ function goBackToSessionList() {
   sessionScreen.value = "main";
 }
 
+function goBackToSessionDetail() {
+  sessionScreen.value = currentSession.value ? "detail" : "main";
+}
+
 function toggleTranscriptExpanded() {
   transcriptExpanded.value = !transcriptExpanded.value;
 }
@@ -330,6 +418,17 @@ function clearTerminalTranscript() {
     ...transcriptClearedSeqBySession.value,
     [sessionId]: lastSeq
   };
+}
+
+function openRemoteFileViewer() {
+  if (!currentSession.value) {
+    return;
+  }
+
+  emit("open-remote-file", {
+    sessionId: currentSession.value.sessionId,
+    filePath: props.remoteFilePath
+  });
 }
 
 function getTranscriptStartSeq(sessionId) {
@@ -436,7 +535,7 @@ watch(currentSession, (session) => {
     return;
   }
 
-  if (sessionScreen.value === "detail") {
+  if (sessionScreen.value === "detail" || sessionScreen.value === "file") {
     sessionScreen.value = "main";
   }
 
@@ -452,6 +551,43 @@ watch(
     transcriptExpanded.value = false;
   }
 );
+
+watch(
+  () => currentRemoteFileViewer.value?.openedAt || "",
+  (openedAt) => {
+    if (openedAt) {
+      sessionScreen.value = "file";
+      return;
+    }
+
+    if (sessionScreen.value === "file") {
+      sessionScreen.value = currentSession.value ? "detail" : "main";
+    }
+  }
+);
+
+watch(
+  () => currentRemoteFileViewer.value?.requestId || "",
+  () => {
+    remoteFileMetaPanels.value = [];
+  }
+);
+
+function formatCompactDateTime(value) {
+  const time = Date.parse(String(value || ""));
+
+  if (!Number.isFinite(time)) {
+    return String(value || "");
+  }
+
+  return new Date(time).toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
 </script>
 
 <template>
@@ -605,7 +741,11 @@ watch(
       </el-tabs>
     </el-card>
 
-    <el-card v-else class="surface-card info-card explore-session-detail-card" shadow="never">
+    <el-card
+      v-else-if="sessionScreen === 'detail'"
+      class="surface-card info-card explore-session-detail-card"
+      shadow="never"
+    >
       <div class="explore-session-screen">
         <div class="profile-screen-top explore-session-detail-top">
           <el-button class="back-button" round plain @click="goBackToSessionList">
@@ -768,12 +908,126 @@ watch(
               已清空，等待新的终端输出...
             </p>
           </div>
+
+          <div v-if="currentSession" class="console-block explore-file-launcher">
+            <h4>打开目标文件</h4>
+            <p class="muted explore-file-launcher-copy">
+              输入目标设备上的文件路径，当前仅展示文本内容，大文件会按预览上限截断。
+            </p>
+            <label class="field-block field-block-tight">
+              <span>文件路径</span>
+              <el-input
+                :model-value="remoteFilePath"
+                placeholder="例如：C:\\project\\remote-client\\CLAUDE.md"
+                @update:model-value="emit('update:remoteFilePath', $event)"
+                @keyup.enter="openRemoteFileViewer"
+              />
+            </label>
+            <div class="hero-actions explore-file-launcher-actions">
+              <el-button
+                type="primary"
+                round
+                :disabled="!canOpenRemoteFile"
+                @click="openRemoteFileViewer"
+              >
+                {{ readingRemoteFile ? "打开中..." : "打开文件" }}
+              </el-button>
+            </div>
+          </div>
+
+          <div v-if="remoteFileError" class="console-block error explore-file-open-error">
+            <h4>File Error</h4>
+            <pre>{{ remoteFileError }}</pre>
+          </div>
         </div>
         <p v-else class="muted">当前会话不可用，请返回会话列表重新选择。</p>
 
         <div v-if="currentSession?.error" class="console-block error">
           <h4>Session Error</h4>
           <pre>{{ currentSession.error }}</pre>
+        </div>
+      </div>
+    </el-card>
+
+    <el-card v-else class="surface-card info-card explore-session-detail-card" shadow="never">
+      <div class="explore-session-screen explore-file-screen">
+        <div class="profile-screen-top explore-session-detail-top">
+          <el-button class="back-button" round plain @click="goBackToSessionDetail">
+            返回终端
+          </el-button>
+          <div class="explore-session-top-actions">
+            <el-tag effect="dark" round>文件预览</el-tag>
+            <el-tag
+              v-if="currentRemoteFileViewer?.truncated"
+              type="warning"
+              effect="dark"
+              round
+            >
+              已截断
+            </el-tag>
+          </div>
+        </div>
+
+        <div v-if="currentRemoteFileViewer" class="console-block explore-file-viewer">
+          <h4>目标文件内容</h4>
+          <div class="explore-file-summary-row">
+            <p class="muted explore-file-summary-text">
+              {{ remoteFileSummary }}
+            </p>
+            <el-tag v-if="isMarkdownFile" type="success" effect="dark" round>
+              Markdown
+            </el-tag>
+          </div>
+
+          <el-collapse v-model="remoteFileMetaPanels" class="explore-file-meta-collapse">
+            <el-collapse-item name="meta" title="路径与文件详情">
+              <div class="detail-grid explore-file-meta">
+                <div class="detail-row detail-row-wrap">
+                  <span>{{ shouldShowResolvedPathSeparately ? "输入路径" : "文件路径" }}</span>
+                  <strong class="detail-value-wrap">
+                    {{
+                      shouldShowResolvedPathSeparately
+                        ? currentRemoteFileViewer.filePath
+                        : currentRemoteFileViewer.resolvedPath || currentRemoteFileViewer.filePath || "-"
+                    }}
+                  </strong>
+                </div>
+                <div v-if="shouldShowResolvedPathSeparately" class="detail-row detail-row-wrap">
+                  <span>实际路径</span>
+                  <strong class="detail-value-wrap">{{ currentRemoteFileViewer.resolvedPath || "-" }}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>编码</span>
+                  <strong>{{ currentRemoteFileViewer.encoding || "-" }}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>读取字节</span>
+                  <strong>{{ currentRemoteFileViewer.bytesRead }}</strong>
+                </div>
+                <div class="detail-row">
+                  <span>文件总字节</span>
+                  <strong>{{ currentRemoteFileViewer.totalBytes }}</strong>
+                </div>
+                <div class="detail-row detail-row-wrap">
+                  <span>修改时间</span>
+                  <strong class="detail-value-wrap">{{ currentRemoteFileViewer.modifiedAt || "-" }}</strong>
+                </div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+
+          <div
+            v-if="isMarkdownFile && currentRemoteFileViewer.content"
+            class="explore-file-markdown"
+            v-html="renderedRemoteFileHtml"
+          />
+          <pre v-else-if="currentRemoteFileViewer.content">{{ currentRemoteFileViewer.content }}</pre>
+          <p v-else class="muted explore-transcript-empty">文件内容为空。</p>
+        </div>
+
+        <div v-else class="console-block error">
+          <h4>File Error</h4>
+          <pre>当前文件预览不可用，请返回终端后重新打开。</pre>
         </div>
       </div>
     </el-card>

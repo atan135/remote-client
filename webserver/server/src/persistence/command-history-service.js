@@ -179,6 +179,8 @@ export class CommandHistoryService {
 export function summarizeCommandRecord(record) {
   const stdout = String(record?.stdout || "");
   const stderr = String(record?.stderr || "");
+  const stdoutChars = toCount(record?.stdoutChars, stdout.length);
+  const stderrChars = toCount(record?.stderrChars, stderr.length);
 
   return {
     requestId: String(record?.requestId || ""),
@@ -191,10 +193,10 @@ export function summarizeCommandRecord(record) {
     securityError: String(record?.securityError || ""),
     exitCode: toNullableNumber(record?.exitCode),
     error: summarizeErrorMessage(record),
-    stdoutPreview: createTextPreview(stdout),
-    stderrPreview: createTextPreview(stderr),
-    stdoutChars: stdout.length,
-    stderrChars: stderr.length,
+    stdoutPreview: createCommandOutputPreview(stdout),
+    stderrPreview: createCommandOutputPreview(stderr),
+    stdoutChars,
+    stderrChars,
     createdAt: record?.createdAt || null,
     updatedAt: record?.updatedAt || record?.createdAt || null,
     dispatchedAt: record?.dispatchedAt || null,
@@ -214,7 +216,7 @@ function summarizeErrorMessage(record) {
   return clampText(securityError, 4000);
 }
 
-function createTextPreview(text) {
+export function createCommandOutputPreview(text) {
   const value = String(text || "");
 
   if (!value) {
@@ -255,6 +257,11 @@ function toMysqlDateTime(value) {
 
 function toNullableNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function toCount(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
 }
 
 function normalizeLimit(value, fallback) {

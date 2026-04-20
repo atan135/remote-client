@@ -82,7 +82,7 @@ function createBuiltInProfiles(config) {
     default_shell_session: normalizeProfile("default_shell_session", {
       runner: "pty",
       command: config.defaultShell,
-      argsTemplate: [],
+      argsTemplate: createDefaultShellArgsTemplate(config.defaultShell),
       cwdPolicy: "allowlist",
       outputMode: "terminal",
       envAllowlist: [
@@ -193,4 +193,35 @@ function resolveAllowedCwd(cwd, allowedRoots) {
 function normalizeForComparison(filePath) {
   const normalized = path.normalize(filePath);
   return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+}
+
+function createDefaultShellArgsTemplate(command) {
+  if (process.platform !== "win32" || !isPowerShellExecutable(command)) {
+    return [];
+  }
+
+  return [
+    "-NoLogo",
+    "-NoExit",
+    "-Command",
+    createPowerShellUtf8InitScript()
+  ];
+}
+
+function isPowerShellExecutable(command) {
+  const executableName = path.basename(String(command || "").trim()).toLowerCase();
+  return executableName === "powershell" ||
+    executableName === "powershell.exe" ||
+    executableName === "pwsh" ||
+    executableName === "pwsh.exe";
+}
+
+function createPowerShellUtf8InitScript() {
+  return [
+    "[Console]::InputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)",
+    "$OutputEncoding = [Console]::OutputEncoding",
+    "$PSDefaultParameterValues['*:Encoding'] = 'utf8'",
+    "chcp 65001 > $null"
+  ].join("; ");
 }

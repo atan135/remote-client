@@ -122,6 +122,11 @@ export class AgentClient {
       return;
     }
 
+    if (message.type === "file.read.secure") {
+      void this.handleSecureFileRead(message);
+      return;
+    }
+
     if (message.type === "command.execute") {
       this.rejectInsecureCommand(message.payload || {});
       return;
@@ -500,6 +505,77 @@ export class AgentClient {
         },
         true
       );
+    }
+  }
+
+  async handleSecureFileRead(message) {
+    let payload;
+
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "file.read.secure",
+        requiredFields: ["filePath"]
+      });
+      payload = unwrapped.payload;
+      const result = await this.executionGateway.readTextFile(String(payload.filePath), {
+        sessionId: String(payload.sessionId || "")
+      });
+
+      this.send(
+        "file.read.completed",
+        {
+          requestId: String(payload.requestId || ""),
+          agentId: this.config.agentId,
+          filePath: result.requestedPath,
+          resolvedPath: result.resolvedPath,
+          content: result.content,
+          truncated: Boolean(result.truncated),
+          bytesRead: Number(result.bytesRead || 0),
+          totalBytes: Number(result.totalBytes || 0),
+          encoding: String(result.encoding || "utf8"),
+          modifiedAt: result.modifiedAt || null,
+          readAt: result.readAt || new Date().toISOString()
+        },
+        true
+      );
+
+      logEvent(this.commandLogger, "info", "file.read.completed", {
+        requestId: String(payload.requestId || ""),
+        agentId: this.config.agentId,
+        filePath: result.requestedPath,
+        resolvedPath: result.resolvedPath,
+        truncated: Boolean(result.truncated),
+        bytesRead: Number(result.bytesRead || 0),
+        totalBytes: Number(result.totalBytes || 0),
+        encoding: String(result.encoding || "utf8")
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const requestId = String(payload?.requestId || message?.payload?.requestId || "");
+      const filePath = String(payload?.filePath || "");
+      const errorCode =
+        error && typeof error === "object" && "code" in error ? String(error.code || "") : "";
+
+      this.send(
+        "file.read.error",
+        {
+          requestId,
+          agentId: this.config.agentId,
+          filePath,
+          errorCode,
+          error: errorMessage,
+          readAt: new Date().toISOString()
+        },
+        true
+      );
+
+      logEvent(this.commandLogger, "warn", "file.read.failed", {
+        requestId,
+        agentId: this.config.agentId,
+        filePath,
+        errorCode,
+        error: errorMessage
+      });
     }
   }
 
