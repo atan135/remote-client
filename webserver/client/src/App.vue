@@ -69,6 +69,8 @@ const fallbackTerminalProfiles = Object.freeze([
 ]);
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 200;
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
+const PENDING_COMMAND_STATUSES = new Set(["queued", "running", "dispatched"]);
+const FAILED_COMMAND_STATUSES = new Set(["failed", "timed_out", "connection_lost"]);
 
 const agents = ref([]);
 const commands = ref([]);
@@ -105,6 +107,8 @@ const session = ref(null);
 const authMode = ref("login");
 const remoteFileError = ref("");
 const remoteFileViewer = ref(createEmptyRemoteFileViewer());
+const pendingTaskCount = ref(0);
+const failedTaskCount = ref(0);
 
 const loginForm = reactive({
   username: "",
@@ -155,6 +159,9 @@ let flushingTerminalResize = false;
 let terminalResizeFlushTimer = null;
 let browserSocketConnectionId = 0;
 let browserReconnectTimer = null;
+const queuedBrowserMessages = [];
+let browserMessageFlushHandle = 0;
+let browserMessageFlushUsesAnimationFrame = false;
 
 const avatarLabel = computed(() => {
   const source = session.value?.user?.displayName || session.value?.user?.username || "Q";
@@ -163,15 +170,122 @@ const avatarLabel = computed(() => {
 
 const selectedAgentIdKey = computed(() => normalizeAgentId(selectedAgentId.value));
 
-const activeAgent = computed(
-  () => agents.value.find((item) => item.agentId === selectedAgentId.value) || null
-);
+const agentSummary = computed(() => {
+  const byId = new Map();
+  let onlineCount = 0;
+  let firstAgentId = "";
+  let firstOnlineAgentId = "";
+
+  for (const item of agents.value) {
+    const agentId = String(item?.agentId || "").trim();
+
+    if (!agentId) {
+      continue;
+    }
+
+    if (!firstAgentId) {
+      firstAgentId = agentId;
+    }
+
+    if (item.status === "online") {
+      onlineCount += 1;
+
+      if (!firstOnlineAgentId) {
+        firstOnlineAgentId = agentId;
+      }
+    }
+
+    byId.set(agentId, item);
+  }
+
+  return {
+    byId,
+    onlineCount,
+    firstAgentId,
+    firstOnlineAgentId
+  };
+});
+
+const agentsById = computed(() => agentSummary.value.byId);
+
+const authCodesByAgentId = computed(() => {
+  const byAgentId = new Map();
+
+  for (const item of authCodes.value) {
+    const agentId = normalizeAgentId(item?.agentId);
+
+    if (!agentId) {
+      continue;
+    }
+
+    byAgentId.set(agentId, item);
+  }
+
+  return byAgentId;
+});
+
+const terminalSessionSummary = computed(() => {
+  const byId = new Map();
+  const byAgentId = new Map();
+
+  for (const item of terminalSessions.value) {
+    const sessionId = String(item?.sessionId || "").trim();
+    const agentId = String(item?.agentId || "").trim();
+
+    if (sessionId) {
+      byId.set(sessionId, item);
+    }
+
+    if (!agentId) {
+      continue;
+    }
+
+    const bucket = byAgentId.get(agentId);
+
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+
+    byAgentId.set(agentId, [item]);
+  }
+
+  return {
+    byId,
+    byAgentId
+  };
+});
+
+const terminalSessionById = computed(() => terminalSessionSummary.value.byId);
+const terminalSessionsByAgentId = computed(() => terminalSessionSummary.value.byAgentId);
+
+const commandsByAgentId = computed(() => {
+  const byAgentId = new Map();
+
+  for (const item of commands.value) {
+    const agentId = String(item?.agentId || "").trim();
+
+    if (!agentId) {
+      continue;
+    }
+
+    const bucket = byAgentId.get(agentId);
+
+    if (bucket) {
+      bucket.push(item);
+      continue;
+    }
+
+    byAgentId.set(agentId, [item]);
+  }
+
+  return byAgentId;
+});
+
+const activeAgent = computed(() => agentsById.value.get(selectedAgentId.value) || null);
 
 const activeAuthCodeBinding = computed(
-  () =>
-    authCodes.value.find(
-      (item) => normalizeAgentId(item.agentId) === selectedAgentIdKey.value
-    ) || null
+  () => authCodesByAgentId.value.get(selectedAgentIdKey.value) || null
 );
 
 const availableTerminalProfiles = computed(() => {
@@ -192,15 +306,15 @@ const selectedTerminalProfileConfig = computed(
   () => availableTerminalProfiles.value.find((item) => item.name === terminalProfile.value) || null
 );
 
-const visibleTerminalSessions = computed(() =>
-  terminalSessions.value.filter((item) => item.agentId === selectedAgentId.value)
+const visibleTerminalSessions = computed(
+  () => terminalSessionsByAgentId.value.get(selectedAgentId.value) || []
 );
 
 const activeTerminalSession = computed(
-  () =>
-    visibleTerminalSessions.value.find(
-      (item) => item.sessionId === selectedTerminalSessionId.value
-    ) || null
+  () => {
+    const session = terminalSessionById.value.get(selectedTerminalSessionId.value) || null;
+    return session?.agentId === selectedAgentId.value ? session : null;
+  }
 );
 
 const visibleCommands = computed(() => {
@@ -208,14 +322,12 @@ const visibleCommands = computed(() => {
     return commands.value;
   }
 
-  return commands.value.filter((item) => item.agentId === timelineFilterAgentId.value);
+  return commandsByAgentId.value.get(timelineFilterAgentId.value) || [];
 });
 
 const isAdmin = computed(() => session.value?.user?.role === "admin");
 
-const onlineAgentCount = computed(
-  () => agents.value.filter((item) => item.status === "online").length
-);
+const onlineAgentCount = computed(() => agentSummary.value.onlineCount);
 
 const displayName = computed(
   () => session.value?.user?.displayName || session.value?.user?.username || ""
@@ -261,20 +373,6 @@ const canTerminateTerminalSession = computed(
     )
 );
 
-const pendingTaskCount = computed(
-  () =>
-    commands.value.filter((item) =>
-      ["queued", "running", "dispatched"].includes(item.status)
-    ).length
-);
-
-const failedTaskCount = computed(
-  () =>
-    commands.value.filter((item) =>
-      ["failed", "timed_out", "connection_lost"].includes(item.status)
-    ).length
-);
-
 const runningTerminalSessionCount = computed(
   () =>
     visibleTerminalSessions.value.filter(
@@ -288,6 +386,10 @@ const tabBadges = computed(() => ({
   tasks: pendingTaskCount.value || failedTaskCount.value,
   profile: wsState.error ? 1 : 0
 }));
+
+const latestVisibleCommandRequestId = computed(
+  () => String(visibleCommands.value[0]?.requestId || "")
+);
 
 const resolvedTabs = computed(() =>
   tabs.map((tab) => ({
@@ -494,7 +596,7 @@ async function loadAgents() {
   }
 
   const payload = await response.json();
-  agents.value = payload.items || [];
+  replaceAgents(payload.items || []);
 }
 
 async function loadCommands() {
@@ -510,7 +612,7 @@ async function loadCommands() {
   }
 
   const payload = await response.json();
-  commands.value = payload.items || [];
+  replaceCommands(payload.items || []);
 }
 
 async function loadTerminalSessions() {
@@ -526,7 +628,7 @@ async function loadTerminalSessions() {
   }
 
   const payload = await response.json();
-  terminalSessions.value = payload.items || [];
+  replaceTerminalSessions(payload.items || []);
 }
 
 async function loadAuthCodes() {
@@ -699,7 +801,7 @@ async function sendTerminalInput(payloadOrSessionId = activeTerminalSession.valu
           input: terminalInput.value
         };
   const sessionId = String(payload?.sessionId || activeTerminalSession.value?.sessionId || "").trim();
-  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
+  const sessionRecord = terminalSessionById.value.get(sessionId);
   const input = String(payload?.input || "");
 
   if (!sessionRecord || !input) {
@@ -794,9 +896,7 @@ function queueTerminalRawInput(inputOrPayload, sessionId = activeTerminalSession
         };
   const normalizedSessionId = String(payload?.sessionId || sessionId || "").trim();
   const normalizedInput = String(payload?.input || "");
-  const sessionRecord = terminalSessions.value.find(
-    (item) => item.sessionId === normalizedSessionId
-  );
+  const sessionRecord = terminalSessionById.value.get(normalizedSessionId);
 
   if (
     !normalizedSessionId ||
@@ -858,7 +958,7 @@ function enqueueTerminalSocketInput(sessionId, input, options = {}) {
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedInput = String(input || "");
   const logicalInput = String(options?.logicalInput || "");
-  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === normalizedSessionId);
+  const sessionRecord = terminalSessionById.value.get(normalizedSessionId);
 
   if (
     !normalizedSessionId ||
@@ -892,7 +992,7 @@ function queueTerminalResize(payload) {
   const sessionId = String(payload?.sessionId || "").trim();
   const cols = normalizeTerminalDimension(payload?.cols);
   const rows = normalizeTerminalDimension(payload?.rows);
-  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
+  const sessionRecord = terminalSessionById.value.get(sessionId);
 
   if (
     !sessionRecord ||
@@ -1085,7 +1185,7 @@ async function deleteTerminalSession(sessionId = activeTerminalSession.value?.se
     return;
   }
 
-  const sessionRecord = terminalSessions.value.find((item) => item.sessionId === sessionId);
+  const sessionRecord = terminalSessionById.value.get(sessionId);
 
   if (!sessionRecord) {
     removeTerminalSession(sessionId);
@@ -1463,51 +1563,12 @@ function connectBrowserSocket() {
 
     const message = JSON.parse(event.data);
 
-    if (message.type === "snapshot") {
-      agents.value = message.payload.agents || [];
-      commands.value = message.payload.commands || [];
-      terminalSessions.value = mergeTerminalSessionSnapshot(
-        terminalSessions.value,
-        message.payload.terminalSessions || []
-      );
-      ensureSelectedAgent();
-      ensureSelectedTerminalProfile();
-      ensureSelectedTerminalSession();
-      return;
-    }
-
-    if (message.type === "agent.updated") {
-      upsertByKey(agents.value, message.payload, "agentId");
-      ensureSelectedAgent();
-      ensureSelectedTerminalProfile();
-      return;
-    }
-
-    if (message.type === "command.updated") {
-      upsertByKey(commands.value, message.payload, "requestId");
-      return;
-    }
-
-    if (message.type === "terminal.session.updated") {
-      upsertTerminalSession(message.payload);
-      ensureSelectedTerminalSession();
-      return;
-    }
-
-    if (message.type === "terminal.session.deleted") {
-      removeTerminalSession(message.payload?.sessionId);
-      ensureSelectedTerminalSession();
-      return;
-    }
-
-    if (message.type === "terminal.session.output") {
-      appendTerminalSessionOutput(message.payload);
-      return;
-    }
-
     if (message.type === "terminal.session.input.ack") {
       applyTerminalInputAck(message.payload);
+      return;
     }
+
+    queueBrowserMessage(message);
   });
 
   socket.addEventListener("close", () => {
@@ -1534,6 +1595,8 @@ function connectBrowserSocket() {
 
 function disconnectBrowserSocket() {
   browserSocketConnectionId += 1;
+  queuedBrowserMessages.length = 0;
+  cancelQueuedBrowserMessageFlush();
 
   if (browserReconnectTimer) {
     window.clearTimeout(browserReconnectTimer);
@@ -1566,25 +1629,108 @@ function scheduleBrowserSocketReconnect(connectionId) {
   }, 3000);
 }
 
+function queueBrowserMessage(message) {
+  queuedBrowserMessages.push(message);
+
+  if (browserMessageFlushHandle) {
+    return;
+  }
+
+  if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+    browserMessageFlushUsesAnimationFrame = true;
+    browserMessageFlushHandle = window.requestAnimationFrame(() => {
+      browserMessageFlushHandle = 0;
+      browserMessageFlushUsesAnimationFrame = false;
+      flushQueuedBrowserMessages();
+    });
+    return;
+  }
+
+  browserMessageFlushUsesAnimationFrame = false;
+  browserMessageFlushHandle = window.setTimeout(() => {
+    browserMessageFlushHandle = 0;
+    flushQueuedBrowserMessages();
+  }, 16);
+}
+
+function flushQueuedBrowserMessages() {
+  if (queuedBrowserMessages.length === 0) {
+    return;
+  }
+
+  const batch = queuedBrowserMessages.splice(0, queuedBrowserMessages.length);
+  let shouldEnsureAgent = false;
+  let shouldEnsureProfile = false;
+  let shouldEnsureSession = false;
+
+  for (const message of batch) {
+    switch (message?.type) {
+      case "snapshot":
+        replaceAgents(message.payload?.agents || []);
+        replaceCommands(message.payload?.commands || []);
+        replaceTerminalSessions(
+          mergeTerminalSessionSnapshot(
+            terminalSessions.value,
+            message.payload?.terminalSessions || []
+          )
+        );
+        shouldEnsureAgent = true;
+        shouldEnsureProfile = true;
+        shouldEnsureSession = true;
+        break;
+      case "agent.updated":
+        if (upsertAgent(message.payload)) {
+          shouldEnsureAgent = true;
+          shouldEnsureProfile = true;
+        }
+        break;
+      case "command.updated":
+        upsertCommand(message.payload);
+        break;
+      case "terminal.session.updated":
+        if (upsertTerminalSession(message.payload)) {
+          shouldEnsureSession = true;
+        }
+        break;
+      case "terminal.session.deleted":
+        if (removeTerminalSession(message.payload?.sessionId)) {
+          shouldEnsureSession = true;
+        }
+        break;
+      case "terminal.session.output":
+        appendTerminalSessionOutput(message.payload);
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (shouldEnsureAgent) {
+    ensureSelectedAgent();
+  }
+
+  if (shouldEnsureProfile) {
+    ensureSelectedTerminalProfile();
+  }
+
+  if (shouldEnsureSession) {
+    ensureSelectedTerminalSession();
+  }
+}
+
 function ensureSelectedAgent() {
-  if (selectedAgentId.value && agents.value.some((item) => item.agentId === selectedAgentId.value)) {
-    if (
-      timelineFilterAgentId.value !== "all" &&
-      !agents.value.some((item) => item.agentId === timelineFilterAgentId.value)
-    ) {
+  if (selectedAgentId.value && agentsById.value.has(selectedAgentId.value)) {
+    if (timelineFilterAgentId.value !== "all" && !agentsById.value.has(timelineFilterAgentId.value)) {
       timelineFilterAgentId.value = "all";
     }
 
     return;
   }
 
-  const onlineAgent = agents.value.find((item) => item.status === "online");
-  selectedAgentId.value = onlineAgent?.agentId || agents.value[0]?.agentId || "";
+  selectedAgentId.value =
+    agentSummary.value.firstOnlineAgentId || agentSummary.value.firstAgentId || "";
 
-  if (
-    timelineFilterAgentId.value !== "all" &&
-    !agents.value.some((item) => item.agentId === timelineFilterAgentId.value)
-  ) {
+  if (timelineFilterAgentId.value !== "all" && !agentsById.value.has(timelineFilterAgentId.value)) {
     timelineFilterAgentId.value = "all";
   }
 }
@@ -1610,18 +1756,24 @@ function ensureSelectedTerminalProfile() {
 }
 
 function ensureSelectedTerminalSession() {
-  if (
-    selectedTerminalSessionId.value &&
-    visibleTerminalSessions.value.some((item) => item.sessionId === selectedTerminalSessionId.value)
-  ) {
+  if (selectedTerminalSessionId.value) {
+    const selectedSession = terminalSessionById.value.get(selectedTerminalSessionId.value);
+
+    if (selectedSession?.agentId === selectedAgentId.value) {
+      return;
+    }
+  }
+
+  const sessions = visibleTerminalSessions.value;
+
+  if (!sessions.length) {
+    selectedTerminalSessionId.value = "";
     return;
   }
 
-  const runningSession = visibleTerminalSessions.value.find(
-    (item) => !isTerminalSessionClosedStatus(item.status)
-  );
+  const runningSession = sessions.find((item) => !isTerminalSessionClosedStatus(item.status));
   selectedTerminalSessionId.value =
-    runningSession?.sessionId || visibleTerminalSessions.value[0]?.sessionId || "";
+    runningSession?.sessionId || sessions[0]?.sessionId || "";
 }
 
 async function handleUnauthorized() {
@@ -1635,6 +1787,8 @@ function resetAuthedState() {
   agents.value = [];
   commands.value = [];
   terminalSessions.value = [];
+  pendingTaskCount.value = 0;
+  failedTaskCount.value = 0;
   users.value = [];
   authCodes.value = [];
   selectedAgentId.value = "";
@@ -1663,28 +1817,100 @@ function resetAuthedState() {
     window.clearTimeout(browserReconnectTimer);
     browserReconnectTimer = null;
   }
+  queuedBrowserMessages.length = 0;
+  cancelQueuedBrowserMessageFlush();
   activeTab.value = "home";
 }
 
-function upsertByKey(collection, item, key) {
-  const index = collection.findIndex((candidate) => candidate[key] === item[key]);
+function replaceAgents(items) {
+  const normalizedItems = Array.isArray(items) ? items.slice() : [];
+  normalizedItems.sort(compareAgentRecords);
+  agents.value = normalizedItems;
+}
+
+function replaceCommands(items) {
+  const normalizedItems = Array.isArray(items) ? items.slice() : [];
+  normalizedItems.sort(compareCommandRecords);
+  commands.value = normalizedItems;
+  recomputeCommandStatusCounts();
+}
+
+function replaceTerminalSessions(items) {
+  const normalizedItems = Array.isArray(items) ? items.slice() : [];
+  normalizedItems.sort(compareTerminalSessionRecords);
+  terminalSessions.value = normalizedItems;
+}
+
+function upsertAgent(item) {
+  if (!item?.agentId) {
+    return false;
+  }
+
+  const index = agents.value.findIndex((candidate) => candidate.agentId === item.agentId);
 
   if (index === -1) {
-    collection.unshift(item);
-  } else {
-    collection[index] = item;
+    const nextItems = [...agents.value, item];
+    nextItems.sort(compareAgentRecords);
+    agents.value = nextItems;
+    return true;
   }
 
-  if (key === "requestId") {
-    collection.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  } else {
-    collection.sort((left, right) => left.label.localeCompare(right.label));
+  const current = agents.value[index];
+  const next = {
+    ...current,
+    ...item
+  };
+
+  if (!didAgentSortKeyChange(current, next)) {
+    agents.value[index] = next;
+    return true;
   }
+
+  const nextItems = [...agents.value];
+  nextItems[index] = next;
+  nextItems.sort(compareAgentRecords);
+  agents.value = nextItems;
+  return true;
+}
+
+function upsertCommand(item) {
+  if (!item?.requestId) {
+    return false;
+  }
+
+  const index = commands.value.findIndex((candidate) => candidate.requestId === item.requestId);
+
+  if (index === -1) {
+    const nextItems = [...commands.value, item];
+    nextItems.sort(compareCommandRecords);
+    commands.value = nextItems;
+    adjustCommandStatusCounts(null, item);
+    return true;
+  }
+
+  const current = commands.value[index];
+  const next = {
+    ...current,
+    ...item
+  };
+
+  adjustCommandStatusCounts(current, next);
+
+  if (!didCommandSortKeyChange(current, next)) {
+    commands.value[index] = next;
+    return true;
+  }
+
+  const nextItems = [...commands.value];
+  nextItems[index] = next;
+  nextItems.sort(compareCommandRecords);
+  commands.value = nextItems;
+  return true;
 }
 
 function upsertTerminalSession(item) {
   if (!item?.sessionId) {
-    return;
+    return false;
   }
 
   const index = terminalSessions.value.findIndex(
@@ -1692,40 +1918,53 @@ function upsertTerminalSession(item) {
   );
 
   if (index === -1) {
-    terminalSessions.value.unshift({
+    const nextItems = [...terminalSessions.value, {
       ...item,
       outputs: clampTerminalOutputs(Array.isArray(item.outputs) ? item.outputs : [])
-    });
-  } else {
-    const currentOutputs = Array.isArray(terminalSessions.value[index].outputs)
-      ? terminalSessions.value[index].outputs
-      : [];
-    const incomingOutputs = Array.isArray(item.outputs) ? item.outputs : [];
-
-    terminalSessions.value[index] = {
-      ...terminalSessions.value[index],
-      ...item,
-      finalText:
-        typeof item.finalText === "string"
-          ? item.finalText
-          : terminalSessions.value[index].finalText || "",
-      outputs: clampTerminalOutputs(incomingOutputs.length > 0 ? incomingOutputs : currentOutputs)
-    };
+    }];
+    nextItems.sort(compareTerminalSessionRecords);
+    terminalSessions.value = nextItems;
+    return true;
   }
 
-  terminalSessions.value.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const current = terminalSessions.value[index];
+  const currentOutputs = Array.isArray(current.outputs) ? current.outputs : [];
+  const incomingOutputs = Array.isArray(item.outputs) ? item.outputs : [];
+  const next = {
+    ...current,
+    ...item,
+    finalText:
+      typeof item.finalText === "string"
+        ? item.finalText
+        : current.finalText || "",
+    outputs: clampTerminalOutputs(incomingOutputs.length > 0 ? incomingOutputs : currentOutputs)
+  };
+
+  if (!didTerminalSessionSortKeyChange(current, next)) {
+    terminalSessions.value[index] = next;
+    return true;
+  }
+
+  const nextItems = [...terminalSessions.value];
+  nextItems[index] = next;
+  nextItems.sort(compareTerminalSessionRecords);
+  terminalSessions.value = nextItems;
+  return true;
 }
 
 function removeTerminalSession(sessionId) {
   const normalizedSessionId = String(sessionId || "").trim();
 
   if (!normalizedSessionId) {
-    return;
+    return false;
   }
 
-  terminalSessions.value = terminalSessions.value.filter(
-    (item) => item.sessionId !== normalizedSessionId
-  );
+  const nextItems = terminalSessions.value.filter((item) => item.sessionId !== normalizedSessionId);
+  const didRemoveSession = nextItems.length !== terminalSessions.value.length;
+
+  if (didRemoveSession) {
+    terminalSessions.value = nextItems;
+  }
 
   for (let index = terminalSocketInputQueue.length - 1; index >= 0; index -= 1) {
     if (terminalSocketInputQueue[index]?.sessionId === normalizedSessionId) {
@@ -1744,12 +1983,12 @@ function removeTerminalSession(sessionId) {
   if (remoteFileViewer.value.sessionId === normalizedSessionId) {
     resetRemoteFileViewer({ preservePath: true });
   }
+
+  return didRemoveSession;
 }
 
 function appendTerminalSessionOutput(output) {
-  const sessionRecord = terminalSessions.value.find(
-    (item) => item.sessionId === output?.sessionId
-  );
+  const sessionRecord = terminalSessionById.value.get(String(output?.sessionId || ""));
 
   if (!sessionRecord) {
     return;
@@ -1798,22 +2037,20 @@ function clampTerminalOutputs(outputs) {
 }
 
 function reconcileMissingTerminalSession(sessionId) {
-  const index = terminalSessions.value.findIndex((item) => item.sessionId === sessionId);
+  const current = terminalSessionById.value.get(String(sessionId || ""));
 
-  if (index === -1) {
+  if (!current) {
     return;
   }
 
-  const current = terminalSessions.value[index];
   const now = new Date().toISOString();
-
-  terminalSessions.value[index] = {
+  upsertTerminalSession({
     ...current,
     status: "terminated",
     error: current.error || "终端会话已不存在，已按结束处理。",
     updatedAt: now,
     closedAt: current.closedAt || now
-  };
+  });
 }
 
 function shortFingerprint(fingerprint) {
@@ -1955,6 +2192,86 @@ function getTerminalProfileSourceWeight(source) {
 
 function getTerminalProfileDisplayName(target) {
   return String(target?.profileLabel || target?.label || target?.profile || target?.name || "").trim();
+}
+
+function cancelQueuedBrowserMessageFlush() {
+  if (!browserMessageFlushHandle) {
+    return;
+  }
+
+  if (browserMessageFlushUsesAnimationFrame) {
+    window.cancelAnimationFrame(browserMessageFlushHandle);
+  } else {
+    window.clearTimeout(browserMessageFlushHandle);
+  }
+
+  browserMessageFlushHandle = 0;
+  browserMessageFlushUsesAnimationFrame = false;
+}
+
+function recomputeCommandStatusCounts() {
+  let nextPendingCount = 0;
+  let nextFailedCount = 0;
+
+  for (const item of commands.value) {
+    const status = String(item?.status || "");
+
+    if (PENDING_COMMAND_STATUSES.has(status)) {
+      nextPendingCount += 1;
+    }
+
+    if (FAILED_COMMAND_STATUSES.has(status)) {
+      nextFailedCount += 1;
+    }
+  }
+
+  pendingTaskCount.value = nextPendingCount;
+  failedTaskCount.value = nextFailedCount;
+}
+
+function adjustCommandStatusCounts(previousRecord, nextRecord) {
+  const previousStatus = String(previousRecord?.status || "");
+  const nextStatus = String(nextRecord?.status || "");
+
+  if (PENDING_COMMAND_STATUSES.has(previousStatus)) {
+    pendingTaskCount.value = Math.max(0, pendingTaskCount.value - 1);
+  }
+
+  if (FAILED_COMMAND_STATUSES.has(previousStatus)) {
+    failedTaskCount.value = Math.max(0, failedTaskCount.value - 1);
+  }
+
+  if (PENDING_COMMAND_STATUSES.has(nextStatus)) {
+    pendingTaskCount.value += 1;
+  }
+
+  if (FAILED_COMMAND_STATUSES.has(nextStatus)) {
+    failedTaskCount.value += 1;
+  }
+}
+
+function compareCommandRecords(left, right) {
+  return String(right?.createdAt || "").localeCompare(String(left?.createdAt || ""));
+}
+
+function compareAgentRecords(left, right) {
+  return String(left?.label || "").localeCompare(String(right?.label || ""));
+}
+
+function compareTerminalSessionRecords(left, right) {
+  return String(right?.createdAt || "").localeCompare(String(left?.createdAt || ""));
+}
+
+function didCommandSortKeyChange(previousRecord, nextRecord) {
+  return String(previousRecord?.createdAt || "") !== String(nextRecord?.createdAt || "");
+}
+
+function didAgentSortKeyChange(previousRecord, nextRecord) {
+  return String(previousRecord?.label || "") !== String(nextRecord?.label || "");
+}
+
+function didTerminalSessionSortKeyChange(previousRecord, nextRecord) {
+  return String(previousRecord?.createdAt || "") !== String(nextRecord?.createdAt || "");
 }
 
 function resetRemoteFileViewer({ preservePath = false } = {}) {
@@ -2104,6 +2421,7 @@ function useSelectedAgentIdForAuthCode() {
           v-else-if="activeTab === 'tasks'"
           :commands="visibleCommands"
           :agents="agents"
+          :latest-request-id="latestVisibleCommandRequestId"
           :timeline-filter-agent-id="timelineFilterAgentId"
           @update:timeline-filter-agent-id="timelineFilterAgentId = $event"
         />

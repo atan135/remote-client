@@ -14,11 +14,17 @@ const props = defineProps({
   timelineFilterAgentId: {
     type: String,
     required: true
+  },
+  latestRequestId: {
+    type: String,
+    default: ""
   }
 });
 
 const emit = defineEmits(["update:timelineFilterAgentId"]);
 const expandedRequestIds = ref([]);
+let lastTimelineFilterAgentId = "";
+let lastCommandCount = 0;
 const createdAtFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "2-digit",
   month: "2-digit",
@@ -38,19 +44,47 @@ const agentById = computed(
 );
 
 watch(
-  () => props.commands.map((item) => item.requestId),
-  (requestIds) => {
-    const validRequestIds = new Set(requestIds);
-    const nextExpandedIds = expandedRequestIds.value.filter((id) =>
-      validRequestIds.has(id)
-    );
-    const latestRequestId = requestIds[0];
+  [
+    () => props.timelineFilterAgentId,
+    () => props.commands.length,
+    () => props.latestRequestId
+  ],
+  ([nextTimelineFilterAgentId, nextCommandCount, nextLatestRequestId]) => {
+    const filterChanged = nextTimelineFilterAgentId !== lastTimelineFilterAgentId;
+    const listShrank = nextCommandCount < lastCommandCount;
+    let nextExpandedIds = expandedRequestIds.value;
 
-    if (latestRequestId && !nextExpandedIds.includes(latestRequestId)) {
-      nextExpandedIds.unshift(latestRequestId);
+    if (filterChanged || listShrank) {
+      const validRequestIds = new Set(
+        (Array.isArray(props.commands) ? props.commands : []).map((item) => item.requestId)
+      );
+      nextExpandedIds = nextExpandedIds.filter((id) => validRequestIds.has(id));
+    }
+
+    if (nextLatestRequestId) {
+      const currentFirstExpandedId = nextExpandedIds[0] || "";
+
+      if (
+        !filterChanged &&
+        !listShrank &&
+        nextLatestRequestId === currentFirstExpandedId
+      ) {
+        lastTimelineFilterAgentId = nextTimelineFilterAgentId;
+        lastCommandCount = nextCommandCount;
+        return;
+      }
+
+      nextExpandedIds = [
+        nextLatestRequestId,
+        ...nextExpandedIds.filter((id) => id !== nextLatestRequestId)
+      ];
+    } else {
+      nextExpandedIds = [];
     }
 
     expandedRequestIds.value = nextExpandedIds;
+    lastTimelineFilterAgentId = nextTimelineFilterAgentId;
+    lastCommandCount = nextCommandCount;
   },
   {
     immediate: true
