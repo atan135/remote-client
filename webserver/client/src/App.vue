@@ -1,15 +1,24 @@
 <script setup>
 import { ElMessage, ElMessageBox } from "element-plus";
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
+import {
+  computed,
+  defineAsyncComponent,
+  onBeforeUnmount,
+  onMounted,
+  reactive,
+  ref,
+  watch
+} from "vue";
 
 import AuthScreen from "./components/AuthScreen.vue";
 import BottomTabBar from "./components/BottomTabBar.vue";
-import ExploreTab from "./components/ExploreTab.vue";
 import HomeTab from "./components/HomeTab.vue";
 import LoadingScreen from "./components/LoadingScreen.vue";
-import ProfileTab from "./components/ProfileTab.vue";
-import TasksTab from "./components/TasksTab.vue";
 import TopBar from "./components/TopBar.vue";
+
+const ExploreTab = defineAsyncComponent(() => import("./components/ExploreTab.vue"));
+const TasksTab = defineAsyncComponent(() => import("./components/TasksTab.vue"));
+const ProfileTab = defineAsyncComponent(() => import("./components/ProfileTab.vue"));
 
 const activeTab = ref("home");
 const tabs = [
@@ -2029,7 +2038,7 @@ function useSelectedAgentIdForAuthCode() {
 
       <main class="content">
         <HomeTab
-          v-show="activeTab === 'home'"
+          v-if="activeTab === 'home'"
           :agents="agents"
           :selected-agent-id="selectedAgentId"
           :active-agent="activeAgent"
@@ -2042,7 +2051,7 @@ function useSelectedAgentIdForAuthCode() {
         />
 
         <ExploreTab
-          v-show="activeTab === 'explore'"
+          v-else-if="activeTab === 'explore'"
           :agents="agents"
           :selected-agent-id="selectedAgentId"
           :active-agent="activeAgent"
@@ -2092,7 +2101,7 @@ function useSelectedAgentIdForAuthCode() {
         />
 
         <TasksTab
-          v-show="activeTab === 'tasks'"
+          v-else-if="activeTab === 'tasks'"
           :commands="visibleCommands"
           :agents="agents"
           :timeline-filter-agent-id="timelineFilterAgentId"
@@ -2100,7 +2109,7 @@ function useSelectedAgentIdForAuthCode() {
         />
 
         <ProfileTab
-          v-show="activeTab === 'profile'"
+          v-else-if="activeTab === 'profile'"
           :session="session"
           :display-name="displayName"
           :is-admin="isAdmin"
