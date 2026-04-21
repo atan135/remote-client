@@ -1,95 +1,307 @@
 # 功能架构说明
 
+更新时间：2026-04-21
+
 ## 目标
 
-实现一个“内网 agent 主动外连 + 外网控制台下发命令 + 结果回传”的双端系统。
+实现一个“内网 agent 主动外连 + 外网控制台下发安全命令/终端会话 + 结果实时回传”的远程控制系统。
 
-## 默认端口
+当前仓库已经不是纯设计态，以下内容以现有源码和数据库脚本为准。
 
-- `webserver/server`：`3100`
-- `localapp` 默认上连地址：`ws://localhost:3100/ws/agent`
-- `webserver/client` 开发代理：`http://localhost:3100`
-
-## 登录与会话
-
-- `webserver/server` 使用 MySQL 保存用户、会话、命令摘要和终端会话摘要
-- 浏览器通过 `/api/auth/login` 提交用户名和密码
-- 浏览器可通过 `/api/auth/register` 公开注册账号
-- 服务端验证成功后写入 HTTP-only session cookie
-- 后续 `/api/agents`、`/api/commands` 和 `/ws/browser` 都基于会话校验
-- 用户可通过 `/api/auth/change-password` 修改自己的密码
-- 管理员可通过 `/api/users` 系列接口管理用户和重置密码
-
-## 安全命令加密设计
-
-- 设计文档：[auth-code-rsa-design.md](/c:/project/remote-client/docs/auth-code-rsa-design.md)
-- 目标是在 `webserver -> localapp` 命令链路中增加基于 `auth_code + RSA` 的加密与校验机制
-- 当前设计采用两套密钥：`localapp` 自身 RSA 密钥负责解密，`webserver` 自身 RSA 密钥负责签名
-- `auth_code` 将从 `users` 表拆出，独立存到用户与 `agent` 的绑定表中
-- 已补充密钥生成工具，可通过根目录脚本 `npm run auth:keygen:localapp` 和 `npm run auth:keygen:webserver` 生成密钥对
-- 加密下发、验签和解密执行链路仍处于待开发状态
-
-## 数据库
-
-- 初始化脚本：[init.sql](/c:/project/remote-client/db/init.sql)
-- 数据库名：`remote_client`
-- 字符集：`utf8mb4`
-- 主要表：
-- `users`：控制台登录用户
-- `user_sessions`：浏览器登录会话
-- `user_auth_codes`：用户与 `agent` 的公钥绑定关系，作为安全命令加密设计中的新增表
-- `command_runs`：一次性命令的持久化摘要记录
-- `terminal_sessions`：终端会话摘要，包含 AI 会话提取出的 `final_text`
-- `terminal_session_turns`：AI 终端会话的多轮输入与提取结果
-
-## 模块划分
+## 当前组件
 
 ### 1. `localapp`
 
-职责：
+部署在目标机器上的 Node.js agent，负责：
 
-- 常驻运行在内网机器
 - 主动连接 `webserver/server`
-- 支持断线重连和心跳
-- 串行执行命令，避免并发命令互相影响
-- 在网络抖动时缓存未回传的执行结果
-
-核心文件：
-
-- [config.js](/c:/project/remote-client/localapp/src/config.js)
-- [agent-client.js](/c:/project/remote-client/localapp/src/agent-client.js)
-- [command-runner.js](/c:/project/remote-client/localapp/src/command-runner.js)
-- [logger.js](/c:/project/remote-client/localapp/src/logger.js)
+- 验签、解密、执行安全命令
+- 维护交互式 PTY 终端会话
+- 回传命令结果、终端输出和文件读取结果
+- 可选开启仅限本机访问的本地调试接口
 
 ### 2. `webserver/server`
 
-职责：
+Node.js + Express + ws 服务端，负责：
 
-- 提供 REST API 给浏览器下发命令
-- 提供 WebSocket 给 agent 建立长连接
-- 提供 WebSocket 给浏览器接收实时状态
-- 保存在线设备和命令记录
-- agent 重连后自动补发排队命令
-
-核心文件：
-
-- [index.js](/c:/project/remote-client/webserver/server/src/index.js)
-- [agent-registry.js](/c:/project/remote-client/webserver/server/src/state/agent-registry.js)
-- [command-store.js](/c:/project/remote-client/webserver/server/src/state/command-store.js)
-- [logger.js](/c:/project/remote-client/webserver/server/src/logger.js)
+- 登录鉴权与浏览器会话
+- `auth_code` 绑定管理
+- 安全消息封装与派发
+- agent/browser WebSocket
+- 命令与终端会话摘要持久化
 
 ### 3. `webserver/client`
 
-职责：
+Vue 3 控制台，负责：
 
-- 展示在线设备
-- 选择目标设备并发送命令
-- 通过浏览器 WebSocket 实时刷新结果
+- 登录与账号管理
+- 设备选择与状态展示
+- 一次性命令下发
+- 交互式终端会话创建、输入、终止、删除
+- 远程文本文件预览
+- `auth_code` 管理
 
-核心文件：
+### 4. `localapp2`
 
-- [App.vue](/c:/project/remote-client/webserver/client/src/App.vue)
-- [styles.css](/c:/project/remote-client/webserver/client/src/styles.css)
+当前仓库中还存在一个 Electron Windows 客户端骨架：
+
+- 已落地托盘、`userData` 配置、密钥管理入口、打包脚本和同步机制
+- 目前仍是实验性桌面壳，不是主文档中的默认生产 agent 形态
+
+## 默认端口与地址
+
+- `webserver/server`：`3100`
+- `localapp` 默认上连地址：`ws://localhost:3100/ws/agent`
+- `webserver/client` 开发服务器：`5173`
+- `localapp` 本地调试接口默认端口：`3210`
+
+## 登录与会话
+
+### 浏览器登录
+
+- 浏览器通过 `/api/auth/login` 登录
+- 服务端使用 `user_sessions` 保存登录态
+- 会话通过 HTTP-only cookie 维持
+- `/api/auth/session` 用于恢复登录状态
+- `/api/auth/logout` 用于退出
+
+### 用户能力
+
+- 支持公开注册：`/api/auth/register`
+- 支持修改自己的密码：`/api/auth/change-password`
+- 管理员支持用户列表、创建用户、修改角色/启停、重置密码
+
+### 角色模型
+
+当前角色仍是基础三档：
+
+- `admin`
+- `operator`
+- `viewer`
+
+尚未实现更细粒度的 RBAC。
+
+## `auth_code` 与安全链路
+
+### `auth_code` 绑定
+
+- 每个用户可按 `agentId` 维护自己的 RSA 公钥绑定
+- 数据表为 `user_auth_codes`
+- 服务端会对 PEM 做规范化，并计算 SHA-256 指纹
+- 前端已支持列表、创建、更新、删除
+
+### 密钥职责
+
+当前安全链路使用两套密钥：
+
+- `localapp` 自身 RSA 密钥：
+  - `auth_public.pem` 提供给服务端做加密
+  - `auth_private.pem` 留在目标机本地做解密
+- `webserver` 签名 RSA 密钥：
+  - 私钥在服务端签名
+  - 公钥分发到 `localapp` 做验签
+
+### 当前已落地的安全消息类型
+
+`webserver -> localapp` 侧已落地：
+
+- `command.execute.secure`
+- `terminal.session.create.secure`
+- `terminal.session.input.secure`
+- `terminal.session.resize.secure`
+- `terminal.session.terminate.secure`
+- `file.read.secure`
+
+### `localapp` 执行前校验
+
+`localapp` 当前会在执行前校验：
+
+- 消息类型
+- 服务端签名
+- 本地私钥解密
+- `agentId`
+- `expiresAt`
+- `nonce` 防重放
+
+并且会明确拒绝不安全的明文 `command.execute`。
+
+### 安全实现边界
+
+- 当前安全封装主要覆盖 `server -> agent` 链路
+- `agent -> server` 回传结果仍是现有 WebSocket 业务消息
+- 安全实现的共享事实来源是 `shared/secure-command.mjs`
+
+## 一次性命令链路
+
+### 服务端入口
+
+- REST：`POST /api/commands`
+
+### 行为
+
+- 浏览器提交 `agentId + command`
+- 服务端按当前用户和目标设备查找 `auth_code`
+- 成功后生成 `command.execute.secure`
+- 如果 agent 在线则立即派发，否则进入 `queued`
+- agent 串行执行，回传：
+  - `command.started`
+  - `command.finished`
+
+### 持久化
+
+- 内存态：`CommandStore`
+- MySQL 摘要表：`command_runs`
+
+当前只持久化输出摘要与字符数，不默认完整落库整段 `stdout` / `stderr`。
+
+## 交互式终端会话链路
+
+### 服务端入口
+
+- `GET /api/terminal-sessions`
+- `GET /api/terminal-sessions/:sessionId`
+- `POST /api/terminal-sessions`
+- `POST /api/terminal-sessions/:sessionId/input`
+- `POST /api/terminal-sessions/:sessionId/terminate`
+- `DELETE /api/terminal-sessions/:sessionId`
+
+### agent 侧能力
+
+`localapp` 当前已实现：
+
+- `node-pty` PTY 会话创建
+- stdin 持续写入
+- 输出流持续回传
+- resize
+- terminate
+- 空闲超时自动回收
+- agent 重连时上报当前活动会话
+
+### 会话 profile
+
+当前 profile 由 `ToolProfileRegistry` 管理，内置/配置合并后可用于终端会话。
+
+当前仓库内已覆盖的常见 profile：
+
+- `default_shell_session`
+- `claude_code_session`
+- `codex_code_session`
+
+profile 当前可约束：
+
+- 运行器类型
+- 启动命令
+- 允许的工作目录
+- 环境变量 allowlist
+- 输出模式
+- 空闲超时
+
+### 服务端侧处理
+
+服务端当前会：
+
+- 派发创建/输入/缩放/终止消息
+- 缓存活动会话输出
+- 从输出中提取 `final_text`
+- 记录 turn 级输入/结果摘要
+- 浏览器重连时通过 `snapshot` 恢复会话列表
+- agent 重连时尝试与活动会话重新对齐
+
+### 持久化
+
+- 内存态：`TerminalSessionStore`
+- MySQL：
+  - `terminal_sessions`
+  - `terminal_session_turns`
+
+当前仍以“摘要持久化”为主，不是完整原始终端流长期落库。
+
+## 远程文件预览
+
+### 服务端入口
+
+- `POST /api/remote-files/read`
+
+### 当前能力
+
+- 通过 `file.read.secure` 请求目标 agent 读取文本文件
+- 可结合当前终端会话自动解析相对路径
+- 仅支持文本预览
+- 超出上限时截断返回
+- 会识别常见编码，Windows 下支持本地编码回退
+
+当前前端已支持在终端详情页中打开和预览文本文件。
+
+## `localapp` 模块说明
+
+### 运行特征
+
+- 主动连接 `/ws/agent`
+- 自动重连和心跳
+- 命令串行队列
+- 终端会话独立于一次性命令队列
+- 网络断开时可缓存待回传消息到 outbox
+- Windows 输出默认按 `cp936` 解码
+
+### 本地调试入口
+
+可选开启本地调试 HTTP 服务，默认：
+
+- 仅监听 `127.0.0.1`
+- 需要 `LOCAL_DEBUG_TOKEN`
+
+当前已实现接口：
+
+- `GET /api/debug/health`
+- `POST /api/debug/commands`
+- `GET /api/debug/terminal-sessions`
+- `POST /api/debug/terminal-sessions`
+- `GET /api/debug/terminal-sessions/:sessionId`
+- `POST /api/debug/terminal-sessions/:sessionId/input`
+- `POST /api/debug/terminal-sessions/:sessionId/terminate`
+
+## `webserver/server` 模块说明
+
+### 核心职责
+
+- 处理登录、会话、用户、`auth_code`
+- 维护在线 agent 注册表
+- 为命令/终端/文件读取生成安全 envelope
+- 向浏览器广播实时状态
+- 落命令与终端摘要到 MySQL
+
+### 状态边界
+
+持久化到 MySQL：
+
+- 用户
+- 浏览器会话
+- `auth_code`
+- 一次性命令摘要
+- 终端会话摘要
+- 终端会话 turn 摘要
+
+只保存在内存：
+
+- 当前在线 agent
+- 当前活动命令缓存
+- 当前活动终端会话输出缓存
+- 待完成的远程文件读取请求
+
+## `webserver/client` 模块说明
+
+当前控制台已覆盖：
+
+- 登录页
+- 首页设备概览
+- 一次性命令面板
+- 交互式会话面板
+- 终端输出查看
+- `final_text` 查看
+- 远程文件预览
+- `auth_code` 管理
+- 账号安全
+- 用户管理
 
 ## 通信协议
 
@@ -99,52 +311,85 @@
 - `agent.heartbeat`
 - `command.started`
 - `command.finished`
+- `terminal.session.created`
+- `terminal.session.resized`
+- `terminal.session.output`
+- `terminal.session.closed`
+- `terminal.session.error`
+- `file.read.completed`
+- `file.read.error`
 
 ### server -> agent
 
-- `command.execute`
+- `command.execute.secure`
+- `terminal.session.create.secure`
+- `terminal.session.input.secure`
+- `terminal.session.resize.secure`
+- `terminal.session.terminate.secure`
+- `file.read.secure`
 
 ### server -> browser
 
 - `snapshot`
 - `agent.updated`
 - `command.updated`
+- `terminal.session.updated`
+- `terminal.session.output`
+- `terminal.session.deleted`
+- `terminal.session.input.ack`
 
-## 时序
+## 典型时序
 
-1. agent 启动后主动连接 `/ws/agent`
+### 一次性命令
+
+1. agent 启动后连接 `/ws/agent`
 2. agent 发送 `agent.register`
-3. 浏览器请求 `/api/agents`、`/api/commands`
-4. 浏览器通过 `/api/commands` 提交命令
-5. 服务端如果 agent 在线则立即推送 `command.execute`，否则进入 `queued`
-6. agent 收到后执行本地命令，回传开始与结束事件
-7. 服务端更新状态并通过 `/ws/browser` 广播到前端
+3. 浏览器登录并提交 `/api/commands`
+4. 服务端生成 `command.execute.secure`
+5. agent 验签、解密、执行
+6. agent 回传 `command.started` / `command.finished`
+7. 服务端更新状态并广播给浏览器
+
+### 交互式终端
+
+1. 浏览器提交 `/api/terminal-sessions`
+2. 服务端生成 `terminal.session.create.secure`
+3. agent 创建 PTY 会话并回传 `terminal.session.created`
+4. 浏览器通过 `/api/terminal-sessions/:sessionId/input` 继续输入
+5. agent 持续回传 `terminal.session.output`
+6. 浏览器可继续 resize、终止、删除已结束会话
+
+### 远程文件读取
+
+1. 浏览器提交 `/api/remote-files/read`
+2. 服务端生成 `file.read.secure`
+3. agent 读取文件并返回 `file.read.completed` 或 `file.read.error`
+4. 服务端将结果同步回浏览器
 
 ## 日志
 
 ### 服务端日志
 
 - 目录：`webserver/server/logs/`
-- `server.log`：服务启动、agent 连接/断开、WebSocket 鉴权失败、进程异常
-- `command.log`：web 端命令提交、排队、派发、开始执行、执行结果
+- `server.log`
+- `command.log`
 
-### 内网 agent 日志
+### agent 日志
 
 - 目录：`localapp/logs/`
-- `agent.log`：agent 启动、连接、重连、消息缓存、进程异常
-- `command.log`：本地收到的命令、开始执行、执行结果（包含 `stdout`、`stderr`、退出码）
+- `agent.log`
+- `command.log`
 
 ### 日志格式
 
 - 使用 `log4js`
-- 采用单行 JSON 事件体，方便后续按关键字或日志采集系统解析
-- 默认保留 14 天，可通过 `.env` 中的 `LOG_LEVEL`、`LOG_DIR` 调整
+- 单行 JSON 结构化事件
 
 ## 当前实现边界
 
-- 命令记录和终端会话摘要会持久化到 MySQL，但在线状态和原始终端流仍以内存为主
-- 一次性命令默认仅保存输出摘要，不保存完整 `stdout` / `stderr`
-- AI 终端会话默认保存用户输入与提取出的 `final_text`，不默认持久化完整思考流
-- 当前提供基础用户名密码登录，不包含更细粒度的 RBAC 权限模型
-- 默认不做命令白名单，生产环境建议补上策略控制
-- 当前前端面向单控制台使用场景，适合先验证链路与功能
+- 角色模型仍较粗，不是细粒度 RBAC
+- 默认不做命令白名单，生产环境建议补策略控制
+- 在线状态与活动输出仍以内存为主，服务端重启后需要重新等待 agent 上线
+- 一次性命令仅保存摘要，不默认保存完整输出
+- 终端会话主要保存摘要、尾部 transcript 和 `final_text`
+- `localapp2` 仍是实验性桌面壳，不能替代 `localapp` 作为默认生产 agent
