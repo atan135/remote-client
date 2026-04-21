@@ -67,7 +67,9 @@ const fallbackTerminalProfiles = Object.freeze([
     recommended: true
   }
 ]);
-const TERMINAL_OUTPUT_BUFFER_LIMIT = 200;
+// PTY output is chunked very aggressively, so a small item count only preserves
+// about one screen of history after remount/reconnect. Keep a few screens here.
+const TERMINAL_OUTPUT_BUFFER_LIMIT = 1200;
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
 const PENDING_COMMAND_STATUSES = new Set(["queued", "running", "dispatched"]);
 const FAILED_COMMAND_STATUSES = new Set(["failed", "timed_out", "connection_lost"]);

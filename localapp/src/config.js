@@ -118,7 +118,7 @@ export function loadConfig() {
     remoteFileMaxBytes: toNumber(process.env.REMOTE_FILE_MAX_BYTES, 1024 * 1024),
     maxTerminalSessions: toNumber(process.env.MAX_TERMINAL_SESSIONS, 4),
     sessionIdleTimeoutMs: toNumber(process.env.SESSION_IDLE_TIMEOUT_MS, 30 * 60 * 1000),
-    sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 200),
+    sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 1200),
     taskProfileConfigPath:
       process.env.TASK_PROFILE_CONFIG_PATH || "./config/tool-profiles.json",
     discoveredTerminalCommands: toUniqueList(process.env.DISCOVER_TERMINAL_COMMANDS),
