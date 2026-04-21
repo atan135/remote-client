@@ -139,18 +139,12 @@ function backToMenu() {
     <el-card v-if="profileView === 'menu'" class="surface-card info-card" shadow="never">
       <div class="card-head">
         <div>
-          <p class="eyebrow">Profile Menu</p>
           <h3>我的</h3>
-          <p>选择一个操作入口，进入对应的独立界面。</p>
         </div>
       </div>
 
       <el-menu class="profile-entry-menu" mode="vertical" @select="openView">
-        <el-menu-item
-          v-for="entry in profileEntries"
-          :key="entry.key"
-          :index="entry.key"
-        >
+        <el-menu-item v-for="entry in profileEntries" :key="entry.key" :index="entry.key">
           <span>{{ entry.title }}</span>
         </el-menu-item>
       </el-menu>
@@ -246,12 +240,7 @@ function backToMenu() {
         </div>
 
         <div class="stack-grid compact-stack">
-          <el-card
-            v-for="item in authCodes"
-            :key="item.id"
-            class="surface-card nested-card"
-            shadow="never"
-          >
+          <el-card v-for="item in authCodes" :key="item.id" class="surface-card nested-card" shadow="never">
             <div class="card-head card-head-tight">
               <div>
                 <h3>{{ item.agentId }}</h3>
@@ -279,13 +268,8 @@ function backToMenu() {
               <el-button round :disabled="savingAuthCodeId === item.id" @click="emit('saveAuthCode', item)">
                 {{ savingAuthCodeId === item.id ? "保存中..." : "保存" }}
               </el-button>
-              <el-button
-                type="danger"
-                plain
-                round
-                :disabled="deletingAuthCodeId === item.id"
-                @click="emit('deleteAuthCode', item)"
-              >
+              <el-button type="danger" plain round :disabled="deletingAuthCodeId === item.id"
+                @click="emit('deleteAuthCode', item)">
                 {{ deletingAuthCodeId === item.id ? "删除中..." : "删除" }}
               </el-button>
             </div>
@@ -340,12 +324,7 @@ function backToMenu() {
         </div>
 
         <div class="stack-grid compact-stack">
-          <el-card
-            v-for="user in users"
-            :key="user.id"
-            class="surface-card nested-card"
-            shadow="never"
-          >
+          <el-card v-for="user in users" :key="user.id" class="surface-card nested-card" shadow="never">
             <div class="card-head card-head-tight">
               <div>
                 <h3>{{ user.username }}</h3>

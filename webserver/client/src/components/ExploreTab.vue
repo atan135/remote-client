@@ -239,9 +239,9 @@ const canSubmitPresetCommand = computed(
   () =>
     Boolean(
       props.selectedAgentId &&
-        selectedPresetCommand.value &&
-        props.activeAuthCodeBinding &&
-        !props.submitting
+      selectedPresetCommand.value &&
+      props.activeAuthCodeBinding &&
+      !props.submitting
     )
 );
 
@@ -256,9 +256,9 @@ const canSendSessionPresetInput = computed(
   () =>
     Boolean(
       currentSession.value &&
-        selectedSessionPresetCommand.value &&
-        !isTerminalSessionClosed(currentSession.value.status) &&
-        !props.sendingTerminalInput
+      selectedSessionPresetCommand.value &&
+      !isTerminalSessionClosed(currentSession.value.status) &&
+      !props.sendingTerminalInput
     )
 );
 
@@ -270,9 +270,9 @@ const canTerminateCurrentSession = computed(
   () =>
     Boolean(
       currentSession.value &&
-        props.canTerminateTerminalSession &&
-        currentSession.value.sessionId === props.activeTerminalSession?.sessionId &&
-        props.terminatingTerminalSessionId !== currentSession.value.sessionId
+      props.canTerminateTerminalSession &&
+      currentSession.value.sessionId === props.activeTerminalSession?.sessionId &&
+      props.terminatingTerminalSessionId !== currentSession.value.sessionId
     )
 );
 
@@ -286,9 +286,9 @@ const canOpenRemoteFile = computed(
   () =>
     Boolean(
       currentSession.value &&
-        props.activeAuthCodeBinding &&
-        String(props.remoteFilePath || "").trim() &&
-        !props.readingRemoteFile
+      props.activeAuthCodeBinding &&
+      String(props.remoteFilePath || "").trim() &&
+      !props.readingRemoteFile
     )
 );
 const currentRemoteFileViewer = computed(() => {
@@ -367,8 +367,8 @@ function isTerminalSessionClosed(status) {
 function canDeleteSession(session) {
   return Boolean(
     session &&
-      isTerminalSessionClosed(session.status) &&
-      props.deletingTerminalSessionId !== session.sessionId
+    isTerminalSessionClosed(session.status) &&
+    props.deletingTerminalSessionId !== session.sessionId
   );
 }
 
@@ -595,18 +595,10 @@ function formatCompactDateTime(value) {
 
             <label v-if="presetCommands.length" class="field-block field-block-tight">
               <span>预设命令</span>
-              <el-select
-                :model-value="selectedPresetCommandKey"
-                clearable
-                placeholder="选择当前设备 localapp/.env 中的预设命令"
-                @update:model-value="handlePresetCommandChange"
-              >
-                <el-option
-                  v-for="preset in presetCommands"
-                  :key="preset.key"
-                  :label="preset.label"
-                  :value="preset.key"
-                />
+              <el-select :model-value="selectedPresetCommandKey" clearable placeholder="选择当前设备 localapp/.env 中的预设命令"
+                @update:model-value="handlePresetCommandChange">
+                <el-option v-for="preset in presetCommands" :key="preset.key" :label="preset.label"
+                  :value="preset.key" />
               </el-select>
               <p v-if="selectedPresetCommand" class="muted explore-preset-command-preview">
                 {{ selectedPresetCommand.command }}
@@ -623,13 +615,8 @@ function formatCompactDateTime(value) {
             </label>
 
             <div class="hero-actions explore-actions">
-              <el-button
-                v-if="presetCommands.length"
-                round
-                plain
-                :disabled="!canSubmitPresetCommand"
-                @click="submitSelectedPresetCommand"
-              >
+              <el-button v-if="presetCommands.length" round plain :disabled="!canSubmitPresetCommand"
+                @click="submitSelectedPresetCommand">
                 {{ submitting ? "提交中..." : "直接调用预设" }}
               </el-button>
               <el-button type="primary" round :disabled="!canSubmitCommand" @click="emit('submitCommand')">
@@ -643,9 +630,7 @@ function formatCompactDateTime(value) {
           <div class="explore-pane explore-session-pane">
             <div class="card-head card-head-tight">
               <div>
-                <p class="eyebrow">Interactive Session</p>
                 <h3>交互式终端会话</h3>
-                <p>创建会话后，点击列表项进入独立终端界面。</p>
               </div>
               <el-tag :type="currentSession ? statusType(currentSession.status) : 'info'" effect="dark" round>
                 {{ currentSession?.status || "未选择会话" }}
@@ -657,18 +642,10 @@ function formatCompactDateTime(value) {
                 <span>终端 / CLI</span>
                 <el-select :model-value="terminalProfile" placeholder="请选择启动方式" filterable
                   @update:model-value="emit('update:terminalProfile', $event)">
-                  <el-option-group
-                    v-for="group in terminalProfileOptionGroups"
-                    :key="group.key"
-                    :label="group.label"
-                  >
-                    <el-option
-                      v-for="profile in group.items"
-                      :key="profile.name"
+                  <el-option-group v-for="group in terminalProfileOptionGroups" :key="group.key" :label="group.label">
+                    <el-option v-for="profile in group.items" :key="profile.name"
                       :label="`${getTerminalProfileOptionLabel(profile)}${profile.isAvailable === false ? '（不可用）' : ''}`"
-                      :value="profile.name"
-                      :disabled="profile.isAvailable === false"
-                    />
+                      :value="profile.name" :disabled="profile.isAvailable === false" />
                   </el-option-group>
                 </el-select>
                 <small v-if="selectedTerminalProfileDescription" class="muted">
@@ -683,8 +660,7 @@ function formatCompactDateTime(value) {
                 <span>工作目录</span>
                 <el-autocomplete :model-value="terminalCwd" :fetch-suggestions="queryCommonWorkingDirectories"
                   :trigger-on-focus="Boolean(activeAgent?.commonWorkingDirectories?.length)" clearable
-                  placeholder="可选常用目录，也可直接输入；留空则使用默认目录"
-                  @update:model-value="emit('update:terminalCwd', $event)"
+                  placeholder="可选常用目录，也可直接输入；留空则使用默认目录" @update:model-value="emit('update:terminalCwd', $event)"
                   @select="emit('update:terminalCwd', $event?.value || '')" />
               </label>
             </div>
@@ -698,9 +674,8 @@ function formatCompactDateTime(value) {
 
             <div class="card-head card-head-tight compact-stack">
               <div>
-                <p class="eyebrow">Sessions</p>
                 <h3>会话列表</h3>
-                <p>{{ terminalSessions.length ? "点击任一会话进入输出界面" : "当前设备还没有终端会话" }}</p>
+                <p v-if="terminalSessions.length == 0">当前设备还没有终端会话</p>
               </div>
               <el-tag effect="plain" round>
                 {{ terminalSessions.length }} 个
@@ -720,14 +695,8 @@ function formatCompactDateTime(value) {
                   <el-tag :type="statusType(session.status)" effect="dark" round>
                     {{ session.status }}
                   </el-tag>
-                  <el-button
-                    v-if="isTerminalSessionClosed(session.status)"
-                    round
-                    plain
-                    size="small"
-                    :disabled="!canDeleteSession(session)"
-                    @click="emit('delete-terminal-session', session.sessionId)"
-                  >
+                  <el-button v-if="isTerminalSessionClosed(session.status)" round plain size="small"
+                    :disabled="!canDeleteSession(session)" @click="emit('delete-terminal-session', session.sessionId)">
                     {{
                       deletingTerminalSessionId === session.sessionId
                         ? "删除中..."
@@ -743,11 +712,8 @@ function formatCompactDateTime(value) {
       </el-tabs>
     </el-card>
 
-    <el-card
-      v-else-if="sessionScreen === 'detail'"
-      class="surface-card info-card explore-session-detail-card"
-      shadow="never"
-    >
+    <el-card v-else-if="sessionScreen === 'detail'" class="surface-card info-card explore-session-detail-card"
+      shadow="never">
       <div class="explore-session-screen">
         <div class="profile-screen-top explore-session-detail-top">
           <el-button class="back-button" round plain @click="goBackToSessionList">
@@ -788,11 +754,8 @@ function formatCompactDateTime(value) {
         </el-collapse>
 
         <div v-if="currentSession" class="explore-terminal-shell">
-          <div
-            v-if="shouldPreferFinalAnswer"
-            class="console-block final-answer-block"
-            :class="{ empty: !hasFinalAnswer }"
-          >
+          <div v-if="shouldPreferFinalAnswer" class="console-block final-answer-block"
+            :class="{ empty: !hasFinalAnswer }">
             <h4>Final Answer</h4>
             <pre v-if="hasFinalAnswer">{{ currentSession.finalText }}</pre>
             <p v-else class="muted">
@@ -800,121 +763,64 @@ function formatCompactDateTime(value) {
             </p>
           </div>
 
-          <label
-            v-if="currentSession && !isTerminalSessionClosed(currentSession.status)"
-            class="field-block field-block-tight explore-session-input"
-          >
+          <label v-if="currentSession && !isTerminalSessionClosed(currentSession.status)"
+            class="field-block field-block-tight explore-session-input">
             <span>{{ shouldPreferFinalAnswer ? "继续提问" : "发送输入" }}</span>
             <div v-if="presetCommands.length" class="field-block field-block-tight explore-session-preset-field">
               <span>预设输入</span>
-              <el-select
-                :model-value="selectedSessionPresetCommandKey"
-                clearable
-                placeholder="选择当前设备 localapp/.env 中的预设输入"
-                @update:model-value="handleSessionPresetCommandChange"
-              >
-                <el-option
-                  v-for="preset in presetCommands"
-                  :key="`session-${preset.key}`"
-                  :label="preset.label"
-                  :value="preset.key"
-                />
+              <el-select :model-value="selectedSessionPresetCommandKey" clearable
+                placeholder="选择当前设备 localapp/.env 中的预设输入" @update:model-value="handleSessionPresetCommandChange">
+                <el-option v-for="preset in presetCommands" :key="`session-${preset.key}`" :label="preset.label"
+                  :value="preset.key" />
               </el-select>
               <p v-if="selectedSessionPresetCommand" class="muted explore-preset-command-preview">
                 {{ selectedSessionPresetCommand.command }}
               </p>
             </div>
             <div class="explore-session-input-row">
-              <el-input
-                :model-value="terminalInput"
-                type="textarea"
-                :autosize="{ minRows: 2, maxRows: 4 }"
-                :placeholder="
-                  shouldPreferFinalAnswer
-                    ? '输入你的追加要求，发送到当前模型会话'
-                    : '向当前终端会话发送输入'
-                "
-                @update:model-value="emit('update:terminalInput', $event)"
-              />
+              <el-input :model-value="terminalInput" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }"
+                :placeholder="shouldPreferFinalAnswer
+                  ? '输入你的追加要求，发送到当前模型会话'
+                  : '向当前终端会话发送输入'
+                  " @update:model-value="emit('update:terminalInput', $event)" />
             </div>
             <div class="hero-actions explore-session-input-actions">
-              <el-button
-                v-if="presetCommands.length"
-                round
-                plain
-                :disabled="!canSendSessionPresetInput"
-                @click="sendSelectedSessionPresetInput"
-              >
+              <el-button v-if="presetCommands.length" round plain :disabled="!canSendSessionPresetInput"
+                @click="sendSelectedSessionPresetInput">
                 {{ sendingTerminalInput ? "发送中..." : "发送预设输入" }}
               </el-button>
-              <el-button
-                type="primary"
-                round
-                :disabled="!canSendTerminalInput"
-                @click="emit('send-terminal-input', currentSession.sessionId)"
-              >
+              <el-button type="primary" round :disabled="!canSendTerminalInput"
+                @click="emit('send-terminal-input', currentSession.sessionId)">
                 {{ sendingTerminalInput ? "发送中..." : "发送" }}
               </el-button>
-              <el-button
-                round
-                plain
-                type="warning"
-                :disabled="!canInterruptCurrentSession"
-                @click="emit('interrupt-terminal-session', currentSession.sessionId)"
-              >
+              <el-button round plain type="warning" :disabled="!canInterruptCurrentSession"
+                @click="emit('interrupt-terminal-session', currentSession.sessionId)">
                 停止任务
               </el-button>
             </div>
           </label>
 
           <el-collapse v-model="rawTerminalPanels" class="explore-raw-terminal">
-            <el-collapse-item
-              name="raw"
-              :title="shouldPreferFinalAnswer ? '原始终端输出（调试）' : '终端输出'"
-            >
-              <p
-                v-if="currentSession && !isTerminalSessionClosed(currentSession.status)"
-                class="muted compact-stack"
-              >
-                点击“停止任务”会向当前终端发送 Ctrl+C，中断前台任务，但不会结束整个会话。
-              </p>
-              <TerminalEmulator
-                class="explore-terminal"
-                :session-id="currentSession.sessionId"
-                :outputs="currentSession.outputs || []"
-                :interactive="!isTerminalSessionClosed(currentSession.status)"
+            <el-collapse-item name="raw" :title="shouldPreferFinalAnswer ? '原始终端输出（调试）' : '终端输出'">
+              <TerminalEmulator class="explore-terminal" :session-id="currentSession.sessionId"
+                :outputs="currentSession.outputs || []" :interactive="!isTerminalSessionClosed(currentSession.status)"
                 @terminal-data="
                   emit('send-terminal-raw-input', {
                     input: $event,
                     sessionId: currentSession.sessionId
                   })
-                "
-                @terminal-resize="emit('resize-terminal-session', $event)"
-              />
+                  " @terminal-resize="emit('resize-terminal-session', $event)" />
             </el-collapse-item>
           </el-collapse>
 
           <div v-if="currentSession" class="console-block explore-file-launcher">
             <h4>打开目标文件</h4>
-            <p class="muted explore-file-launcher-copy">
-              输入目标设备上的文件路径，当前仅展示文本内容，大文件会按预览上限截断。
-            </p>
             <label class="field-block field-block-tight">
-              <span>文件路径</span>
-              <el-input
-                :model-value="remoteFilePath"
-                placeholder="例如：C:\\project\\remote-client\\CLAUDE.md"
-                @update:model-value="emit('update:remoteFilePath', $event)"
-                @keyup.enter="openRemoteFileViewer"
-              />
+              <el-input :model-value="remoteFilePath" placeholder="例如：C:\\project\\remote-client\\CLAUDE.md"
+                @update:model-value="emit('update:remoteFilePath', $event)" @keyup.enter="openRemoteFileViewer" />
             </label>
             <div class="hero-actions explore-file-launcher-actions">
-              <el-button
-                type="primary"
-                round
-                :disabled="!canOpenRemoteFile"
-                @click="openRemoteFileViewer"
-              >
+              <el-button type="primary" round :disabled="!canOpenRemoteFile" @click="openRemoteFileViewer">
                 {{ readingRemoteFile ? "打开中..." : "打开文件" }}
               </el-button>
             </div>
@@ -942,12 +848,7 @@ function formatCompactDateTime(value) {
           </el-button>
           <div class="explore-session-top-actions">
             <el-tag effect="dark" round>文件预览</el-tag>
-            <el-tag
-              v-if="currentRemoteFileViewer?.truncated"
-              type="warning"
-              effect="dark"
-              round
-            >
+            <el-tag v-if="currentRemoteFileViewer?.truncated" type="warning" effect="dark" round>
               已截断
             </el-tag>
           </div>
@@ -1001,11 +902,8 @@ function formatCompactDateTime(value) {
             </el-collapse-item>
           </el-collapse>
 
-          <div
-            v-if="isMarkdownFile && currentRemoteFileViewer.content"
-            class="explore-file-markdown"
-            v-html="renderedRemoteFileHtml"
-          />
+          <div v-if="isMarkdownFile && currentRemoteFileViewer.content" class="explore-file-markdown"
+            v-html="renderedRemoteFileHtml" />
           <pre v-else-if="currentRemoteFileViewer.content">{{ currentRemoteFileViewer.content }}</pre>
           <p v-else class="muted explore-transcript-empty">文件内容为空。</p>
         </div>

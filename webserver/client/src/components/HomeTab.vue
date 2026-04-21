@@ -85,7 +85,6 @@ function statusType(status) {
       <el-card class="surface-card info-card" shadow="never">
         <div class="card-head">
           <div>
-            <p class="eyebrow">Agents</p>
             <h3>可用设备</h3>
           </div>
           <el-tag round effect="plain">{{ agents.length }}</el-tag>
@@ -107,7 +106,6 @@ function statusType(status) {
       <el-card class="surface-card info-card" shadow="never">
         <div class="card-head">
           <div>
-            <p class="eyebrow">Selected</p>
             <h3>设备详情</h3>
           </div>
         </div>
