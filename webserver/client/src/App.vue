@@ -42,6 +42,7 @@ const tabs = [
 const fallbackTerminalProfiles = Object.freeze([
   {
     name: "default_shell_session",
+    label: "默认 Shell",
     runner: "pty",
     command: "shell",
     cwdPolicy: "allowlist",
@@ -50,7 +51,11 @@ const fallbackTerminalProfiles = Object.freeze([
     idleTimeoutMs: 30 * 60 * 1000,
     envAllowlist: [],
     isAvailable: true,
-    unavailableReason: ""
+    unavailableReason: "",
+    source: "fallback",
+    kind: "shell",
+    description: "agent 未上报 profile 时的默认 shell 兜底项",
+    recommended: true
   }
 ]);
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 200;
@@ -167,7 +172,9 @@ const availableTerminalProfiles = computed(() => {
     ? activeAgent.value.terminalProfiles.filter((profile) => Boolean(profile?.name))
     : [];
 
-  return profiles.length > 0 ? profiles : fallbackTerminalProfiles;
+  return (profiles.length > 0 ? profiles : fallbackTerminalProfiles)
+    .map((profile) => normalizeTerminalProfileRecord(profile))
+    .sort(compareTerminalProfileRecords);
 });
 
 const selectedTerminalProfileConfig = computed(
@@ -1068,7 +1075,7 @@ async function deleteTerminalSession(sessionId = activeTerminalSession.value?.se
 
   try {
     await ElMessageBox.confirm(
-      `确认删除会话 ${sessionRecord.profile || sessionId} 吗？删除后将从列表中移除。`,
+      `确认删除会话 ${getTerminalProfileDisplayName(sessionRecord) || sessionId} 吗？删除后将从列表中移除。`,
       "删除会话",
       {
         type: "warning",
@@ -1570,7 +1577,10 @@ function ensureSelectedTerminalProfile() {
   }
 
   const preferredProfile =
-    profiles.find((item) => item.isAvailable !== false) || profiles[0];
+    profiles.find((item) => item.isAvailable !== false && item.recommended) ||
+    profiles.find((item) => item.isAvailable !== false && item.kind === "shell") ||
+    profiles.find((item) => item.isAvailable !== false) ||
+    profiles[0];
   terminalProfile.value = preferredProfile?.name || "";
 }
 
@@ -1848,6 +1858,77 @@ function normalizeFinalOutputMarkers(markers) {
   }
 
   return { start, end };
+}
+
+function normalizeTerminalProfileRecord(profile) {
+  return {
+    ...profile,
+    name: String(profile?.name || "").trim(),
+    label: String(profile?.label || profile?.name || "").trim(),
+    runner: String(profile?.runner || "").trim(),
+    command: String(profile?.command || "").trim(),
+    cwdPolicy: String(profile?.cwdPolicy || "allowlist").trim() || "allowlist",
+    outputMode: String(profile?.outputMode || "terminal").trim() || "terminal",
+    idleTimeoutMs: Number(profile?.idleTimeoutMs || 0),
+    envAllowlist: Array.isArray(profile?.envAllowlist)
+      ? profile.envAllowlist.map((item) => String(item))
+      : [],
+    isAvailable: profile?.isAvailable !== false,
+    unavailableReason: String(profile?.unavailableReason || "").trim(),
+    source: String(profile?.source || "").trim(),
+    kind: String(profile?.kind || "").trim() || "cli",
+    description: String(profile?.description || "").trim(),
+    recommended: profile?.recommended === true,
+    finalOutputMarkers: normalizeFinalOutputMarkers(profile?.finalOutputMarkers)
+  };
+}
+
+function compareTerminalProfileRecords(left, right) {
+  const availabilityDiff = Number(right?.isAvailable !== false) - Number(left?.isAvailable !== false);
+
+  if (availabilityDiff !== 0) {
+    return availabilityDiff;
+  }
+
+  const sourceDiff =
+    getTerminalProfileSourceWeight(left?.source) - getTerminalProfileSourceWeight(right?.source);
+
+  if (sourceDiff !== 0) {
+    return sourceDiff;
+  }
+
+  const recommendedDiff = Number(right?.recommended === true) - Number(left?.recommended === true);
+
+  if (recommendedDiff !== 0) {
+    return recommendedDiff;
+  }
+
+  const kindDiff = Number(String(left?.kind || "") !== "shell") - Number(String(right?.kind || "") !== "shell");
+
+  if (kindDiff !== 0) {
+    return kindDiff;
+  }
+
+  return String(left?.label || left?.name || "").localeCompare(String(right?.label || right?.name || ""));
+}
+
+function getTerminalProfileSourceWeight(source) {
+  switch (String(source || "")) {
+    case "builtin":
+      return 0;
+    case "config":
+      return 1;
+    case "fallback":
+      return 2;
+    case "discovered":
+      return 3;
+    default:
+      return 9;
+  }
+}
+
+function getTerminalProfileDisplayName(target) {
+  return String(target?.profileLabel || target?.label || target?.profile || target?.name || "").trim();
 }
 
 function resetRemoteFileViewer({ preservePath = false } = {}) {

@@ -231,6 +231,9 @@ function normalizeSessionRecord(sessionLike, outputLimit) {
     authCodeRemark: String(sessionLike?.authCodeRemark || ""),
     sessionType: String(sessionLike?.sessionType || "llm_cli"),
     profile: String(sessionLike?.profile || ""),
+    profileLabel: String(sessionLike?.profileLabel || ""),
+    profileSource: String(sessionLike?.profileSource || ""),
+    profileKind: String(sessionLike?.profileKind || ""),
     status: String(sessionLike?.status || "created"),
     createdAt,
     updatedAt:

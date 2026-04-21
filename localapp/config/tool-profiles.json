@@ -1,6 +1,7 @@
 {
   "profiles": {
     "claude_code_session": {
+      "label": "Claude Code",
       "runner": "pty",
       "command": "claude",
       "argsTemplate": [],
@@ -19,6 +20,7 @@
       "idleTimeoutMs": 1800000
     },
     "codex_code_session": {
+      "label": "Codex CLI",
       "runner": "pty",
       "command": "codex",
       "argsTemplate": [],

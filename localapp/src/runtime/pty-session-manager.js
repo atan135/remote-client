@@ -48,7 +48,12 @@ export class PtySessionManager {
       cwd: launch.cwd,
       envKeys: Object.keys(env || {}),
       cols,
-      rows
+      rows,
+      metadata: {
+        profileLabel: String(launch.profile?.label || profileName),
+        profileSource: String(launch.profile?.source || ""),
+        profileKind: String(launch.profile?.kind || "")
+      }
     });
 
     let ptyProcess;
@@ -75,6 +80,9 @@ export class PtySessionManager {
       agentId,
       source,
       profileName,
+      profileLabel: String(launch.profile?.label || profileName),
+      profileSource: String(launch.profile?.source || ""),
+      profileKind: String(launch.profile?.kind || ""),
       ptyProcess,
       eventSink,
       idleTimer: null,
@@ -96,6 +104,9 @@ export class PtySessionManager {
       requestId,
       agentId,
       profile: profileName,
+      profileLabel: handle.profileLabel,
+      profileSource: handle.profileSource,
+      profileKind: handle.profileKind,
       source,
       pid: ptyProcess.pid
     });
@@ -105,6 +116,9 @@ export class PtySessionManager {
       requestId,
       agentId,
       profile: profileName,
+      profileLabel: handle.profileLabel,
+      profileSource: handle.profileSource,
+      profileKind: handle.profileKind,
       status: "running",
       pid: ptyProcess.pid,
       startedAt
@@ -126,12 +140,14 @@ export class PtySessionManager {
         sessionId,
         agentId,
         profile: profileName,
+        profileLabel: handle.profileLabel,
         chunkLength: chunk.length
       });
 
       this.emit(handle, "terminal.session.output", {
         agentId,
         profile: profileName,
+        profileLabel: handle.profileLabel,
         ...appended.output
       });
     });
@@ -187,6 +203,7 @@ export class PtySessionManager {
       sessionId,
       agentId: handle.agentId,
       profile: handle.profileName,
+      profileLabel: handle.profileLabel,
       cols: normalizedCols,
       rows: normalizedRows,
       resizedAt: session?.updatedAt || new Date().toISOString()
@@ -326,6 +343,7 @@ export class PtySessionManager {
       sessionId: handle.sessionId,
       agentId: handle.agentId,
       profile: handle.profileName,
+      profileLabel: handle.profileLabel,
       status,
       exitCode: typeof exitCode === "number" ? exitCode : null,
       signal: signal || "",
@@ -336,6 +354,9 @@ export class PtySessionManager {
       sessionId: handle.sessionId,
       agentId: handle.agentId,
       profile: handle.profileName,
+      profileLabel: handle.profileLabel,
+      profileSource: handle.profileSource,
+      profileKind: handle.profileKind,
       status,
       exitCode: typeof exitCode === "number" ? exitCode : null,
       signal: signal || "",

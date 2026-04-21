@@ -15,24 +15,26 @@ export class ToolProfileRegistry {
   loadProfiles() {
     const builtInProfiles = createBuiltInProfiles(this.config);
     const configPath = path.resolve(packageRoot, this.config.taskProfileConfigPath);
+    let merged = { ...builtInProfiles };
 
-    if (!fs.existsSync(configPath)) {
-      return annotateProfileAvailability(builtInProfiles);
+    if (fs.existsSync(configPath)) {
+      const raw = fs.readFileSync(configPath, "utf8");
+      const parsed = JSON.parse(raw);
+      const fileProfiles = parsed?.profiles && typeof parsed.profiles === "object" ? parsed.profiles : {};
+
+      for (const [profileName, profileConfig] of Object.entries(fileProfiles)) {
+        merged[profileName] = normalizeProfile(profileName, {
+          ...(merged[profileName] || {}),
+          ...profileConfig,
+          source: profileConfig?.source || "config"
+        });
+      }
     }
 
-    const raw = fs.readFileSync(configPath, "utf8");
-    const parsed = JSON.parse(raw);
-    const fileProfiles = parsed?.profiles && typeof parsed.profiles === "object" ? parsed.profiles : {};
-    const merged = { ...builtInProfiles };
-
-    for (const [profileName, profileConfig] of Object.entries(fileProfiles)) {
-      merged[profileName] = normalizeProfile(profileName, {
-        ...(merged[profileName] || {}),
-        ...profileConfig
-      });
-    }
-
-    return annotateProfileAvailability(merged);
+    return annotateProfileAvailability({
+      ...merged,
+      ...createDiscoveredProfiles(merged, this.config)
+    });
   }
 
   getProfile(profileName) {
@@ -46,8 +48,9 @@ export class ToolProfileRegistry {
   }
 
   listProfiles() {
-    return Object.values(this.profiles).map((profile) => ({
+    return sortProfilesForListing(Object.values(this.profiles)).map((profile) => ({
       name: profile.name,
+      label: profile.label,
       runner: profile.runner,
       command: profile.command,
       cwdPolicy: profile.cwdPolicy,
@@ -58,7 +61,11 @@ export class ToolProfileRegistry {
       idleTimeoutMs: profile.idleTimeoutMs,
       envAllowlist: [...profile.envAllowlist],
       isAvailable: profile.isAvailable !== false,
-      unavailableReason: String(profile.unavailableReason || "")
+      unavailableReason: String(profile.unavailableReason || ""),
+      source: profile.source,
+      kind: profile.kind,
+      description: profile.description,
+      recommended: profile.recommended === true
     }));
   }
 
@@ -86,6 +93,7 @@ export class ToolProfileRegistry {
 function createBuiltInProfiles(config) {
   return {
     default_shell_session: normalizeProfile("default_shell_session", {
+      label: "默认 Shell",
       runner: "pty",
       command: config.defaultShell,
       argsTemplate: createDefaultShellArgsTemplate(config.defaultShell),
@@ -103,9 +111,14 @@ function createBuiltInProfiles(config) {
         "HTTPS_PROXY",
         "NO_PROXY"
       ],
-      idleTimeoutMs: config.sessionIdleTimeoutMs
+      idleTimeoutMs: config.sessionIdleTimeoutMs,
+      source: "builtin",
+      kind: "shell",
+      description: "使用 localapp 默认 shell 启动交互式终端",
+      recommended: true
     }),
     claude_code_session: normalizeProfile("claude_code_session", {
+      label: "Claude Code",
       runner: "pty",
       command: "claude",
       argsTemplate: [],
@@ -121,16 +134,22 @@ function createBuiltInProfiles(config) {
         "HTTPS_PROXY",
         "NO_PROXY"
       ],
-      idleTimeoutMs: 30 * 60 * 1000
+      idleTimeoutMs: 30 * 60 * 1000,
+      source: "builtin",
+      kind: "cli",
+      description: "使用 Claude CLI 启动会话，并优先提取最终回答",
+      recommended: true
     })
   };
 }
 
 function normalizeProfile(profileName, profileConfig) {
+  const normalizedCommand = String(profileConfig.command || "").trim();
   return {
     name: profileName,
+    label: String(profileConfig.label || profileName).trim() || profileName,
     runner: String(profileConfig.runner || "pty"),
-    command: String(profileConfig.command || "").trim(),
+    command: normalizedCommand,
     argsTemplate: Array.isArray(profileConfig.argsTemplate)
       ? profileConfig.argsTemplate.map((item) => String(item))
       : [],
@@ -143,7 +162,11 @@ function normalizeProfile(profileName, profileConfig) {
     idleTimeoutMs: Number(profileConfig.idleTimeoutMs) || 30 * 60 * 1000,
     resolvedCommand: String(profileConfig.resolvedCommand || "").trim(),
     isAvailable: profileConfig.isAvailable !== false,
-    unavailableReason: String(profileConfig.unavailableReason || "")
+    unavailableReason: String(profileConfig.unavailableReason || ""),
+    source: normalizeProfileSource(profileConfig.source),
+    kind: normalizeProfileKind(profileConfig.kind, normalizedCommand),
+    description: String(profileConfig.description || "").trim(),
+    recommended: profileConfig.recommended === true
   };
 }
 
@@ -167,6 +190,74 @@ function normalizeFinalOutputMarkers(value) {
   return { start, end };
 }
 
+function normalizeProfileSource(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return ["builtin", "config", "discovered", "fallback"].includes(normalized)
+    ? normalized
+    : "config";
+}
+
+function normalizeProfileKind(value, command) {
+  const normalized = String(value || "").trim().toLowerCase();
+
+  if (normalized === "shell" || normalized === "cli") {
+    return normalized;
+  }
+
+  return isShellLikeCommand(command) ? "shell" : "cli";
+}
+
+function sortProfilesForListing(profiles) {
+  return [...profiles].sort((left, right) => {
+    const availabilityDiff = Number(right?.isAvailable !== false) - Number(left?.isAvailable !== false);
+
+    if (availabilityDiff !== 0) {
+      return availabilityDiff;
+    }
+
+    const sourceDiff = profileSourceWeight(left?.source) - profileSourceWeight(right?.source);
+
+    if (sourceDiff !== 0) {
+      return sourceDiff;
+    }
+
+    const recommendedDiff = Number(right?.recommended === true) - Number(left?.recommended === true);
+
+    if (recommendedDiff !== 0) {
+      return recommendedDiff;
+    }
+
+    const kindDiff = profileKindWeight(left?.kind) - profileKindWeight(right?.kind);
+
+    if (kindDiff !== 0) {
+      return kindDiff;
+    }
+
+    const leftLabel = String(left?.label || left?.name || "");
+    const rightLabel = String(right?.label || right?.name || "");
+    return leftLabel.localeCompare(rightLabel);
+  });
+}
+
+function profileSourceWeight(source) {
+  switch (String(source || "")) {
+    case "builtin":
+      return 0;
+    case "config":
+      return 1;
+    case "fallback":
+      return 2;
+    case "discovered":
+      return 3;
+    default:
+      return 9;
+  }
+}
+
+function profileKindWeight(kind) {
+  return String(kind || "") === "shell" ? 0 : 1;
+}
+
 function buildProcessEnv(allowlist, extraEnv) {
   const nextEnv = { ...process.env };
 
@@ -177,6 +268,364 @@ function buildProcessEnv(allowlist, extraEnv) {
   }
 
   return nextEnv;
+}
+
+function createDiscoveredProfiles(existingProfiles, config) {
+  const discoveredExecutables = listDiscoveredExecutables(config);
+  const occupiedCommands = new Set(
+    Object.values(existingProfiles)
+      .map((profile) => normalizeCommandValue(profile?.command))
+      .filter(Boolean)
+      .map((command) => normalizeCommandKey(command))
+  );
+  const discoveredProfiles = {};
+
+  for (const executable of discoveredExecutables) {
+    const commandKey = normalizeCommandKey(executable.command);
+    const usesFinalOutputMode = supportsFinalOnlyOutput(executable.command);
+
+    if (!commandKey || occupiedCommands.has(commandKey)) {
+      continue;
+    }
+
+    const profileName = buildDiscoveredProfileName(executable.command, Object.keys({
+      ...existingProfiles,
+      ...discoveredProfiles
+    }));
+
+    discoveredProfiles[profileName] = normalizeProfile(profileName, {
+      label: executable.label,
+      runner: "pty",
+      command: executable.command,
+      argsTemplate: createDefaultShellArgsTemplate(executable.command),
+      cwdPolicy: "allowlist",
+      outputMode: usesFinalOutputMode ? "final_only" : "terminal",
+      finalOutputMarkers:
+        usesFinalOutputMode
+          ? {
+              start: "<<<FINAL>>>",
+              end: "<<<END_FINAL>>>"
+            }
+          : null,
+      envAllowlist: mergeEnvAllowlists(
+        executable.kind === "shell" ? createShellEnvAllowlist() : createCliEnvAllowlist(executable.command)
+      ),
+      idleTimeoutMs: config.sessionIdleTimeoutMs,
+      source: "discovered",
+      kind: executable.kind,
+      description: executable.description,
+      recommended: false
+    });
+  }
+
+  return discoveredProfiles;
+}
+
+function listDiscoveredExecutables(config) {
+  const candidates = buildExecutableDiscoveryCandidates(config);
+  const discovered = [];
+  const seenCommands = new Set();
+
+  for (const candidate of candidates) {
+    const command = String(candidate?.command || "").trim();
+    const normalizedKey = normalizeCommandKey(command);
+
+    if (!command || !normalizedKey || seenCommands.has(normalizedKey)) {
+      continue;
+    }
+
+    const resolvedCommand = resolveExecutableCommand(command);
+
+    if (!resolvedCommand) {
+      continue;
+    }
+
+    seenCommands.add(normalizedKey);
+    discovered.push({
+      command,
+      label: String(candidate?.label || deriveExecutableLabel(command)).trim() || command,
+      description: String(candidate?.description || "").trim(),
+      kind: normalizeProfileKind(candidate?.kind, command),
+      resolvedCommand
+    });
+  }
+
+  return discovered;
+}
+
+function buildExecutableDiscoveryCandidates(config) {
+  const shellCandidates = process.platform === "win32"
+    ? [
+        {
+          command: config.defaultShell,
+          label: "默认 Shell",
+          kind: "shell",
+          description: "使用 localapp 当前默认 shell 启动交互式终端"
+        },
+        {
+          command: "powershell.exe",
+          label: "Windows PowerShell",
+          kind: "shell",
+          description: "传统 PowerShell 主机"
+        },
+        {
+          command: "pwsh.exe",
+          label: "PowerShell 7",
+          kind: "shell",
+          description: "跨平台 PowerShell 7 主机"
+        },
+        {
+          command: "cmd.exe",
+          label: "Command Prompt",
+          kind: "shell",
+          description: "Windows cmd 终端"
+        },
+        {
+          command: "bash.exe",
+          label: "Bash",
+          kind: "shell",
+          description: "Git Bash / WSL Bash 等兼容 shell"
+        }
+      ]
+    : [
+        {
+          command: config.defaultShell,
+          label: "默认 Shell",
+          kind: "shell",
+          description: "使用 localapp 当前默认 shell 启动交互式终端"
+        },
+        {
+          command: "/bin/bash",
+          label: "Bash",
+          kind: "shell",
+          description: "GNU Bash shell"
+        },
+        {
+          command: "/bin/zsh",
+          label: "Zsh",
+          kind: "shell",
+          description: "Z shell"
+        },
+        {
+          command: "/bin/sh",
+          label: "POSIX Shell",
+          kind: "shell",
+          description: "系统默认 sh"
+        },
+        {
+          command: "fish",
+          label: "Fish",
+          kind: "shell",
+          description: "Fish shell"
+        }
+      ];
+  const cliCandidates = [
+    {
+      command: "claude",
+      label: "Claude Code",
+      kind: "cli",
+      description: "Anthropic Claude CLI"
+    },
+    {
+      command: "codex",
+      label: "Codex CLI",
+      kind: "cli",
+      description: "OpenAI Codex CLI"
+    },
+    {
+      command: "git",
+      label: "Git",
+      kind: "cli",
+      description: "Git 命令行"
+    },
+    {
+      command: "node",
+      label: "Node.js REPL",
+      kind: "cli",
+      description: "Node.js 交互式命令行"
+    },
+    {
+      command: "npm",
+      label: "npm",
+      kind: "cli",
+      description: "Node.js 包管理 CLI"
+    },
+    {
+      command: "npx",
+      label: "npx",
+      kind: "cli",
+      description: "Node.js 临时执行 CLI"
+    },
+    {
+      command: "pnpm",
+      label: "pnpm",
+      kind: "cli",
+      description: "pnpm 包管理 CLI"
+    },
+    {
+      command: "yarn",
+      label: "Yarn",
+      kind: "cli",
+      description: "Yarn 包管理 CLI"
+    },
+    {
+      command: "python",
+      label: "Python",
+      kind: "cli",
+      description: "Python 交互式解释器"
+    },
+    {
+      command: "python3",
+      label: "Python 3",
+      kind: "cli",
+      description: "Python 3 交互式解释器"
+    },
+    {
+      command: "uv",
+      label: "uv",
+      kind: "cli",
+      description: "Python / Rust 工具链 CLI"
+    },
+    {
+      command: "docker",
+      label: "Docker",
+      kind: "cli",
+      description: "Docker 命令行"
+    },
+    {
+      command: "kubectl",
+      label: "kubectl",
+      kind: "cli",
+      description: "Kubernetes CLI"
+    },
+    {
+      command: "ssh",
+      label: "SSH",
+      kind: "cli",
+      description: "OpenSSH 命令行"
+    }
+  ];
+  const customCandidates = Array.isArray(config?.discoveredTerminalCommands)
+    ? config.discoveredTerminalCommands.map((command) => ({
+        command,
+        label: deriveExecutableLabel(command),
+        kind: isShellLikeCommand(command) ? "shell" : "cli",
+        description: "来自 localapp DISCOVER_TERMINAL_COMMANDS 的额外探测项"
+      }))
+    : [];
+
+  return [...shellCandidates, ...cliCandidates, ...customCandidates];
+}
+
+function buildDiscoveredProfileName(command, occupiedNames) {
+  const normalizedCommand = normalizeCommandValue(command);
+  const executableName = path.basename(normalizedCommand).replace(path.extname(normalizedCommand), "");
+  const sanitized = executableName
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "") || "shell";
+  const prefix = `discovered_${sanitized}`;
+  const occupied = new Set(Array.isArray(occupiedNames) ? occupiedNames : []);
+
+  if (!occupied.has(prefix)) {
+    return prefix;
+  }
+
+  let index = 2;
+
+  while (occupied.has(`${prefix}_${index}`)) {
+    index += 1;
+  }
+
+  return `${prefix}_${index}`;
+}
+
+function deriveExecutableLabel(command) {
+  const normalizedCommand = normalizeCommandValue(command);
+  const executableName = path.basename(normalizedCommand).replace(path.extname(normalizedCommand), "");
+  return executableName || command;
+}
+
+function normalizeCommandKey(command) {
+  const normalized = normalizeCommandValue(command);
+
+  if (!normalized) {
+    return "";
+  }
+
+  const executableName = path.basename(normalized).toLowerCase();
+  return process.platform === "win32"
+    ? executableName.replace(/\.(exe|cmd|bat|com)$/i, "")
+    : executableName;
+}
+
+function mergeEnvAllowlists(baseAllowlist) {
+  return Array.from(new Set((Array.isArray(baseAllowlist) ? baseAllowlist : []).filter(Boolean)));
+}
+
+function createShellEnvAllowlist() {
+  return [
+    "PATH",
+    "PATHEXT",
+    "TERM",
+    "HOME",
+    "USERPROFILE",
+    "TMP",
+    "TEMP",
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "NO_PROXY"
+  ];
+}
+
+function createCliEnvAllowlist(command) {
+  const normalizedKey = normalizeCommandKey(command);
+
+  if (normalizedKey === "claude") {
+    return [
+      "ANTHROPIC_API_KEY",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "NO_PROXY"
+    ];
+  }
+
+  if (normalizedKey === "codex") {
+    return [
+      "OPENAI_API_KEY",
+      "OPENAI_BASE_URL",
+      "OPENAI_ORG_ID",
+      "OPENAI_PROJECT_ID",
+      "HTTP_PROXY",
+      "HTTPS_PROXY",
+      "NO_PROXY"
+    ];
+  }
+
+  return createShellEnvAllowlist();
+}
+
+function supportsFinalOnlyOutput(command) {
+  const normalizedKey = normalizeCommandKey(command);
+  return normalizedKey === "claude" || normalizedKey === "codex";
+}
+
+function isShellLikeCommand(command) {
+  const executableName = path.basename(String(command || "").trim()).toLowerCase();
+
+  return [
+    "powershell",
+    "powershell.exe",
+    "pwsh",
+    "pwsh.exe",
+    "cmd",
+    "cmd.exe",
+    "bash",
+    "bash.exe",
+    "sh",
+    "zsh",
+    "fish"
+  ].includes(executableName);
 }
 
 function resolveAllowedCwd(cwd, allowedRoots) {

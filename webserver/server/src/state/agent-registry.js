@@ -124,6 +124,7 @@ function normalizeTerminalProfiles(profiles) {
   return profiles
     .map((profile) => ({
       name: String(profile?.name || "").trim(),
+      label: String(profile?.label || profile?.name || "").trim(),
       runner: String(profile?.runner || "").trim(),
       command: String(profile?.command || "").trim(),
       cwdPolicy: String(profile?.cwdPolicy || "").trim(),
@@ -142,7 +143,11 @@ function normalizeTerminalProfiles(profiles) {
         ? profile.envAllowlist.map((item) => String(item))
         : [],
       isAvailable: profile?.isAvailable !== false,
-      unavailableReason: String(profile?.unavailableReason || "")
+      unavailableReason: String(profile?.unavailableReason || ""),
+      source: String(profile?.source || "").trim(),
+      kind: String(profile?.kind || "").trim(),
+      description: String(profile?.description || "").trim(),
+      recommended: profile?.recommended === true
     }))
     .filter((profile) => profile.name);
 }

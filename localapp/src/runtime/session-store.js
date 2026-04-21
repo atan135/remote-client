@@ -16,7 +16,8 @@ export class SessionStore {
     cwd,
     envKeys,
     cols,
-    rows
+    rows,
+    metadata = {}
   }) {
     const createdAt = new Date().toISOString();
     const record = {
@@ -40,7 +41,8 @@ export class SessionStore {
       error: "",
       outputs: [],
       createdAt,
-      updatedAt: createdAt
+      updatedAt: createdAt,
+      ...metadata
     };
 
     this.sessions.set(sessionId, record);

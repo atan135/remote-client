@@ -8,6 +8,7 @@ import {
   ElCollapseItem,
   ElInput,
   ElOption,
+  ElOptionGroup,
   ElSelect,
   ElTabPane,
   ElTabs,
@@ -161,6 +162,39 @@ const selectedTerminalProfileUnavailableReason = computed(() =>
     ? String(selectedTerminalProfileConfig.value?.unavailableReason || "当前 profile 不可用")
     : ""
 );
+
+const selectedTerminalProfileDescription = computed(() =>
+  String(selectedTerminalProfileConfig.value?.description || "").trim()
+);
+
+const terminalProfileOptionGroups = computed(() => {
+  const profiles = Array.isArray(props.availableTerminalProfiles) ? props.availableTerminalProfiles : [];
+  const groups = [
+    {
+      key: "recommended",
+      label: "推荐 Profile",
+      items: profiles.filter((profile) => String(profile?.source || "") !== "discovered")
+    },
+    {
+      key: "shells",
+      label: "环境 Shell",
+      items: profiles.filter(
+        (profile) =>
+          String(profile?.source || "") === "discovered" && String(profile?.kind || "") === "shell"
+      )
+    },
+    {
+      key: "cli",
+      label: "环境 CLI",
+      items: profiles.filter(
+        (profile) =>
+          String(profile?.source || "") === "discovered" && String(profile?.kind || "") !== "shell"
+      )
+    }
+  ];
+
+  return groups.filter((group) => group.items.length > 0);
+});
 
 const activeDeviceLabel = computed(() => props.activeAgent?.agentId || "未选择设备");
 
@@ -326,6 +360,17 @@ function canDeleteSession(session) {
       isTerminalSessionClosed(session.status) &&
       props.deletingTerminalSessionId !== session.sessionId
   );
+}
+
+function getTerminalProfileDisplayName(profileLike) {
+  return String(profileLike?.label || profileLike?.profileLabel || profileLike?.name || profileLike?.profile || "").trim();
+}
+
+function getTerminalProfileOptionLabel(profile) {
+  const displayName = getTerminalProfileDisplayName(profile) || String(profile?.name || "").trim();
+  const command = String(profile?.command || "").trim();
+  const sourceText = String(profile?.source || "") === "discovered" ? "环境探测" : "内置/配置";
+  return command ? `${displayName} / ${command} / ${sourceText}` : `${displayName} / ${sourceText}`;
 }
 
 function queryCommonWorkingDirectories(queryString, callback) {
@@ -577,14 +622,26 @@ function formatCompactDateTime(value) {
 
             <div class="detail-grid explore-session-form">
               <label class="field-block field-block-tight">
-                <span>终端 Profile</span>
-                <el-select :model-value="terminalProfile" placeholder="请选择 profile"
+                <span>终端 / CLI</span>
+                <el-select :model-value="terminalProfile" placeholder="请选择启动方式" filterable
                   @update:model-value="emit('update:terminalProfile', $event)">
-                  <el-option v-for="profile in availableTerminalProfiles" :key="profile.name"
-                    :label="`${profile.name} / ${profile.command || 'shell'}${profile.isAvailable === false ? '（不可用）' : ''}`"
-                    :value="profile.name"
-                    :disabled="profile.isAvailable === false" />
+                  <el-option-group
+                    v-for="group in terminalProfileOptionGroups"
+                    :key="group.key"
+                    :label="group.label"
+                  >
+                    <el-option
+                      v-for="profile in group.items"
+                      :key="profile.name"
+                      :label="`${getTerminalProfileOptionLabel(profile)}${profile.isAvailable === false ? '（不可用）' : ''}`"
+                      :value="profile.name"
+                      :disabled="profile.isAvailable === false"
+                    />
+                  </el-option-group>
                 </el-select>
+                <small v-if="selectedTerminalProfileDescription" class="muted">
+                  {{ selectedTerminalProfileDescription }}
+                </small>
                 <small v-if="selectedTerminalProfileUnavailableReason" class="muted">
                   {{ selectedTerminalProfileUnavailableReason }}
                 </small>
@@ -623,7 +680,7 @@ function formatCompactDateTime(value) {
                 :class="{ active: session.sessionId === currentSession?.sessionId }">
                 <button class="session-item-main" type="button" @click="openSessionDetail(session.sessionId)">
                   <span class="stack-text">
-                    <strong>{{ session.profile }}</strong>
+                    <strong>{{ session.profileLabel || session.profile }}</strong>
                     <small>{{ session.createdAt }}</small>
                   </span>
                 </button>
@@ -684,7 +741,7 @@ function formatCompactDateTime(value) {
             <div class="detail-grid">
               <div class="detail-row">
                 <span>Profile</span>
-                <strong>{{ currentSession.profile }}</strong>
+                <strong>{{ currentSession.profileLabel || currentSession.profile }}</strong>
               </div>
               <div class="detail-row">
                 <span>工作目录</span>

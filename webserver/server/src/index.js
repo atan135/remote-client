@@ -627,6 +627,7 @@ async function handleTerminalSessionCreateRequest(req, res) {
     const agent = agentRegistry.get(agentId);
     const profileConfig =
       agent?.terminalProfiles?.find((item) => item.name === profile) || null;
+    const profileLabel = String(profileConfig?.label || profile || "").trim();
 
     if (!authCodeBinding) {
       res.status(400).json({ message: "当前用户未为该设备配置 auth_code" });
@@ -656,6 +657,9 @@ async function handleTerminalSessionCreateRequest(req, res) {
         authCodeId: authCodeBinding.id,
         authCodeFingerprint: authCodeBinding.fingerprint,
         authCodeRemark: authCodeBinding.remark,
+        profileLabel,
+        profileSource: String(profileConfig?.source || ""),
+        profileKind: String(profileConfig?.kind || ""),
         cwd: launchPayload.cwd,
         envKeys: Object.keys(launchPayload.env),
         displayMode: normalizeProfileOutputMode(profileConfig?.outputMode),
@@ -1455,6 +1459,9 @@ async function handleAgentMessage(agentId, socket, message) {
       status: "running",
       startedAt: message.payload.startedAt || new Date().toISOString(),
       pid: message.payload.pid ?? null,
+      profileLabel: String(message.payload.profileLabel || ""),
+      profileSource: String(message.payload.profileSource || ""),
+      profileKind: String(message.payload.profileKind || ""),
       error: ""
     });
 
@@ -1595,6 +1602,8 @@ async function syncAgentTerminalSessions(agentId, sessions) {
       (await terminalSessionHistoryService.getBySessionId(sessionId));
     const profile = String(sessionLike?.profile || existing?.profile || "");
     const profileConfig = terminalProfiles.find((item) => item.name === profile) || null;
+    const profileLabel =
+      String(sessionLike?.profileLabel || existing?.profileLabel || profileConfig?.label || profile).trim();
     const nextStatus = resolveResyncedTerminalSessionStatus(sessionLike?.status);
     const syncedRecord = terminalSessionStore.upsert({
       ...(existing || {}),
@@ -1602,6 +1611,9 @@ async function syncAgentTerminalSessions(agentId, sessions) {
       sessionId,
       agentId,
       profile,
+      profileLabel,
+      profileSource: String(sessionLike?.profileSource || existing?.profileSource || profileConfig?.source || ""),
+      profileKind: String(sessionLike?.profileKind || existing?.profileKind || profileConfig?.kind || ""),
       displayMode: normalizeProfileOutputMode(
         sessionLike?.displayMode || existing?.displayMode || profileConfig?.outputMode
       ),

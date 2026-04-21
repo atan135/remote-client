@@ -121,6 +121,7 @@ export function loadConfig() {
     sessionOutputLimit: toNumber(process.env.SESSION_OUTPUT_LIMIT, 200),
     taskProfileConfigPath:
       process.env.TASK_PROFILE_CONFIG_PATH || "./config/tool-profiles.json",
+    discoveredTerminalCommands: toUniqueList(process.env.DISCOVER_TERMINAL_COMMANDS),
     commonWorkingDirectories: toUniqueList(process.env.COMMON_WORK_DIRS),
     presetCommands: toPresetCommands(process.env.PRESET_COMMANDS),
     allowedCwdRoots: toList(process.env.ALLOWED_CWD_ROOTS),

@@ -179,13 +179,15 @@ Vue 3 控制台，负责：
 
 ### 会话 profile
 
-当前 profile 由 `ToolProfileRegistry` 管理，内置/配置合并后可用于终端会话。
+当前 profile 由 `ToolProfileRegistry` 管理，内置/配置项与本机环境探测结果会统一合并后用于终端会话。
 
 当前仓库内已覆盖的常见 profile：
 
 - `default_shell_session`
 - `claude_code_session`
 - `codex_code_session`
+
+此外，`localapp` 现在还会按内置候选集和 `DISCOVER_TERMINAL_COMMANDS` 对目标环境做可执行命令探测，把可直接启动的 shell / CLI 以 `discovered_*` profile 的形式一并上报给服务端和浏览器。
 
 profile 当前可约束：
 
@@ -195,6 +197,8 @@ profile 当前可约束：
 - 环境变量 allowlist
 - 输出模式
 - 空闲超时
+
+浏览器端会把这些 profile 按“预设 profile / 环境 Shell / 环境 CLI”分组显示，并允许直接搜索选择。
 
 ### 服务端侧处理
 

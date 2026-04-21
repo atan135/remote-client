@@ -230,11 +230,21 @@
 
 当前 profile 由 `ToolProfileRegistry` 管理。
 
+它现在不只合并内置 profile 和配置文件，还会按本机环境探测常见 shell / CLI，可把探测到的可执行命令自动补成 `discovered_*` profile。
+
 当前仓库已内置或配置的常见 profile：
 
 - `default_shell_session`
 - `claude_code_session`
 - `codex_code_session`
+
+另外，若目标机上存在额外可执行命令，`localapp` 还会探测并补充诸如：
+
+- `discovered_cmd`
+- `discovered_pwsh`
+- `discovered_git`
+- `discovered_node`
+- `discovered_python`
 
 当前 profile 可控制：
 
@@ -246,6 +256,8 @@
 - `finalOutputMarkers`
 - `envAllowlist`
 - `idleTimeoutMs`
+
+浏览器创建会话时，会把这些 profile 按“推荐 Profile / 环境 Shell / 环境 CLI”分组展示，并支持搜索。
 
 ## Claude Code / Codex 当前状态
 
@@ -311,6 +323,8 @@
 - terminal profiles
 - 常用工作目录
 - 预设命令
+
+其中 terminal profiles 现在除了静态 profile，也包含环境探测得到的 `discovered_*` profile 及其显示标签、来源、类型与可用性。
 
 服务端会据此：
 
