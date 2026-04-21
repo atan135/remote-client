@@ -35,6 +35,7 @@ export class TerminalSessionHistoryService {
         PRIMARY KEY (id),
         UNIQUE KEY uk_terminal_sessions_session_id (session_id),
         UNIQUE KEY uk_terminal_sessions_request_id (request_id),
+        KEY idx_terminal_sessions_created_at (created_at),
         KEY idx_terminal_sessions_agent_created (agent_id, created_at),
         KEY idx_terminal_sessions_operator_created (operator_user_id, created_at),
         CONSTRAINT fk_terminal_sessions_operator_user_id
@@ -42,6 +43,13 @@ export class TerminalSessionHistoryService {
           ON DELETE SET NULL
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     `);
+
+    await ensureIndex(
+      this.pool,
+      "terminal_sessions",
+      "idx_terminal_sessions_created_at",
+      "ALTER TABLE terminal_sessions ADD INDEX idx_terminal_sessions_created_at (created_at)"
+    );
 
     await this.pool.execute(`
       CREATE TABLE IF NOT EXISTS terminal_session_turns (
@@ -479,4 +487,24 @@ export function serializeStoredTerminalSession(row) {
     closedAt: row.closed_at || null,
     outputs: []
   };
+}
+
+async function ensureIndex(pool, tableName, indexName, alterSql) {
+  const [rows] = await pool.execute(
+    `
+      SELECT 1
+      FROM information_schema.statistics
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+        AND index_name = ?
+      LIMIT 1
+    `,
+    [tableName, indexName]
+  );
+
+  if (Array.isArray(rows) && rows.length > 0) {
+    return;
+  }
+
+  await pool.execute(alterSql);
 }

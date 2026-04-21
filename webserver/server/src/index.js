@@ -55,7 +55,13 @@ const browserHub = new BrowserHub();
 const commandDispatchContextSymbol = Symbol("commandDispatchContext");
 const pendingAgentDisconnects = new Map();
 const pendingRemoteFileReads = new Map();
+const pendingTerminalSessionPersists = new Map();
+const pendingTerminalSessionTurnSyncs = new Map();
+const agentHeartbeatBroadcastState = new Map();
 const remoteFileReadTimeoutMs = Math.max(5000, Math.min(config.secureCommandTtlMs, 20000));
+const terminalSessionPersistDebounceMs = Math.max(0, config.terminalSessionPersistDebounceMs);
+const terminalSessionTurnSyncDebounceMs = Math.max(0, config.terminalSessionTurnSyncDebounceMs);
+const agentHeartbeatBroadcastIntervalMs = Math.max(0, config.agentHeartbeatBroadcastIntervalMs);
 
 const agentSocketServer = new WebSocketServer({ noServer: true });
 const browserSocketServer = new WebSocketServer({ noServer: true });
@@ -854,8 +860,11 @@ async function handleTerminalSessionDeleteRequest(req, res) {
   }
 
   try {
+    await flushTerminalSessionPersistence(sessionId);
     const removedActiveSession = terminalSessionStore.remove(sessionId);
     const deletedFromHistory = await terminalSessionHistoryService.deleteSession(sessionId);
+    clearPendingTerminalSessionPersist(sessionId);
+    clearPendingTerminalSessionTurnSync(sessionId);
     const payload = {
       sessionId,
       agentId: String(session.agentId || removedActiveSession?.agentId || ""),
@@ -1024,7 +1033,9 @@ agentSocketServer.on("connection", (socket, _request, url) => {
     });
 
     if (agent) {
+      clearAgentBroadcastState(agent.agentId);
       browserHub.broadcast("agent.updated", agent);
+      rememberAgentBroadcast(agent, "disconnect");
     }
   });
 });
@@ -1354,6 +1365,7 @@ async function handleAgentMessage(agentId, socket, message) {
       reconnectedWithinGrace: Boolean(pendingDisconnect)
     });
     browserHub.broadcast("agent.updated", agent);
+    rememberAgentBroadcast(agent, "register");
     for (const session of syncedTerminalSessions) {
       broadcastTerminalSessionUpdate(session);
       void persistTerminalSessionRecord(session);
@@ -1369,8 +1381,9 @@ async function handleAgentMessage(agentId, socket, message) {
   if (message.type === "agent.heartbeat") {
     const agent = agentRegistry.heartbeat(agentId);
 
-    if (agent) {
+    if (agent && shouldBroadcastHeartbeat(agent.agentId)) {
       browserHub.broadcast("agent.updated", agent);
+      rememberAgentBroadcast(agent, "heartbeat");
     }
 
     return;
@@ -2414,8 +2427,18 @@ function deriveTerminalSessionDisplayPatch(record) {
     return null;
   }
 
+  const markers = normalizeFinalOutputMarkers(record.finalOutputMarkers);
+  const needsFinalTextExtraction =
+    Boolean(markers) ||
+    record.displayMode === "final_only" ||
+    record.displayMode === "hybrid";
+
+  if (!needsFinalTextExtraction) {
+    return null;
+  }
+
   const transcript = String(record.rawTranscript || "");
-  const nextFinalText = extractFinalText(record, transcript);
+  const nextFinalText = extractFinalText(record, transcript, markers);
   const patch = {};
 
   if (nextFinalText !== String(record.finalText || "")) {
@@ -2426,9 +2449,7 @@ function deriveTerminalSessionDisplayPatch(record) {
   return Object.keys(patch).length > 0 ? patch : null;
 }
 
-function extractFinalText(record, transcript) {
-  const markers = normalizeFinalOutputMarkers(record?.finalOutputMarkers);
-
+function extractFinalText(record, transcript, markers = normalizeFinalOutputMarkers(record?.finalOutputMarkers)) {
   if (markers) {
     const marked = extractTextBetweenMarkers(transcript, markers.start, markers.end);
 
@@ -2595,6 +2616,177 @@ function broadcastTerminalSessionUpdate(session) {
   browserHub.broadcast("terminal.session.updated", payload);
 }
 
+function rememberAgentBroadcast(agent, reason = "") {
+  if (!agent?.agentId) {
+    return;
+  }
+
+  agentHeartbeatBroadcastState.set(agent.agentId, {
+    at: Date.now(),
+    reason
+  });
+}
+
+function shouldBroadcastHeartbeat(agentId) {
+  if (!agentId) {
+    return false;
+  }
+
+  if (agentHeartbeatBroadcastIntervalMs <= 0) {
+    return true;
+  }
+
+  const previous = agentHeartbeatBroadcastState.get(agentId);
+
+  if (!previous) {
+    return true;
+  }
+
+  return Date.now() - previous.at >= agentHeartbeatBroadcastIntervalMs;
+}
+
+function clearAgentBroadcastState(agentId) {
+  if (!agentId) {
+    return;
+  }
+
+  agentHeartbeatBroadcastState.delete(agentId);
+}
+
+function createTerminalSessionPersistTask(record) {
+  return async () => {
+    await terminalSessionHistoryService.upsertSession(record);
+  };
+}
+
+function createTerminalSessionTurnSyncTask(record, options = {}) {
+  return async () => {
+    await terminalSessionHistoryService.syncLatestTurn(record.sessionId, record, options);
+  };
+}
+
+function clearPendingTerminalSessionPersist(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  const pending = pendingTerminalSessionPersists.get(normalizedSessionId) || null;
+
+  if (pending?.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  pendingTerminalSessionPersists.delete(normalizedSessionId);
+  return pending;
+}
+
+function clearPendingTerminalSessionTurnSync(sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+  const pending = pendingTerminalSessionTurnSyncs.get(normalizedSessionId) || null;
+
+  if (pending?.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  pendingTerminalSessionTurnSyncs.delete(normalizedSessionId);
+  return pending;
+}
+
+function scheduleTerminalSessionTask({
+  taskMap,
+  sessionId,
+  debounceMs,
+  taskFactory,
+  onError
+}) {
+  const normalizedSessionId = String(sessionId || "").trim();
+
+  if (!normalizedSessionId) {
+    return Promise.resolve();
+  }
+
+  const pending = taskMap.get(normalizedSessionId);
+
+  if (pending?.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  let resolveTask;
+  let rejectTask;
+  const promise =
+    pending?.promise ||
+    new Promise((resolve, reject) => {
+      resolveTask = resolve;
+      rejectTask = reject;
+    });
+
+  taskMap.set(normalizedSessionId, {
+    timer: setTimeout(() => {
+      void flushScheduledTerminalSessionTask({
+        taskMap,
+        sessionId: normalizedSessionId,
+        taskFactory,
+        onError
+      });
+    }, debounceMs),
+    promise,
+    resolve: pending?.resolve || resolveTask,
+    reject: pending?.reject || rejectTask,
+    taskFactory,
+    onError
+  });
+
+  return promise;
+}
+
+async function flushScheduledTerminalSessionTask({
+  taskMap,
+  sessionId,
+  taskFactory,
+  onError
+}) {
+  const pending = taskMap.get(sessionId);
+
+  if (pending?.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  taskMap.delete(sessionId);
+
+  const runTask = taskFactory || pending?.taskFactory;
+
+  if (typeof runTask !== "function") {
+    pending?.resolve?.();
+    return;
+  }
+
+  try {
+    await runTask();
+    pending?.resolve?.();
+  } catch (error) {
+    onError?.(error);
+    pending?.resolve?.();
+  }
+}
+
+function flushTerminalSessionPersist(sessionId) {
+  return flushScheduledTerminalSessionTask({
+    taskMap: pendingTerminalSessionPersists,
+    sessionId: String(sessionId || "").trim()
+  });
+}
+
+function flushTerminalSessionTurnSync(sessionId) {
+  return flushScheduledTerminalSessionTask({
+    taskMap: pendingTerminalSessionTurnSyncs,
+    sessionId: String(sessionId || "").trim()
+  });
+}
+
+async function flushTerminalSessionPersistence(sessionId) {
+  await Promise.allSettled([
+    flushTerminalSessionPersist(sessionId),
+    flushTerminalSessionTurnSync(sessionId)
+  ]);
+}
+
 async function handleCommandHistoryRequest(req, res) {
   try {
     const limit = Number(req.query.limit) || config.commandHistoryLimit;
@@ -2707,16 +2899,39 @@ function persistCommandRecord(record) {
   });
 }
 
-function persistTerminalSessionRecord(record) {
+function persistTerminalSessionRecord(record, options = {}) {
   if (!record?.sessionId) {
     return Promise.resolve();
   }
 
-  return terminalSessionHistoryService.upsertSession(record).catch((error) => {
+  const sessionId = String(record.sessionId || "").trim();
+  const immediate =
+    options.immediate === true ||
+    isTerminalSessionClosedStatus(record.status) ||
+    terminalSessionPersistDebounceMs <= 0;
+  const taskFactory = createTerminalSessionPersistTask(record);
+  const onError = (error) => {
     logEvent(serverLogger, "error", "terminal.session.persistence_failed", {
-      sessionId: record.sessionId,
+      sessionId,
       error: error.message
     });
+  };
+
+  if (immediate) {
+    return flushScheduledTerminalSessionTask({
+      taskMap: pendingTerminalSessionPersists,
+      sessionId,
+      taskFactory,
+      onError
+    });
+  }
+
+  return scheduleTerminalSessionTask({
+    taskMap: pendingTerminalSessionPersists,
+    sessionId,
+    debounceMs: terminalSessionPersistDebounceMs,
+    taskFactory,
+    onError
   });
 }
 
@@ -2751,11 +2966,36 @@ function maybeSyncTerminalSessionTurn(session, options = {}) {
     return Promise.resolve();
   }
 
-  return terminalSessionHistoryService.syncLatestTurn(session.sessionId, session, options).catch((error) => {
+  const sessionId = String(session.sessionId || "").trim();
+  const allowEmpty = options.allowEmpty === true;
+  const immediate =
+    options.immediate === true || allowEmpty || terminalSessionTurnSyncDebounceMs <= 0;
+  const taskFactory = createTerminalSessionTurnSyncTask(session, {
+    ...options,
+    allowEmpty
+  });
+  const onError = (error) => {
     logEvent(serverLogger, "error", "terminal.session.turn_finalize_failed", {
-      sessionId: session.sessionId,
+      sessionId,
       error: error.message
     });
+  };
+
+  if (immediate) {
+    return flushScheduledTerminalSessionTask({
+      taskMap: pendingTerminalSessionTurnSyncs,
+      sessionId,
+      taskFactory,
+      onError
+    });
+  }
+
+  return scheduleTerminalSessionTask({
+    taskMap: pendingTerminalSessionTurnSyncs,
+    sessionId,
+    debounceMs: terminalSessionTurnSyncDebounceMs,
+    taskFactory,
+    onError
   });
 }
 

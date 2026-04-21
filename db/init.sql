@@ -74,6 +74,7 @@ CREATE TABLE IF NOT EXISTS `command_runs` (
   `completed_at` DATETIME NULL,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_command_runs_request_id` (`request_id`),
+  KEY `idx_command_runs_created_at` (`created_at`),
   KEY `idx_command_runs_agent_created` (`agent_id`, `created_at`),
   KEY `idx_command_runs_operator_created` (`operator_user_id`, `created_at`),
   CONSTRAINT `fk_command_runs_operator_user_id`
@@ -107,6 +108,7 @@ CREATE TABLE IF NOT EXISTS `terminal_sessions` (
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_terminal_sessions_session_id` (`session_id`),
   UNIQUE KEY `uk_terminal_sessions_request_id` (`request_id`),
+  KEY `idx_terminal_sessions_created_at` (`created_at`),
   KEY `idx_terminal_sessions_agent_created` (`agent_id`, `created_at`),
   KEY `idx_terminal_sessions_operator_created` (`operator_user_id`, `created_at`),
   CONSTRAINT `fk_terminal_sessions_operator_user_id`
