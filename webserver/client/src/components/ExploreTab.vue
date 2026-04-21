@@ -138,6 +138,7 @@ const emit = defineEmits([
   "submitCommand",
   "create-terminal-session",
   "send-terminal-input",
+  "interrupt-terminal-session",
   "send-terminal-raw-input",
   "open-remote-file",
   "resize-terminal-session",
@@ -259,6 +260,10 @@ const canSendSessionPresetInput = computed(
         !isTerminalSessionClosed(currentSession.value.status) &&
         !props.sendingTerminalInput
     )
+);
+
+const canInterruptCurrentSession = computed(
+  () => Boolean(currentSession.value && !isTerminalSessionClosed(currentSession.value.status))
 );
 
 const canTerminateCurrentSession = computed(
@@ -850,6 +855,15 @@ function formatCompactDateTime(value) {
               >
                 {{ sendingTerminalInput ? "发送中..." : "发送" }}
               </el-button>
+              <el-button
+                round
+                plain
+                type="warning"
+                :disabled="!canInterruptCurrentSession"
+                @click="emit('interrupt-terminal-session', currentSession.sessionId)"
+              >
+                停止任务
+              </el-button>
             </div>
           </label>
 
@@ -858,6 +872,12 @@ function formatCompactDateTime(value) {
               name="raw"
               :title="shouldPreferFinalAnswer ? '原始终端输出（调试）' : '终端输出'"
             >
+              <p
+                v-if="currentSession && !isTerminalSessionClosed(currentSession.status)"
+                class="muted compact-stack"
+              >
+                点击“停止任务”会向当前终端发送 Ctrl+C，中断前台任务，但不会结束整个会话。
+              </p>
               <TerminalEmulator
                 class="explore-terminal"
                 :session-id="currentSession.sessionId"

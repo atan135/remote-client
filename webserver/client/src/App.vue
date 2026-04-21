@@ -59,6 +59,7 @@ const fallbackTerminalProfiles = Object.freeze([
   }
 ]);
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 200;
+const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
 
 const agents = ref([]);
 const commands = ref([]);
@@ -810,6 +811,19 @@ function queueTerminalRawInput(inputOrPayload, sessionId = activeTerminalSession
     terminalSocketInputFlushTimer = null;
     flushQueuedTerminalSocketInputs();
   }, 16);
+}
+
+function interruptTerminalSession(sessionId = activeTerminalSession.value?.sessionId) {
+  const normalizedSessionId = String(sessionId || "").trim();
+
+  if (!normalizedSessionId) {
+    return;
+  }
+
+  queueTerminalRawInput({
+    sessionId: normalizedSessionId,
+    input: TERMINAL_INTERRUPT_SEQUENCE
+  });
 }
 
 function flushQueuedTerminalSocketInputs() {
@@ -2069,6 +2083,7 @@ function useSelectedAgentIdForAuthCode() {
           @submit-command="submitCommand"
           @create-terminal-session="createTerminalSession"
           @send-terminal-input="sendTerminalInput"
+          @interrupt-terminal-session="interruptTerminalSession"
           @send-terminal-raw-input="queueTerminalRawInput($event)"
           @open-remote-file="openRemoteFile"
           @resize-terminal-session="queueTerminalResize($event)"

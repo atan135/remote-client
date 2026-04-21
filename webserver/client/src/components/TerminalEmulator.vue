@@ -23,6 +23,7 @@ const emit = defineEmits(["terminal-data", "terminal-resize"]);
 const terminalHost = ref(null);
 
 const hasOutputs = computed(() => Array.isArray(props.outputs) && props.outputs.length > 0);
+const INTERRUPT_SEQUENCE = "\u0003";
 
 let terminal = null;
 let fitAddon = null;
@@ -117,6 +118,7 @@ function createTerminal() {
   fitAddon = new FitAddon();
   terminal.loadAddon(fitAddon);
   terminal.open(terminalHost.value);
+  terminal.attachCustomKeyEventHandler(handleTerminalKeyEvent);
   terminal.onData((data) => {
     if (!props.interactive || !props.sessionId) {
       return;
@@ -175,6 +177,60 @@ function focusTerminal() {
   if (props.interactive && terminal) {
     terminal.focus();
   }
+}
+
+function handleTerminalKeyEvent(event) {
+  if (!props.interactive || !props.sessionId || !terminal) {
+    return true;
+  }
+
+  if (isCtrlC(event)) {
+    if (terminal.hasSelection()) {
+      return false;
+    }
+
+    if (event.type === "keydown") {
+      sendInterruptSignal(event);
+    }
+
+    return false;
+  }
+
+  if (isInterruptShortcut(event)) {
+    if (event.type === "keydown") {
+      sendInterruptSignal(event);
+    }
+
+    return false;
+  }
+
+  return true;
+}
+
+function isCtrlC(event) {
+  return (
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    event.code === "KeyC"
+  );
+}
+
+function isInterruptShortcut(event) {
+  return (
+    event.ctrlKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.shiftKey &&
+    event.code === "Period"
+  );
+}
+
+function sendInterruptSignal(event) {
+  event.preventDefault();
+  event.stopPropagation();
+  emit("terminal-data", INTERRUPT_SEQUENCE);
 }
 
 function emitTerminalResize() {
