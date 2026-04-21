@@ -67,6 +67,7 @@ const users = ref([]);
 const authCodes = ref([]);
 const selectedAgentId = ref("");
 const selectedTerminalSessionId = ref("");
+const autoOpenTerminalSessionId = ref("");
 const timelineFilterAgentId = ref("all");
 const commandInput = ref("");
 const terminalProfile = ref("");
@@ -668,6 +669,7 @@ async function createTerminalSession() {
     if (payload.item) {
       upsertTerminalSession(payload.item);
       selectedTerminalSessionId.value = payload.item.sessionId;
+      autoOpenTerminalSessionId.value = payload.item.sessionId;
     }
 
     terminalInput.value = "";
@@ -1614,6 +1616,7 @@ function resetAuthedState() {
   authCodes.value = [];
   selectedAgentId.value = "";
   selectedTerminalSessionId.value = "";
+  autoOpenTerminalSessionId.value = "";
   timelineFilterAgentId.value = "all";
   commandInput.value = "";
   terminalProfile.value = "";
@@ -2040,6 +2043,7 @@ function useSelectedAgentIdForAuthCode() {
           :available-terminal-profiles="availableTerminalProfiles"
           :terminal-sessions="visibleTerminalSessions"
           :active-terminal-session="activeTerminalSession"
+          :auto-open-terminal-session-id="autoOpenTerminalSessionId"
           :can-submit-command="canSubmitCommand"
           :can-create-terminal-session="canCreateTerminalSession"
           :can-send-terminal-input="canSendTerminalInput"
@@ -2057,6 +2061,11 @@ function useSelectedAgentIdForAuthCode() {
           @update:terminal-input="terminalInput = $event"
           @update:remote-file-path="updateRemoteFilePath"
           @select:terminal-session="selectedTerminalSessionId = $event"
+          @opened-terminal-session="
+            if ($event === autoOpenTerminalSessionId) {
+              autoOpenTerminalSessionId = '';
+            }
+          "
           @submit-command="submitCommand"
           @create-terminal-session="createTerminalSession"
           @send-terminal-input="sendTerminalInput"

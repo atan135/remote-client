@@ -80,6 +80,10 @@ const props = defineProps({
     type: Object,
     default: null
   },
+  autoOpenTerminalSessionId: {
+    type: String,
+    default: ""
+  },
   canSubmitCommand: {
     type: Boolean,
     required: true
@@ -130,6 +134,7 @@ const emit = defineEmits([
   "update:terminalInput",
   "update:remoteFilePath",
   "select:terminalSession",
+  "opened-terminal-session",
   "submitCommand",
   "create-terminal-session",
   "send-terminal-input",
@@ -332,7 +337,7 @@ const shouldShowResolvedPathSeparately = computed(() => {
   return String(viewer.filePath || "").trim() !== String(viewer.resolvedPath || "").trim();
 });
 
-const rawTerminalPanels = ref([]);
+const rawTerminalPanels = ref(["raw"]);
 
 function createPresetCommandKey(label, command, index) {
   return `${index}:${label}\u0000${command}`;
@@ -432,6 +437,7 @@ function sendSelectedSessionPresetInput() {
 function openSessionDetail(sessionId) {
   detailSessionId.value = sessionId;
   sessionMetaPanels.value = [];
+  rawTerminalPanels.value = ["raw"];
   activeMode.value = "session";
   sessionScreen.value = "detail";
   emit("select:terminalSession", sessionId);
@@ -466,6 +472,27 @@ watch(
     rawTerminalPanels.value = [];
     sessionScreen.value = "main";
     detailSessionId.value = "";
+  }
+);
+
+watch(
+  [
+    () => props.autoOpenTerminalSessionId,
+    () => props.terminalSessions.map((item) => item.sessionId).join("|")
+  ],
+  ([sessionId]) => {
+    const normalizedSessionId = String(sessionId || "").trim();
+
+    if (!normalizedSessionId) {
+      return;
+    }
+
+    if (!props.terminalSessions.some((item) => item.sessionId === normalizedSessionId)) {
+      return;
+    }
+
+    openSessionDetail(normalizedSessionId);
+    emit("opened-terminal-session", normalizedSessionId);
   }
 );
 
