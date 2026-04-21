@@ -48,7 +48,9 @@ const fallbackTerminalProfiles = Object.freeze([
     outputMode: "terminal",
     finalOutputMarkers: null,
     idleTimeoutMs: 30 * 60 * 1000,
-    envAllowlist: []
+    envAllowlist: [],
+    isAvailable: true,
+    unavailableReason: ""
   }
 ]);
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 200;
@@ -168,6 +170,10 @@ const availableTerminalProfiles = computed(() => {
   return profiles.length > 0 ? profiles : fallbackTerminalProfiles;
 });
 
+const selectedTerminalProfileConfig = computed(
+  () => availableTerminalProfiles.value.find((item) => item.name === terminalProfile.value) || null
+);
+
 const visibleTerminalSessions = computed(() =>
   terminalSessions.value.filter((item) => item.agentId === selectedAgentId.value)
 );
@@ -212,6 +218,7 @@ const canCreateTerminalSession = computed(
     Boolean(
       selectedAgentId.value &&
         terminalProfile.value &&
+        selectedTerminalProfileConfig.value?.isAvailable !== false &&
         activeAuthCodeBinding.value &&
         !creatingTerminalSession.value
     )
@@ -611,6 +618,13 @@ async function createTerminalSession() {
 
   if (!activeAuthCodeBinding.value) {
     wsState.error = "请先为当前设备配置 auth_code，再创建终端会话";
+    return;
+  }
+
+  if (selectedTerminalProfileConfig.value?.isAvailable === false) {
+    wsState.error =
+      selectedTerminalProfileConfig.value.unavailableReason ||
+      `终端 profile 当前不可用: ${terminalProfile.value}`;
     return;
   }
 
@@ -1555,7 +1569,9 @@ function ensureSelectedTerminalProfile() {
     return;
   }
 
-  terminalProfile.value = profiles[0].name;
+  const preferredProfile =
+    profiles.find((item) => item.isAvailable !== false) || profiles[0];
+  terminalProfile.value = preferredProfile?.name || "";
 }
 
 function ensureSelectedTerminalSession() {

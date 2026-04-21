@@ -17,7 +17,7 @@ export class ToolProfileRegistry {
     const configPath = path.resolve(packageRoot, this.config.taskProfileConfigPath);
 
     if (!fs.existsSync(configPath)) {
-      return builtInProfiles;
+      return annotateProfileAvailability(builtInProfiles);
     }
 
     const raw = fs.readFileSync(configPath, "utf8");
@@ -32,7 +32,7 @@ export class ToolProfileRegistry {
       });
     }
 
-    return merged;
+    return annotateProfileAvailability(merged);
   }
 
   getProfile(profileName) {
@@ -56,7 +56,9 @@ export class ToolProfileRegistry {
         ? { ...profile.finalOutputMarkers }
         : null,
       idleTimeoutMs: profile.idleTimeoutMs,
-      envAllowlist: [...profile.envAllowlist]
+      envAllowlist: [...profile.envAllowlist],
+      isAvailable: profile.isAvailable !== false,
+      unavailableReason: String(profile.unavailableReason || "")
     }));
   }
 
@@ -67,9 +69,13 @@ export class ToolProfileRegistry {
       throw new Error(`profile ${profileName} 不是 PTY 会话类型`);
     }
 
+    if (profile.isAvailable === false) {
+      throw new Error(profile.unavailableReason || `终端 profile 当前不可用: ${profileName}`);
+    }
+
     return {
       profile,
-      command: profile.command,
+      command: profile.resolvedCommand || profile.command,
       args: [...profile.argsTemplate],
       cwd: resolveAllowedCwd(cwd || process.cwd(), this.config.allowedCwdRoots),
       env: buildProcessEnv(profile.envAllowlist, env)
@@ -134,7 +140,10 @@ function normalizeProfile(profileName, profileConfig) {
     envAllowlist: Array.isArray(profileConfig.envAllowlist)
       ? profileConfig.envAllowlist.map((item) => String(item))
       : [],
-    idleTimeoutMs: Number(profileConfig.idleTimeoutMs) || 30 * 60 * 1000
+    idleTimeoutMs: Number(profileConfig.idleTimeoutMs) || 30 * 60 * 1000,
+    resolvedCommand: String(profileConfig.resolvedCommand || "").trim(),
+    isAvailable: profileConfig.isAvailable !== false,
+    unavailableReason: String(profileConfig.unavailableReason || "")
   };
 }
 
@@ -224,4 +233,162 @@ function createPowerShellUtf8InitScript() {
     "$PSDefaultParameterValues['*:Encoding'] = 'utf8'",
     "chcp 65001 > $null"
   ].join("; ");
+}
+
+function annotateProfileAvailability(profiles) {
+  return Object.fromEntries(
+    Object.entries(profiles).map(([profileName, profile]) => {
+      const availability = inspectProfileAvailability(profile);
+      return [
+        profileName,
+        {
+          ...profile,
+          ...availability
+        }
+      ];
+    })
+  );
+}
+
+function inspectProfileAvailability(profile) {
+  if (String(profile?.runner || "") !== "pty") {
+    return {
+      resolvedCommand: String(profile?.command || "").trim(),
+      isAvailable: true,
+      unavailableReason: ""
+    };
+  }
+
+  const command = normalizeCommandValue(profile?.command);
+
+  if (!command) {
+    return {
+      resolvedCommand: "",
+      isAvailable: false,
+      unavailableReason: `终端 profile 未配置可执行命令: ${profile?.name || ""}`.trim()
+    };
+  }
+
+  const resolvedCommand = resolveExecutableCommand(command);
+
+  if (!resolvedCommand) {
+    return {
+      resolvedCommand: "",
+      isAvailable: false,
+      unavailableReason: createCommandUnavailableMessage(command)
+    };
+  }
+
+  return {
+    resolvedCommand,
+    isAvailable: true,
+    unavailableReason: ""
+  };
+}
+
+function resolveExecutableCommand(command) {
+  const normalizedCommand = normalizeCommandValue(command);
+
+  if (!normalizedCommand) {
+    return "";
+  }
+
+  const explicitPath = resolveExplicitCommandPath(normalizedCommand);
+
+  if (explicitPath) {
+    return explicitPath;
+  }
+
+  if (hasPathSeparator(normalizedCommand)) {
+    return "";
+  }
+
+  return resolveCommandFromPath(normalizedCommand, process.env);
+}
+
+function resolveExplicitCommandPath(command) {
+  if (!path.isAbsolute(command) && !hasPathSeparator(command)) {
+    return "";
+  }
+
+  const absoluteCommand = path.isAbsolute(command) ? command : path.resolve(process.cwd(), command);
+  return findExistingExecutable(absoluteCommand);
+}
+
+function resolveCommandFromPath(command, env) {
+  const pathValue = String(env?.PATH || env?.Path || "").trim();
+
+  if (!pathValue) {
+    return "";
+  }
+
+  for (const directory of pathValue.split(path.delimiter).map((item) => item.trim()).filter(Boolean)) {
+    const candidate = findExistingExecutable(path.join(directory, command), env);
+
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  return "";
+}
+
+function findExistingExecutable(targetPath, env = process.env) {
+  const candidates = buildExecutableCandidates(targetPath, env);
+
+  for (const candidate of candidates) {
+    if (!candidate || !fs.existsSync(candidate)) {
+      continue;
+    }
+
+    try {
+      if (fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      // Ignore transient stat errors and continue searching.
+    }
+  }
+
+  return "";
+}
+
+function buildExecutableCandidates(targetPath, env) {
+  const absoluteTarget = path.resolve(String(targetPath || "").trim());
+
+  if (!absoluteTarget) {
+    return [];
+  }
+
+  if (process.platform !== "win32") {
+    return [absoluteTarget];
+  }
+
+  const extension = path.extname(absoluteTarget);
+  const pathext = String(env?.PATHEXT || ".COM;.EXE;.BAT;.CMD")
+    .split(";")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
+  if (extension) {
+    return [absoluteTarget];
+  }
+
+  return [...pathext.map((item) => `${absoluteTarget}${item.toLowerCase()}`), absoluteTarget];
+}
+
+function normalizeCommandValue(command) {
+  return String(command || "").trim().replace(/^"(.*)"$/, "$1");
+}
+
+function hasPathSeparator(command) {
+  return /[\\/]/.test(String(command || ""));
+}
+
+function createCommandUnavailableMessage(command) {
+  if (process.platform === "win32") {
+    return `未找到可执行命令: ${command}。请确认目标机器已安装该工具，并检查 localapp 进程的 PATH；如有需要，可在 localapp/config/tool-profiles.json 中将 command 改为绝对路径。`;
+  }
+
+  return `未找到可执行命令: ${command}。请确认目标机器已安装该工具，并检查 localapp 进程的 PATH。`;
 }

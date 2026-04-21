@@ -152,6 +152,16 @@ const currentSession = computed(
     null
 );
 
+const selectedTerminalProfileConfig = computed(
+  () => props.availableTerminalProfiles.find((item) => item.name === props.terminalProfile) || null
+);
+
+const selectedTerminalProfileUnavailableReason = computed(() =>
+  selectedTerminalProfileConfig.value?.isAvailable === false
+    ? String(selectedTerminalProfileConfig.value?.unavailableReason || "当前 profile 不可用")
+    : ""
+);
+
 const activeDeviceLabel = computed(() => props.activeAgent?.agentId || "未选择设备");
 
 const activeDeviceBindText = computed(() =>
@@ -571,8 +581,13 @@ function formatCompactDateTime(value) {
                 <el-select :model-value="terminalProfile" placeholder="请选择 profile"
                   @update:model-value="emit('update:terminalProfile', $event)">
                   <el-option v-for="profile in availableTerminalProfiles" :key="profile.name"
-                    :label="`${profile.name} / ${profile.command || 'shell'}`" :value="profile.name" />
+                    :label="`${profile.name} / ${profile.command || 'shell'}${profile.isAvailable === false ? '（不可用）' : ''}`"
+                    :value="profile.name"
+                    :disabled="profile.isAvailable === false" />
                 </el-select>
+                <small v-if="selectedTerminalProfileUnavailableReason" class="muted">
+                  {{ selectedTerminalProfileUnavailableReason }}
+                </small>
               </label>
 
               <label class="field-block field-block-tight">

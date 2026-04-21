@@ -140,7 +140,9 @@ function normalizeTerminalProfiles(profiles) {
       idleTimeoutMs: Number(profile?.idleTimeoutMs) || 0,
       envAllowlist: Array.isArray(profile?.envAllowlist)
         ? profile.envAllowlist.map((item) => String(item))
-        : []
+        : [],
+      isAvailable: profile?.isAvailable !== false,
+      unavailableReason: String(profile?.unavailableReason || "")
     }))
     .filter((profile) => profile.name);
 }

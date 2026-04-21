@@ -633,6 +633,20 @@ async function handleTerminalSessionCreateRequest(req, res) {
       return;
     }
 
+    if (Array.isArray(agent?.terminalProfiles) && agent.terminalProfiles.length > 0 && !profileConfig) {
+      res.status(400).json({ message: `目标 agent 不支持终端 profile: ${profile}` });
+      return;
+    }
+
+    if (profileConfig?.isAvailable === false) {
+      res.status(400).json({
+        message:
+          profileConfig.unavailableReason ||
+          `终端 profile 当前不可用: ${profile}`
+      });
+      return;
+    }
+
     const record = terminalSessionStore.create({
       agentId,
       profile,
@@ -1550,6 +1564,13 @@ async function handleAgentMessage(agentId, socket, message) {
       void persistTerminalSessionRecord(record);
       void maybeSyncTerminalSessionTurn(record, { allowEmpty: true });
       broadcastTerminalSessionUpdate(record);
+      logEvent(commandLogger, "warn", "terminal.session.failed", {
+        sessionId: record.sessionId,
+        requestId: record.requestId,
+        agentId: record.agentId,
+        profile: record.profile,
+        error: record.error
+      });
     }
   }
 }

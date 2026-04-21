@@ -419,8 +419,10 @@ export class AgentClient {
       );
 
       logEvent(this.commandLogger, "warn", "terminal.session.create_rejected", {
+        sessionId: String(payload?.sessionId || message?.payload?.sessionId || ""),
         requestId: String(payload?.requestId || message?.payload?.requestId || ""),
         agentId: this.config.agentId,
+        profile: String(payload?.profile || message?.payload?.profile || ""),
         error: error.message
       });
     }
