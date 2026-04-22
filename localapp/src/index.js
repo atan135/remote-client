@@ -30,6 +30,7 @@ logEvent(loggers.agentLogger, "info", "agent.boot", {
   webserverSignPublicKeyPathSource: config.webserverSignPublicKeyPathSource,
   webserverSignPublicKeyConfiguredInEnvFile: config.webserverSignPublicKeyConfiguredInEnvFile,
   windowsUseConpty: config.windowsUseConpty,
+  windowsUseConptyDll: config.windowsUseConptyDll,
   localDebugServerEnabled: config.localDebugServerEnabled
 });
 

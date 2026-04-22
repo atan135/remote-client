@@ -12,7 +12,8 @@ export class TerminalSessionRunner {
       env,
       cols,
       rows,
-      useConpty: process.platform === "win32" ? this.config.windowsUseConpty : undefined
+      useConpty: process.platform === "win32" ? this.config.windowsUseConpty : undefined,
+      useConptyDll: process.platform === "win32" ? this.config.windowsUseConptyDll : undefined
     });
   }
 }
