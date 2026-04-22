@@ -81,7 +81,7 @@ function statusType(status) {
       </el-card>
     </section>
 
-    <section class="stack-grid">
+    <section class="stack-grid home-stack-grid">
       <el-card class="surface-card info-card" shadow="never">
         <div class="card-head">
           <div>

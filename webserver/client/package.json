@@ -15,7 +15,9 @@
     "@xterm/xterm": "^6.0.0",
     "element-plus": "^2.13.7",
     "markdown-it": "^14.1.0",
-    "vue": "^3.5.13"
+    "pinia": "^3.0.4",
+    "vue": "^3.5.13",
+    "vue-router": "^5.0.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.2.1",
