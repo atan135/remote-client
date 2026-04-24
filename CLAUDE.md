@@ -113,7 +113,11 @@ npm run auth:keygen:all
 - 服务端使用 `user_sessions` 表保存会话
 - 会话通过 HTTP-only cookie 维持
 - `/api/auth/session` 用于恢复登录状态
+- 当前默认允许同一账号多端并存登录，不做单点登录
+- 新设备登录不会把旧设备自动踢下线；各浏览器保持各自 cookie 对应的 session
+- `/api/auth/logout` 只删除当前浏览器对应的 session，不会注销同账号其他设备
 - 支持公开注册、退出登录、修改密码
+- 用户修改自己的密码、管理员重置密码、管理员禁用用户时，会清理该用户全部 session
 - 管理员可创建用户、修改角色/启停、重置密码
 
 ### 2. `auth_code` 绑定
