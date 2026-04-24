@@ -20,6 +20,16 @@ let unsubscribeRuntime = null;
 const statusLabel = computed(() => runtimeSnapshot.value.connection.status || "offline");
 const statusClass = computed(() => statusLabel.value.replace(/\s+/g, "-"));
 const snapshotJson = computed(() => JSON.stringify(runtimeSnapshot.value, null, 2));
+const profileNames = computed(() =>
+  Array.isArray(runtimeSnapshot.value.terminal.profiles)
+    ? runtimeSnapshot.value.terminal.profiles.map((profile) => profile.label || profile.name).join(" / ")
+    : ""
+);
+const sessionRows = computed(() =>
+  Array.isArray(runtimeSnapshot.value.terminal.sessions)
+    ? runtimeSnapshot.value.terminal.sessions
+    : []
+);
 
 onMounted(async () => {
   await refreshAll();
@@ -78,6 +88,21 @@ async function saveConfig() {
       commandTimeoutMs: Number(configForm.commandTimeoutMs),
       maxBufferBytes: Number(configForm.maxBufferBytes),
       windowsOutputEncoding: configForm.windowsOutputEncoding,
+      defaultShell: configForm.defaultShell,
+      windowsUseConpty: normalizeOptionalCheckbox(configForm.windowsUseConpty),
+      windowsUseConptyDll: normalizeOptionalCheckbox(configForm.windowsUseConptyDll),
+      remoteFileMaxBytes: Number(configForm.remoteFileMaxBytes),
+      maxTerminalSessions: Number(configForm.maxTerminalSessions),
+      sessionIdleTimeoutMs: Number(configForm.sessionIdleTimeoutMs),
+      sessionOutputLimit: Number(configForm.sessionOutputLimit),
+      discoveredTerminalCommands: splitMultilineList(configForm.discoveredTerminalCommands),
+      commonWorkingDirectories: splitMultilineList(configForm.commonWorkingDirectories),
+      allowedCwdRoots: splitMultilineList(configForm.allowedCwdRoots),
+      presetCommands: parsePresetCommands(configForm.presetCommands),
+      localDebugServerEnabled: Boolean(configForm.localDebugServerEnabled),
+      localDebugServerHost: configForm.localDebugServerHost,
+      localDebugServerPort: Number(configForm.localDebugServerPort),
+      localDebugToken: configForm.localDebugToken,
       closeToTray: Boolean(configForm.closeToTray),
       launchOnStartup: Boolean(configForm.launchOnStartup)
     });
@@ -85,6 +110,7 @@ async function saveConfig() {
     runtimeConfig.value = updatedConfig;
     applyConfigToForm(updatedConfig);
     runtimeSnapshot.value = await window.localapp2.getSnapshot();
+    keySummary.value = await window.localapp2.getKeySummary();
     notice.value = "配置已保存，runtime 已按新配置重启。";
   } catch (error) {
     notice.value = getErrorMessage(error);
@@ -191,6 +217,21 @@ function applyConfigToForm(config) {
     commandTimeoutMs: config.commandTimeoutMs ?? 120000,
     maxBufferBytes: config.maxBufferBytes ?? 1048576,
     windowsOutputEncoding: config.windowsOutputEncoding || "cp936",
+    defaultShell: config.defaultShell || "powershell.exe",
+    windowsUseConpty: toCheckboxValue(config.windowsUseConpty),
+    windowsUseConptyDll: toCheckboxValue(config.windowsUseConptyDll),
+    remoteFileMaxBytes: config.remoteFileMaxBytes ?? 1048576,
+    maxTerminalSessions: config.maxTerminalSessions ?? 4,
+    sessionIdleTimeoutMs: config.sessionIdleTimeoutMs ?? 1800000,
+    sessionOutputLimit: config.sessionOutputLimit ?? 1200,
+    discoveredTerminalCommands: joinList(config.discoveredTerminalCommands),
+    commonWorkingDirectories: joinList(config.commonWorkingDirectories),
+    allowedCwdRoots: joinList(config.allowedCwdRoots),
+    presetCommands: joinPresetCommands(config.presetCommands),
+    localDebugServerEnabled: Boolean(config.localDebugServerEnabled),
+    localDebugServerHost: config.localDebugServerHost || "127.0.0.1",
+    localDebugServerPort: config.localDebugServerPort ?? 3210,
+    localDebugToken: config.localDebugToken || "",
     closeToTray: Boolean(config.closeToTray),
     launchOnStartup: Boolean(config.launchOnStartup)
   });
@@ -218,6 +259,7 @@ function createEmptySnapshot() {
     },
     security: {
       keysReady: false,
+      authPrivateKeyPath: "",
       authPublicFingerprint: "",
       webserverSignFingerprint: "",
       authPublicKeyPath: "",
@@ -227,6 +269,27 @@ function createEmptySnapshot() {
       processing: false,
       queueLength: 0,
       bufferedMessages: 0
+    },
+    terminal: {
+      maxSessions: 0,
+      activeSessionCount: 0,
+      remoteSessionCount: 0,
+      localDebugSessionCount: 0,
+      availableProfileCount: 0,
+      profiles: [],
+      sessions: []
+    },
+    debugServer: {
+      enabled: false,
+      host: "",
+      port: null,
+      listening: false
+    },
+    meta: {
+      logDir: "",
+      configPath: "",
+      keyDir: "",
+      profileConfigPath: ""
     }
   };
 }
@@ -242,6 +305,21 @@ function createEmptyConfig() {
     commandTimeoutMs: 120000,
     maxBufferBytes: 1048576,
     windowsOutputEncoding: "cp936",
+    defaultShell: "powershell.exe",
+    windowsUseConpty: "inherit",
+    windowsUseConptyDll: "inherit",
+    remoteFileMaxBytes: 1048576,
+    maxTerminalSessions: 4,
+    sessionIdleTimeoutMs: 1800000,
+    sessionOutputLimit: 1200,
+    discoveredTerminalCommands: "",
+    commonWorkingDirectories: "",
+    allowedCwdRoots: "",
+    presetCommands: "",
+    localDebugServerEnabled: false,
+    localDebugServerHost: "127.0.0.1",
+    localDebugServerPort: 3210,
+    localDebugToken: "",
     closeToTray: true,
     launchOnStartup: false
   };
@@ -262,6 +340,73 @@ function createEmptyKeySummary() {
   };
 }
 
+function splitMultilineList(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinList(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "";
+  }
+
+  return value.join("\n");
+}
+
+function parsePresetCommands(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const separatorIndex = entry.indexOf("::");
+      const label = separatorIndex >= 0 ? entry.slice(0, separatorIndex).trim() : "";
+      const command = separatorIndex >= 0 ? entry.slice(separatorIndex + 2).trim() : entry;
+
+      return {
+        label: label || command,
+        command
+      };
+    })
+    .filter((item) => item.command);
+}
+
+function joinPresetCommands(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    return "";
+  }
+
+  return value
+    .map((item) => `${item.label || item.command}::${item.command}`)
+    .join("\n");
+}
+
+function toCheckboxValue(value) {
+  if (value === true) {
+    return "true";
+  }
+
+  if (value === false) {
+    return "false";
+  }
+
+  return "inherit";
+}
+
+function normalizeOptionalCheckbox(value) {
+  if (value === "true") {
+    return true;
+  }
+
+  if (value === "false") {
+    return false;
+  }
+
+  return undefined;
+}
+
 function getErrorMessage(error) {
   if (error instanceof Error) {
     return error.message;
@@ -276,10 +421,10 @@ function getErrorMessage(error) {
     <header class="hero">
       <div>
         <p class="eyebrow">Remote LocalApp2</p>
-        <h1>Electron Windows Agent Skeleton</h1>
+        <h1>Electron Agent Runtime Console</h1>
         <p class="hero-copy">
-          第一版骨架已接入配置存储、托盘宿主、密钥管理入口，以及来自
-          <code>localapp</code> 的同步业务核心文件。
+          当前桌面端已接上与 <code>localapp</code> 同步的命令执行、PTY 会话、文件读取与 profile
+          运行时，可直接观察本地 agent 的完整能力面。
         </p>
       </div>
 
@@ -287,6 +432,9 @@ function getErrorMessage(error) {
         <span class="status-label" :class="statusClass">{{ statusLabel }}</span>
         <strong>{{ runtimeSnapshot.agent.agentId || "未设置 agentId" }}</strong>
         <small>{{ runtimeSnapshot.connection.serverWsUrl || "未配置服务端地址" }}</small>
+        <small>
+          PTY {{ runtimeSnapshot.terminal.activeSessionCount }}/{{ runtimeSnapshot.terminal.maxSessions }}
+        </small>
       </div>
     </header>
 
@@ -333,6 +481,22 @@ function getErrorMessage(error) {
             <dt>离线缓冲</dt>
             <dd>{{ runtimeSnapshot.commands.bufferedMessages }}</dd>
           </div>
+          <div>
+            <dt>活跃终端</dt>
+            <dd>{{ runtimeSnapshot.terminal.activeSessionCount }}</dd>
+          </div>
+          <div>
+            <dt>Debug Server</dt>
+            <dd>
+              {{
+                runtimeSnapshot.debugServer.enabled
+                  ? runtimeSnapshot.debugServer.listening
+                    ? "监听中"
+                    : "已启用未监听"
+                  : "未启用"
+              }}
+            </dd>
+          </div>
         </dl>
       </section>
 
@@ -340,7 +504,7 @@ function getErrorMessage(error) {
         <div class="panel-head">
           <div>
             <p class="eyebrow">Config</p>
-            <h2>本地配置</h2>
+            <h2>基础配置</h2>
           </div>
         </div>
 
@@ -381,6 +545,26 @@ function getErrorMessage(error) {
             <span>Windows 编码</span>
             <input v-model="configForm.windowsOutputEncoding" type="text" />
           </label>
+          <label>
+            <span>默认 Shell</span>
+            <input v-model="configForm.defaultShell" type="text" />
+          </label>
+          <label>
+            <span>ConPTY</span>
+            <select v-model="configForm.windowsUseConpty">
+              <option value="inherit">跟随系统</option>
+              <option value="true">强制启用</option>
+              <option value="false">强制关闭</option>
+            </select>
+          </label>
+          <label>
+            <span>ConPTY DLL</span>
+            <select v-model="configForm.windowsUseConptyDll">
+              <option value="inherit">跟随系统</option>
+              <option value="true">强制启用</option>
+              <option value="false">强制关闭</option>
+            </select>
+          </label>
         </div>
 
         <div class="toggle-grid">
@@ -393,6 +577,90 @@ function getErrorMessage(error) {
             <span>开机自启</span>
           </label>
         </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Runtime Options</p>
+            <h2>终端与文件读取</h2>
+          </div>
+        </div>
+
+        <div class="form-grid">
+          <label>
+            <span>远程读文件上限</span>
+            <input v-model="configForm.remoteFileMaxBytes" type="number" />
+          </label>
+          <label>
+            <span>最大终端会话数</span>
+            <input v-model="configForm.maxTerminalSessions" type="number" />
+          </label>
+          <label>
+            <span>会话空闲超时</span>
+            <input v-model="configForm.sessionIdleTimeoutMs" type="number" />
+          </label>
+          <label>
+            <span>输出缓存条数</span>
+            <input v-model="configForm.sessionOutputLimit" type="number" />
+          </label>
+          <label>
+            <span>Debug Host</span>
+            <input v-model="configForm.localDebugServerHost" type="text" />
+          </label>
+          <label>
+            <span>Debug Port</span>
+            <input v-model="configForm.localDebugServerPort" type="number" />
+          </label>
+        </div>
+
+        <div class="toggle-grid">
+          <label class="toggle">
+            <input v-model="configForm.localDebugServerEnabled" type="checkbox" />
+            <span>启用本地 Debug Server</span>
+          </label>
+        </div>
+
+        <label class="stacked">
+          <span>Debug Token</span>
+          <input v-model="configForm.localDebugToken" type="text" />
+        </label>
+
+        <label class="stacked">
+          <span>额外探测命令（每行一个）</span>
+          <textarea
+            v-model="configForm.discoveredTerminalCommands"
+            rows="4"
+            placeholder="例如：codex&#10;python&#10;uv"
+          />
+        </label>
+
+        <label class="stacked">
+          <span>常用工作目录（每行一个）</span>
+          <textarea
+            v-model="configForm.commonWorkingDirectories"
+            rows="4"
+            placeholder="例如：C:\project\remote-client"
+          />
+        </label>
+
+        <label class="stacked">
+          <span>允许的 cwd 根目录（每行一个）</span>
+          <textarea
+            v-model="configForm.allowedCwdRoots"
+            rows="4"
+            placeholder="为空则不限制"
+          />
+        </label>
+
+        <label class="stacked">
+          <span>预设命令（每行一个，格式：显示名::命令）</span>
+          <textarea
+            v-model="configForm.presetCommands"
+            rows="5"
+            placeholder="主机名::hostname&#10;当前用户::whoami"
+          />
+        </label>
 
         <button type="button" class="primary" @click="saveConfig" :disabled="busy.saving">
           {{ busy.saving ? "保存中..." : "保存配置" }}
@@ -455,7 +723,11 @@ function getErrorMessage(error) {
           />
         </label>
 
-        <button type="button" class="primary" @click="importWebserverKey" :disabled="busy.importingKey">
+        <button
+          type="button"
+          class="primary"
+          @click="importWebserverKey"
+          :disabled="busy.importingKey">
           {{ busy.importingKey ? "导入中..." : "导入服务端签名公钥" }}
         </button>
 
@@ -463,6 +735,74 @@ function getErrorMessage(error) {
           <span>当前 auth_public.pem</span>
           <textarea :value="keySummary.authPublicKeyPem || ''" rows="7" readonly />
         </label>
+      </section>
+
+      <section class="panel full">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Profiles</p>
+            <h2>终端 Profile</h2>
+          </div>
+        </div>
+
+        <dl class="facts">
+          <div>
+            <dt>可用 Profile 数</dt>
+            <dd>{{ runtimeSnapshot.terminal.availableProfileCount }}</dd>
+          </div>
+          <div>
+            <dt>配置文件</dt>
+            <dd>{{ runtimeSnapshot.meta.profileConfigPath || "-" }}</dd>
+          </div>
+          <div class="wide">
+            <dt>当前 Profile</dt>
+            <dd>{{ profileNames || "-" }}</dd>
+          </div>
+        </dl>
+
+        <div class="profile-list">
+          <article
+            v-for="profile in runtimeSnapshot.terminal.profiles"
+            :key="profile.name"
+            class="profile-card">
+            <strong>{{ profile.label }}</strong>
+            <small>{{ profile.command || "-" }}</small>
+            <small>{{ profile.kind }} / {{ profile.source }}</small>
+            <small :class="profile.isAvailable ? 'ok-text' : 'warn-text'">
+              {{ profile.isAvailable ? "可用" : profile.unavailableReason || "不可用" }}
+            </small>
+          </article>
+        </div>
+      </section>
+
+      <section class="panel full">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">Sessions</p>
+            <h2>终端会话摘要</h2>
+          </div>
+        </div>
+
+        <div v-if="sessionRows.length === 0" class="empty-state">当前没有终端会话。</div>
+
+        <div v-else class="session-table">
+          <div class="session-head">
+            <span>ID</span>
+            <span>Source</span>
+            <span>Profile</span>
+            <span>Status</span>
+            <span>CWD</span>
+            <span>更新时间</span>
+          </div>
+          <div v-for="session in sessionRows" :key="session.sessionId" class="session-row">
+            <span>{{ session.sessionId }}</span>
+            <span>{{ session.source }}</span>
+            <span>{{ session.profileLabel || session.profile }}</span>
+            <span>{{ session.status }}</span>
+            <span>{{ session.cwd || "-" }}</span>
+            <span>{{ session.updatedAt || "-" }}</span>
+          </div>
+        </div>
       </section>
 
       <section class="panel full">

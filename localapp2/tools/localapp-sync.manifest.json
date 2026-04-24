@@ -10,8 +10,40 @@
       "target": "../src/synced/command-runner.js"
     },
     {
+      "source": "../../localapp/src/file-reader.js",
+      "target": "../src/synced/file-reader.js"
+    },
+    {
+      "source": "../../localapp/src/local-debug-server.js",
+      "target": "../src/synced/local-debug-server.js"
+    },
+    {
+      "source": "../../localapp/src/runtime/execution-gateway.js",
+      "target": "../src/synced/runtime/execution-gateway.js"
+    },
+    {
+      "source": "../../localapp/src/runtime/pty-session-manager.js",
+      "target": "../src/synced/runtime/pty-session-manager.js"
+    },
+    {
+      "source": "../../localapp/src/runtime/session-store.js",
+      "target": "../src/synced/runtime/session-store.js"
+    },
+    {
+      "source": "../../localapp/src/runtime/tool-profile-registry.js",
+      "target": "../src/synced/runtime/tool-profile-registry.js"
+    },
+    {
+      "source": "../../localapp/src/runtime/runners/terminal-session-runner.js",
+      "target": "../src/synced/runtime/runners/terminal-session-runner.js"
+    },
+    {
       "source": "../../localapp/src/security/secure-command-service.js",
       "target": "../src/synced/security/secure-command-service.js"
+    },
+    {
+      "source": "../../localapp/config/tool-profiles.json",
+      "target": "../config/tool-profiles.json"
     },
     {
       "source": "../../shared/secure-command.mjs",

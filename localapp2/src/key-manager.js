@@ -5,7 +5,7 @@ import path from "node:path";
 import {
   createPublicKeyFingerprint,
   normalizeRsaPublicKeyPem
-} from "../../shared/secure-command.mjs";
+} from "../shared/secure-command.mjs";
 
 export class KeyManager {
   async generateLocalKeyPair(config, { force = false, passphrase = "" } = {}) {

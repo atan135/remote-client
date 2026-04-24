@@ -21,6 +21,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -163,6 +164,7 @@ pre {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   padding: 12px 14px;
@@ -211,6 +213,10 @@ button:disabled {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.facts div.wide {
+  grid-column: 1 / -1;
+}
+
 .facts dt {
   color: #9bb9ab;
   font-size: 12px;
@@ -232,6 +238,59 @@ button:disabled {
   overflow: auto;
 }
 
+.profile-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.profile-card,
+.session-row,
+.session-head {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid rgba(153, 214, 184, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.profile-card small,
+.session-row span,
+.session-head span {
+  color: #b8d3c6;
+  word-break: break-word;
+}
+
+.ok-text {
+  color: #7ff0b7;
+}
+
+.warn-text {
+  color: #ffd08a;
+}
+
+.session-table {
+  display: grid;
+  gap: 12px;
+}
+
+.session-head,
+.session-row {
+  grid-template-columns: 1.2fr 0.8fr 1fr 0.8fr 1.4fr 1fr;
+}
+
+.session-head {
+  background: rgba(127, 224, 178, 0.08);
+}
+
+.empty-state {
+  padding: 18px;
+  border: 1px dashed rgba(153, 214, 184, 0.18);
+  border-radius: 18px;
+  color: #a5c5b6;
+}
+
 .notice {
   margin: 18px 0 0;
   color: #ffd08a;
@@ -245,7 +304,9 @@ button:disabled {
   .hero,
   .grid,
   .form-grid,
-  .facts {
+  .facts,
+  .session-head,
+  .session-row {
     grid-template-columns: 1fr;
   }
 }

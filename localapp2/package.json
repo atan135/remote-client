@@ -2,8 +2,10 @@
   "name": "remote-localapp2",
   "version": "0.1.0",
   "private": true,
+  "description": "Remote LocalApp2 Electron desktop agent",
+  "author": "remote-client",
   "type": "module",
-  "main": "electron/main.js",
+  "main": "electron/main.cjs",
   "scripts": {
     "sync:localapp": "node tools/sync-localapp-files.mjs --write",
     "check:localapp-sync": "node tools/sync-localapp-files.mjs --check",
@@ -19,6 +21,7 @@
     "dotenv": "^16.4.5",
     "iconv-lite": "^0.6.3",
     "log4js": "^6.9.1",
+    "node-pty": "^1.1.0",
     "vue": "^3.5.13",
     "ws": "^8.18.0"
   },
@@ -26,7 +29,7 @@
     "@vitejs/plugin-vue": "^5.2.1",
     "concurrently": "^8.2.2",
     "cross-env": "^7.0.3",
-    "electron": "^30.0.0",
+    "electron": "30.5.1",
     "electron-builder": "^24.13.3",
     "vite": "^6.0.5",
     "wait-on": "^7.2.0"
@@ -34,10 +37,12 @@
   "build": {
     "appId": "com.remote.localapp2",
     "productName": "Remote LocalApp2",
+    "electronVersion": "30.5.1",
     "directories": {
       "output": "dist-installer"
     },
     "files": [
+      "config/**/*",
       "electron/**/*",
       "src/**/*",
       "shared/**/*",

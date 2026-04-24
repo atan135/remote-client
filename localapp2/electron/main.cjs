@@ -1,8 +1,8 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
-import dotenv from "dotenv";
-import {
+const dotenv = require("dotenv");
+const {
   app,
   BrowserWindow,
   Menu,
@@ -11,15 +11,8 @@ import {
   ipcMain,
   nativeImage,
   shell
-} from "electron";
+} = require("electron");
 
-import { ConfigStore } from "../src/config-store.js";
-import { KeyManager } from "../src/key-manager.js";
-import { Localapp2Runtime } from "../src/runtime-adapter.js";
-import { RuntimeStateStore } from "../src/runtime-state-store.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "..");
 const rendererEntryPath = path.resolve(packageRoot, "dist/renderer/index.html");
 
@@ -35,58 +28,74 @@ let mainWindow = null;
 let tray = null;
 let isQuitting = false;
 let currentConfig = null;
+let stateStore = null;
+let configStore = null;
+let keyManager = null;
+let runtime = null;
 
-const stateStore = new RuntimeStateStore();
-const configStore = new ConfigStore({
-  userDataDir: app.getPath("userData")
-});
-const keyManager = new KeyManager();
-const runtime = new Localapp2Runtime({
-  configStore,
-  keyManager,
-  stateStore
+void bootstrap().catch((error) => {
+  console.error(error);
+  app.exit(1);
 });
 
-app.on("second-instance", () => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) {
-      mainWindow.restore();
+async function bootstrap() {
+  const { ConfigStore } = await importLocalModule("../src/config-store.js");
+  const { KeyManager } = await importLocalModule("../src/key-manager.js");
+  const { Localapp2Runtime } = await importLocalModule("../src/runtime-adapter.js");
+  const { RuntimeStateStore } = await importLocalModule("../src/runtime-state-store.js");
+
+  stateStore = new RuntimeStateStore();
+  configStore = new ConfigStore({
+    userDataDir: app.getPath("userData")
+  });
+  keyManager = new KeyManager();
+  runtime = new Localapp2Runtime({
+    configStore,
+    keyManager,
+    stateStore
+  });
+
+  app.on("second-instance", () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+
+      mainWindow.show();
+      mainWindow.focus();
     }
+  });
 
-    mainWindow.show();
-    mainWindow.focus();
-  }
-});
-
-stateStore.subscribe((snapshot) => {
-  for (const window of BrowserWindow.getAllWindows()) {
-    if (!window.isDestroyed()) {
-      window.webContents.send("runtime:changed", snapshot);
+  stateStore.subscribe((snapshot) => {
+    for (const window of BrowserWindow.getAllWindows()) {
+      if (!window.isDestroyed()) {
+        window.webContents.send("runtime:changed", snapshot);
+      }
     }
-  }
-});
+  });
 
-app.on("before-quit", () => {
-  isQuitting = true;
-  void runtime.stop();
-});
+  app.on("before-quit", () => {
+    isQuitting = true;
+    void runtime.stop();
+  });
 
-app.whenReady().then(async () => {
-  currentConfig = await configStore.load();
-  applyLoginItemSettings(currentConfig);
-  registerIpcHandlers();
-  mainWindow = await createMainWindow();
-  await runtime.start();
-  createTray();
-});
-
-app.on("activate", async () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
+  app.whenReady().then(async () => {
+    currentConfig = await configStore.load();
+    applyLoginItemSettings(currentConfig);
+    registerIpcHandlers();
     mainWindow = await createMainWindow();
-  } else {
-    mainWindow?.show();
-  }
-});
+    await runtime.start();
+    createTray();
+  });
+
+  app.on("activate", async () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      mainWindow = await createMainWindow();
+    } else {
+      mainWindow?.show();
+    }
+  });
+}
 
 async function createMainWindow() {
   const window = new BrowserWindow({
@@ -97,7 +106,7 @@ async function createMainWindow() {
     autoHideMenuBar: true,
     backgroundColor: "#0c1512",
     webPreferences: {
-      preload: path.resolve(__dirname, "preload.js"),
+      preload: path.resolve(__dirname, "preload.cjs"),
       nodeIntegration: false,
       contextIsolation: true
     }
@@ -264,4 +273,8 @@ function applyLoginItemSettings(config) {
   } catch {
     // Ignore unsupported environments while keeping the stored preference.
   }
+}
+
+function importLocalModule(relativePath) {
+  return import(pathToFileURL(path.resolve(__dirname, relativePath)).href);
 }

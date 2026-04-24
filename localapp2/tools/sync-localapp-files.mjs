@@ -17,10 +17,12 @@ const manifestDir = path.dirname(manifestPath);
 const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
 const sourceRoots = [
   path.resolve(repoRoot, "localapp/src"),
+  path.resolve(repoRoot, "localapp/config"),
   path.resolve(repoRoot, "shared")
 ];
 const targetRoots = [
   path.resolve(repoRoot, "localapp2/src/synced"),
+  path.resolve(repoRoot, "localapp2/config"),
   path.resolve(repoRoot, "localapp2/shared")
 ];
 

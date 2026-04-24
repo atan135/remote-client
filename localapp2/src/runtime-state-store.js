@@ -55,6 +55,7 @@ export function createDefaultSnapshot() {
     },
     security: {
       keysReady: false,
+      authPrivateKeyPath: "",
       authPublicFingerprint: "",
       webserverSignFingerprint: "",
       authPublicKeyPath: "",
@@ -64,6 +65,27 @@ export function createDefaultSnapshot() {
       processing: false,
       queueLength: 0,
       bufferedMessages: 0
+    },
+    terminal: {
+      maxSessions: 0,
+      activeSessionCount: 0,
+      remoteSessionCount: 0,
+      localDebugSessionCount: 0,
+      availableProfileCount: 0,
+      profiles: [],
+      sessions: []
+    },
+    debugServer: {
+      enabled: false,
+      host: "",
+      port: null,
+      listening: false
+    },
+    meta: {
+      logDir: "",
+      configPath: "",
+      keyDir: "",
+      profileConfigPath: ""
     }
   };
 }

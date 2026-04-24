@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const packageRoot = path.resolve(__dirname, "..");
 
 export class ConfigStore {
   constructor({ userDataDir, env = process.env } = {}) {
@@ -17,7 +22,9 @@ export class ConfigStore {
       userDataDir: this.userDataDir,
       configPath: path.join(this.userDataDir, "config.json"),
       keysDir: path.join(this.userDataDir, "keys"),
-      logsDir: path.join(this.userDataDir, "logs")
+      logsDir: path.join(this.userDataDir, "logs"),
+      appDataDir: path.join(this.userDataDir, "appdata"),
+      bundledProfileConfigPath: path.join(packageRoot, "config", "tool-profiles.json")
     };
   }
 
@@ -26,6 +33,8 @@ export class ConfigStore {
     await fs.mkdir(paths.userDataDir, { recursive: true });
     await fs.mkdir(paths.keysDir, { recursive: true });
     await fs.mkdir(paths.logsDir, { recursive: true });
+    await fs.mkdir(paths.appDataDir, { recursive: true });
+    await seedFileIfMissing(paths.bundledProfileConfigPath, path.join(paths.appDataDir, "tool-profiles.json"));
   }
 
   getDefaultConfig() {
@@ -33,6 +42,7 @@ export class ConfigStore {
     const paths = this.getPaths();
 
     return this.normalizeConfig({
+      envFilePath: paths.configPath,
       serverWsUrl: this.env.SERVER_WS_URL || "ws://localhost:3100/ws/agent",
       agentId: this.env.AGENT_ID || `${hostname}-desktop`,
       agentLabel: this.env.AGENT_LABEL || `${hostname} Desktop`,
@@ -52,6 +62,24 @@ export class ConfigStore {
       webserverSignPublicKeyPath:
         this.env.WEBSERVER_SIGN_PUBLIC_KEY_PATH ||
         path.join(paths.keysDir, "webserver_sign_public.pem"),
+      defaultShell:
+        this.env.DEFAULT_SHELL || (process.platform === "win32" ? "powershell.exe" : "/bin/bash"),
+      windowsUseConpty: this.env.WINDOWS_USE_CONPTY,
+      windowsUseConptyDll: this.env.WINDOWS_USE_CONPTY_DLL,
+      remoteFileMaxBytes: this.env.REMOTE_FILE_MAX_BYTES,
+      maxTerminalSessions: this.env.MAX_TERMINAL_SESSIONS,
+      sessionIdleTimeoutMs: this.env.SESSION_IDLE_TIMEOUT_MS,
+      sessionOutputLimit: this.env.SESSION_OUTPUT_LIMIT,
+      taskProfileConfigPath:
+        this.env.TASK_PROFILE_CONFIG_PATH || path.join(paths.appDataDir, "tool-profiles.json"),
+      discoveredTerminalCommands: this.env.DISCOVER_TERMINAL_COMMANDS,
+      commonWorkingDirectories: this.env.COMMON_WORK_DIRS,
+      presetCommands: this.env.PRESET_COMMANDS,
+      allowedCwdRoots: this.env.ALLOWED_CWD_ROOTS,
+      localDebugServerEnabled: this.env.LOCAL_DEBUG_SERVER_ENABLED,
+      localDebugServerHost: this.env.LOCAL_DEBUG_SERVER_HOST,
+      localDebugServerPort: this.env.LOCAL_DEBUG_SERVER_PORT,
+      localDebugToken: this.env.LOCAL_DEBUG_TOKEN,
       closeToTray: this.env.CLOSE_TO_TRAY ?? this.env.MINIMIZE_TO_TRAY,
       launchOnStartup: this.env.LAUNCH_ON_STARTUP
     });
@@ -100,6 +128,7 @@ export class ConfigStore {
   normalizeConfig(input = {}) {
     const paths = this.getPaths();
     const defaults = {
+      envFilePath: paths.configPath,
       serverWsUrl: "ws://localhost:3100/ws/agent",
       agentId: `${os.hostname()}-desktop`,
       agentLabel: `${os.hostname()} Desktop`,
@@ -115,11 +144,34 @@ export class ConfigStore {
       authPublicKeyPath: path.join(paths.keysDir, "auth_public.pem"),
       authPrivateKeyPassphrase: "",
       webserverSignPublicKeyPath: path.join(paths.keysDir, "webserver_sign_public.pem"),
+      defaultShell: process.platform === "win32" ? "powershell.exe" : "/bin/bash",
+      windowsUseConpty: undefined,
+      windowsUseConptyDll: undefined,
+      remoteFileMaxBytes: 1024 * 1024,
+      maxTerminalSessions: 4,
+      sessionIdleTimeoutMs: 30 * 60 * 1000,
+      sessionOutputLimit: 1200,
+      taskProfileConfigPath: path.join(paths.appDataDir, "tool-profiles.json"),
+      discoveredTerminalCommands: [],
+      commonWorkingDirectories: [],
+      presetCommands: [],
+      allowedCwdRoots: [],
+      localDebugServerEnabled: false,
+      localDebugServerHost: "127.0.0.1",
+      localDebugServerPort: 3210,
+      localDebugToken: "",
+      webserverSignPublicKeyEnvVarName: "WEBSERVER_SIGN_PUBLIC_KEY_PATH",
+      authPrivateKeyPathSource: "config_store",
+      authPrivateKeyConfiguredInEnvFile: true,
+      webserverSignPublicKeyPathSource: "config_store",
+      webserverSignPublicKeyConfiguredInEnvFile: true,
       closeToTray: true,
       launchOnStartup: false
     };
 
     return {
+      envFilePath: toAbsolutePath(input.envFilePath, defaults.envFilePath, this.userDataDir),
+      envFileLoaded: true,
       serverWsUrl: toText(input.serverWsUrl, defaults.serverWsUrl),
       agentId: toText(input.agentId, defaults.agentId),
       agentLabel: toText(input.agentLabel, defaults.agentLabel),
@@ -150,6 +202,43 @@ export class ConfigStore {
         defaults.webserverSignPublicKeyPath,
         this.userDataDir
       ),
+      defaultShell: toText(input.defaultShell, defaults.defaultShell),
+      windowsUseConpty: toOptionalBoolean(input.windowsUseConpty),
+      windowsUseConptyDll: toOptionalBoolean(input.windowsUseConptyDll),
+      remoteFileMaxBytes: toNumber(input.remoteFileMaxBytes, defaults.remoteFileMaxBytes),
+      maxTerminalSessions: toNumber(input.maxTerminalSessions, defaults.maxTerminalSessions),
+      sessionIdleTimeoutMs: toNumber(
+        input.sessionIdleTimeoutMs,
+        defaults.sessionIdleTimeoutMs
+      ),
+      sessionOutputLimit: toNumber(input.sessionOutputLimit, defaults.sessionOutputLimit),
+      taskProfileConfigPath: toAbsolutePath(
+        input.taskProfileConfigPath,
+        defaults.taskProfileConfigPath,
+        this.userDataDir
+      ),
+      discoveredTerminalCommands: toUniqueList(input.discoveredTerminalCommands),
+      commonWorkingDirectories: toUniqueList(input.commonWorkingDirectories),
+      presetCommands: toPresetCommands(input.presetCommands),
+      allowedCwdRoots: toList(input.allowedCwdRoots),
+      localDebugServerEnabled: toBoolean(
+        input.localDebugServerEnabled,
+        defaults.localDebugServerEnabled
+      ),
+      localDebugServerHost: toText(
+        input.localDebugServerHost,
+        defaults.localDebugServerHost
+      ),
+      localDebugServerPort: toNumber(
+        input.localDebugServerPort,
+        defaults.localDebugServerPort
+      ),
+      localDebugToken: String(input.localDebugToken || ""),
+      webserverSignPublicKeyEnvVarName: "WEBSERVER_SIGN_PUBLIC_KEY_PATH",
+      authPrivateKeyPathSource: "config_store",
+      authPrivateKeyConfiguredInEnvFile: true,
+      webserverSignPublicKeyPathSource: "config_store",
+      webserverSignPublicKeyConfiguredInEnvFile: true,
       closeToTray: toBoolean(
         input.closeToTray ?? input.minimizeToTray,
         defaults.closeToTray
@@ -186,6 +275,14 @@ function toBoolean(value, fallback) {
   return fallback;
 }
 
+function toOptionalBoolean(value) {
+  if (value === undefined || value === null || value === "") {
+    return undefined;
+  }
+
+  return toBoolean(value, false);
+}
+
 function toText(value, fallback) {
   const text = String(value ?? "").trim();
   return text || fallback;
@@ -195,4 +292,103 @@ function toAbsolutePath(value, fallback, baseDir) {
   const raw = String(value || "").trim();
   const target = raw || fallback;
   return path.isAbsolute(target) ? target : path.resolve(baseDir, target);
+}
+
+function toList(value) {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || "").trim()).filter(Boolean);
+  }
+
+  return String(value || "")
+    .split(/[,;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function toUniqueList(value) {
+  return Array.from(new Set(toList(value)));
+}
+
+function toPresetCommands(value) {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => normalizePresetCommand(item))
+      .filter(Boolean);
+  }
+
+  const seen = new Set();
+  const presets = [];
+
+  for (const rawEntry of String(value || "").split(/\r?\n|\|\|/)) {
+    const preset = normalizePresetCommand(rawEntry);
+
+    if (!preset) {
+      continue;
+    }
+
+    const dedupeKey = `${preset.label}\u0000${preset.command}`;
+
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+
+    seen.add(dedupeKey);
+    presets.push(preset);
+  }
+
+  return presets;
+}
+
+function normalizePresetCommand(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const label = String(value.label || value.command || "").trim();
+    const command = String(value.command || "").trim();
+
+    if (!label || !command) {
+      return null;
+    }
+
+    return {
+      label,
+      command
+    };
+  }
+
+  const entry = String(value || "").trim();
+
+  if (!entry) {
+    return null;
+  }
+
+  const separatorIndex = entry.indexOf("::");
+  const label = separatorIndex >= 0 ? entry.slice(0, separatorIndex).trim() : "";
+  const command = separatorIndex >= 0 ? entry.slice(separatorIndex + 2).trim() : entry;
+
+  if (!command) {
+    return null;
+  }
+
+  return {
+    label: label || command,
+    command
+  };
+}
+
+async function seedFileIfMissing(sourcePath, targetPath) {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw error;
+    }
+
+    try {
+      const bundled = await fs.readFile(sourcePath, "utf8");
+      await fs.writeFile(targetPath, bundled, "utf8");
+    } catch (readError) {
+      if (readError.code !== "ENOENT") {
+        throw readError;
+      }
+    }
+  }
 }
