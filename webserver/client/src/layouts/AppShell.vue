@@ -58,21 +58,18 @@ function navigate(tabKey) {
               <strong>{{ tab.label }}</strong>
               <small>{{ tab.description }}</small>
             </span>
-            <span v-if="tab.badge" class="console-nav-badge">
-              {{ tab.badge > 99 ? "99+" : tab.badge }}
-            </span>
           </button>
         </nav>
 
         <section class="console-sidebar-stats">
-          <article class="console-kpi">
+          <button class="console-kpi console-kpi-action" type="button" @click="navigate('home')">
             <span>在线设备</span>
             <strong>{{ store.onlineAgentCount }}</strong>
-          </article>
-          <article class="console-kpi">
+          </button>
+          <button class="console-kpi console-kpi-action" type="button" @click="navigate('tasks')">
             <span>命令记录</span>
             <strong>{{ store.commands.length }}</strong>
-          </article>
+          </button>
           <article class="console-kpi">
             <span>当前设备</span>
             <strong>{{ store.selectedAgentId || "--" }}</strong>
@@ -98,7 +95,6 @@ function navigate(tabKey) {
 
       <header class="console-header">
         <div class="console-header-copy">
-          <p class="eyebrow">{{ currentTab?.action || "Console" }}</p>
           <h1>{{ currentTab?.label || "控制台" }}</h1>
           <p>{{ currentTab?.description }}</p>
         </div>

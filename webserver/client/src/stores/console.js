@@ -332,17 +332,9 @@ export const useConsoleStore = defineStore("console", () => {
       ).length
   );
 
-  const tabBadges = computed(() => ({
-    home: onlineAgentCount.value,
-    explore: runningTerminalSessionCount.value || (activeAgent.value ? 1 : 0),
-    tasks: pendingTaskCount.value || failedTaskCount.value,
-    profile: wsState.error ? 1 : 0
-  }));
-
   const resolvedTabs = computed(() =>
     NAV_ITEMS.map((tab) => ({
       ...tab,
-      badge: tabBadges.value[tab.key] || 0,
       to: {
         name: tab.name
       }

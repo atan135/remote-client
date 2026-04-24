@@ -28,9 +28,6 @@ function selectTab(tabKey) {
       @click="selectTab(tab.key)"
     >
       <span class="tab-item-label">{{ tab.label }}</span>
-      <span v-if="tab.badge" class="tab-item-badge">
-        {{ tab.badge > 99 ? "99+" : tab.badge }}
-      </span>
     </button>
   </nav>
 </template>

@@ -226,10 +226,6 @@ textarea {
   cursor: pointer;
 }
 
-.topbar-badge {
-  justify-self: end;
-}
-
 .topbar-icon-button {
   display: grid;
   place-items: center;
@@ -941,6 +937,11 @@ textarea {
   margin-top: 10px;
 }
 
+.explore-session-action {
+  min-width: 0;
+  white-space: nowrap;
+}
+
 .explore-raw-terminal {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -1461,18 +1462,6 @@ textarea {
   line-height: 1.1;
 }
 
-.tab-item-badge {
-  min-width: 22px;
-  padding: 3px 6px;
-  border-radius: 999px;
-  background: rgba(242, 166, 90, 0.2);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  text-align: center;
-}
-
 .el-avatar {
   background: linear-gradient(135deg, #f2a65a 0%, #f7c98a 100%);
   color: #1e1305;
@@ -1575,14 +1564,26 @@ textarea {
 
   .timeline-summary-meta {
     gap: 6px;
+    min-width: 0;
   }
 
   .timeline-summary-item {
+    align-items: flex-start;
     max-width: 100%;
+  }
+
+  .timeline-summary-item strong {
+    max-width: 100%;
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .timeline-summary-device {
     flex: 1 1 100%;
+    width: 100%;
   }
 
   .timeline-toggle {
@@ -1600,6 +1601,31 @@ textarea {
 
   .explore-session-list {
     max-height: min(32vh, 240px);
+  }
+
+  .explore-session-input-actions {
+    flex-wrap: nowrap;
+    gap: 8px;
+  }
+
+  .explore-session-input-actions .explore-session-action {
+    min-width: 0;
+    margin: 0 !important;
+    padding-left: 10px;
+    padding-right: 10px;
+    font-size: 12px;
+  }
+
+  .explore-session-action-preset {
+    flex: 1.35 1 0;
+  }
+
+  .explore-session-action-send {
+    flex: 0.8 1 0;
+  }
+
+  .explore-session-action-stop {
+    flex: 1 1 0;
   }
 
   .explore-terminal.terminal-emulator {
@@ -1715,18 +1741,6 @@ textarea {
     line-height: 1.4;
   }
 
-  .console-nav-badge {
-    flex-shrink: 0;
-    min-width: 28px;
-    padding: 4px 8px;
-    border-radius: 999px;
-    background: rgba(242, 166, 90, 0.2);
-    color: var(--accent);
-    font-size: 12px;
-    font-weight: 700;
-    text-align: center;
-  }
-
   .console-sidebar-stats {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1738,6 +1752,20 @@ textarea {
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 16px;
     background: rgba(255, 255, 255, 0.03);
+  }
+
+  .console-kpi-action {
+    width: 100%;
+    text-align: left;
+    color: inherit;
+    cursor: pointer;
+    transition: transform 180ms ease, border-color 180ms ease, background 180ms ease;
+  }
+
+  .console-kpi-action:hover {
+    transform: translateY(-1px);
+    border-color: rgba(242, 166, 90, 0.28);
+    background: rgba(242, 166, 90, 0.07);
   }
 
   .console-kpi span,
@@ -1842,6 +1870,13 @@ textarea {
     grid-area: banner;
   }
 
+  .explore-page.is-focus-mode {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "banner"
+      "main";
+  }
+
   .explore-main-card,
   .explore-session-detail-card {
     grid-area: main;
@@ -1853,6 +1888,10 @@ textarea {
     position: sticky;
     top: 118px;
     margin: 0;
+  }
+
+  .explore-page.is-focus-mode > .explore-device-card {
+    display: none;
   }
 
   .explore-main-card > .el-card__body,

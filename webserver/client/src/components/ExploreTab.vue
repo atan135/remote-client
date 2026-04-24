@@ -576,7 +576,7 @@ function formatCompactDateTime(value) {
 </script>
 
 <template>
-  <section class="page explore-page" :class="{ 'is-session-detail': sessionScreen === 'detail' }">
+  <section class="page explore-page" :class="{ 'is-focus-mode': sessionScreen !== 'main' }">
     <el-card class="surface-card section-banner tab-banner" shadow="never">
       <h2>终端控制台</h2>
     </el-card>
@@ -785,15 +785,29 @@ function formatCompactDateTime(value) {
                   " @update:model-value="emit('update:terminalInput', $event)" />
             </div>
             <div class="hero-actions explore-session-input-actions">
-              <el-button v-if="presetCommands.length" round plain :disabled="!canSendSessionPresetInput"
+              <el-button
+                v-if="presetCommands.length"
+                class="explore-session-action explore-session-action-preset"
+                round
+                plain
+                :disabled="!canSendSessionPresetInput"
                 @click="sendSelectedSessionPresetInput">
                 {{ sendingTerminalInput ? "发送中..." : "发送预设输入" }}
               </el-button>
-              <el-button type="primary" round :disabled="!canSendTerminalInput"
+              <el-button
+                class="explore-session-action explore-session-action-send"
+                type="primary"
+                round
+                :disabled="!canSendTerminalInput"
                 @click="emit('send-terminal-input', currentSession.sessionId)">
                 {{ sendingTerminalInput ? "发送中..." : "发送" }}
               </el-button>
-              <el-button round plain type="warning" :disabled="!canInterruptCurrentSession"
+              <el-button
+                class="explore-session-action explore-session-action-stop"
+                round
+                plain
+                type="warning"
+                :disabled="!canInterruptCurrentSession"
                 @click="emit('interrupt-terminal-session', currentSession.sessionId)">
                 停止任务
               </el-button>

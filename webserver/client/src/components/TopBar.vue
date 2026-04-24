@@ -1,5 +1,5 @@
 <script setup>
-import { ElAvatar, ElBadge } from "element-plus";
+import { ElAvatar } from "element-plus";
 
 defineProps({
   currentTab: {
@@ -23,10 +23,8 @@ defineProps({
       <h1>{{ currentTab.label }}</h1>
     </div>
 
-    <el-badge :hidden="!currentTab.badge" :value="currentTab.badge" class="topbar-badge">
-      <button class="topbar-icon-button" type="button" :aria-label="currentTab.action">
-        <span class="topbar-icon">◎</span>
-      </button>
-    </el-badge>
+    <button class="topbar-icon-button" type="button" :aria-label="currentTab.label">
+      <span class="topbar-icon">◎</span>
+    </button>
   </header>
 </template>
