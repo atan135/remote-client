@@ -3,6 +3,7 @@ dist/
 webserver/client/remote-webserver-client-dist.zip
 logs/
 **/logs/
+.runlogs/
 localapp/keys/
 webserver/server/keys/
 .env
