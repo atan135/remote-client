@@ -61,6 +61,8 @@ export const useConsoleStore = defineStore("console", () => {
   const deletingAuthCodeId = ref(null);
   const terminatingTerminalSessionId = ref(null);
   const deletingTerminalSessionId = ref(null);
+  const deletingCommandRequestId = ref(null);
+  const clearingCommands = ref(false);
   const session = ref(null);
   const authMode = ref("login");
   const remoteFileError = ref("");
@@ -322,6 +324,13 @@ export const useConsoleStore = defineStore("console", () => {
       activeTerminalSession.value &&
         !isTerminalSessionClosedStatus(activeTerminalSession.value.status) &&
         terminatingTerminalSessionId.value !== activeTerminalSession.value.sessionId
+    )
+  );
+
+  const canClearCommands = computed(() =>
+    Boolean(
+      !clearingCommands.value &&
+        visibleCommands.value.some((item) => isCommandRecordDeletableStatus(item?.status))
     )
   );
 
@@ -672,6 +681,129 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     } finally {
       submitting.value = false;
+    }
+  }
+
+  async function deleteCommandRecord(requestId) {
+    const normalizedRequestId = String(requestId || "").trim();
+    const commandRecord = commands.value.find((item) => item.requestId === normalizedRequestId) || null;
+
+    if (!normalizedRequestId || !commandRecord) {
+      return false;
+    }
+
+    if (!isCommandRecordDeletableStatus(commandRecord.status)) {
+      wsState.error = "仅允许删除已结束的任务记录";
+      return false;
+    }
+
+    try {
+      await ElMessageBox.confirm(
+        `确认删除任务记录 ${commandRecord.command || normalizedRequestId} 吗？删除后将从执行记录中移除。`,
+        "删除任务记录",
+        {
+          type: "warning",
+          confirmButtonText: "删除",
+          cancelButtonText: "取消"
+        }
+      );
+    } catch {
+      return false;
+    }
+
+    deletingCommandRequestId.value = normalizedRequestId;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/commands/${normalizedRequestId}`, {
+        method: "DELETE"
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          removeCommand(normalizedRequestId);
+          ElMessage.warning("任务记录已不存在，已从列表移除");
+          return false;
+        }
+
+        throw new Error(payload.message || "删除任务记录失败");
+      }
+
+      removeCommand(normalizedRequestId);
+      ElMessage.success("任务记录已删除");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      deletingCommandRequestId.value = null;
+    }
+  }
+
+  async function clearCommandRecords(agentId = timelineFilterAgentId.value) {
+    const normalizedAgentId =
+      !agentId || String(agentId || "").trim() === "all" ? "" : String(agentId || "").trim();
+    const targetLabel = normalizedAgentId
+      ? agentsById.value.get(normalizedAgentId)?.label || normalizedAgentId
+      : "全部设备";
+
+    try {
+      await ElMessageBox.confirm(
+        `确认清空 ${targetLabel} 下所有已结束的任务记录吗？执行中的任务会保留。`,
+        "清空任务记录",
+        {
+          type: "warning",
+          confirmButtonText: "清空",
+          cancelButtonText: "取消"
+        }
+      );
+    } catch {
+      return false;
+    }
+
+    clearingCommands.value = true;
+    wsState.error = "";
+
+    try {
+      const query = normalizedAgentId
+        ? `?agentId=${encodeURIComponent(normalizedAgentId)}`
+        : "";
+      const response = await fetch(`/api/commands${query}`, {
+        method: "DELETE"
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "清空任务记录失败");
+      }
+
+      await loadCommands();
+
+      if (Number(payload.deletedFromHistory || 0) > 0 || Number(payload.removedActiveCount || 0) > 0) {
+        ElMessage.success("任务记录已清空");
+      } else {
+        ElMessage.info("当前没有可清空的已结束记录");
+      }
+
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      clearingCommands.value = false;
     }
   }
 
@@ -1663,6 +1795,14 @@ export const useConsoleStore = defineStore("console", () => {
         case "command.updated":
           upsertCommand(message.payload);
           break;
+        case "command.deleted":
+          removeCommand(message.payload?.requestId);
+          break;
+        case "command.cleared":
+          void loadCommands().catch((error) => {
+            wsState.error = error.message || "加载命令记录失败";
+          });
+          break;
         case "terminal.session.updated":
           if (upsertTerminalSession(message.payload)) {
             shouldEnsureSession = true;
@@ -1809,6 +1949,24 @@ export const useConsoleStore = defineStore("console", () => {
     normalizedItems.sort(compareCommandRecords);
     commands.value = normalizedItems;
     recomputeCommandStatusCounts();
+  }
+
+  function removeCommand(requestId) {
+    const normalizedRequestId = String(requestId || "").trim();
+
+    if (!normalizedRequestId) {
+      return false;
+    }
+
+    const nextItems = commands.value.filter((item) => item.requestId !== normalizedRequestId);
+
+    if (nextItems.length === commands.value.length) {
+      return false;
+    }
+
+    commands.value = nextItems;
+    recomputeCommandStatusCounts();
+    return true;
   }
 
   function replaceTerminalSessions(items) {
@@ -2037,6 +2195,10 @@ export const useConsoleStore = defineStore("console", () => {
   function normalizeTerminalDimension(value) {
     const parsed = Math.floor(Number(value));
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+  }
+
+  function isCommandRecordDeletableStatus(status) {
+    return !PENDING_COMMAND_STATUSES.has(String(status || ""));
   }
 
   function isTerminalSessionClosedStatus(status) {
@@ -2312,23 +2474,28 @@ export const useConsoleStore = defineStore("console", () => {
     availableTerminalProfiles,
     avatarLabel,
     bootstrapping,
+    canClearCommands,
     canCreateTerminalSession,
     canSendTerminalInput,
     canSubmitCommand,
     canTerminateTerminalSession,
     changingPassword,
     clearAutoOpenTerminalSession,
+    clearCommandRecords,
     commandInput,
     commands,
     createAuthCode,
     createTerminalSession,
     createUser,
     creatingAuthCode,
+    clearingCommands,
     creatingTerminalSession,
     creatingUser,
     deleteAuthCode,
+    deleteCommandRecord,
     deleteTerminalSession,
     deletingAuthCodeId,
+    deletingCommandRequestId,
     deletingTerminalSessionId,
     displayName,
     dispose,

@@ -477,6 +477,14 @@ app.post("/api/commands", requireAuth, (req, res) => {
   void handleCommandRequest(req, res);
 });
 
+app.delete("/api/commands/:requestId", requireAuth, (req, res) => {
+  void handleCommandDeleteRequest(req, res);
+});
+
+app.delete("/api/commands", requireAuth, (req, res) => {
+  void handleCommandClearRequest(req, res);
+});
+
 app.get("/api/terminal-sessions", requireAuth, (req, res) => {
   void handleTerminalSessionHistoryRequest(req, res);
 });
@@ -2550,6 +2558,10 @@ function looksLikePromptEchoContent(text) {
   return /(用户请求|不要输出中间思考|最终只允许输出|标记包裹)/.test(value);
 }
 
+function isCommandRecordDeletable(status) {
+  return !["queued", "running", "dispatched"].includes(String(status || ""));
+}
+
 function serializeCommandRecord(record) {
   if (!record) {
     return null;
@@ -2802,6 +2814,115 @@ async function handleCommandHistoryRequest(req, res) {
       error: error.message
     });
     res.status(500).json({ message: "加载命令记录失败" });
+  }
+}
+
+async function handleCommandDeleteRequest(req, res) {
+  const requestId = String(req.params.requestId || "").trim();
+
+  if (!requestId) {
+    res.status(400).json({ message: "requestId is required" });
+    return;
+  }
+
+  try {
+    const activeRecord = commandStore.get(requestId);
+
+    if (activeRecord && !isCommandRecordDeletable(activeRecord.status)) {
+      res.status(409).json({ message: "仅允许删除已结束的任务记录" });
+      return;
+    }
+
+    const storedRecord = await commandHistoryService.getByRequestId(requestId);
+    const commandRecord = activeRecord || storedRecord;
+
+    if (!commandRecord) {
+      res.status(404).json({ message: "命令记录不存在" });
+      return;
+    }
+
+    if (storedRecord && !isCommandRecordDeletable(storedRecord.status)) {
+      res.status(409).json({ message: "仅允许删除已结束的任务记录" });
+      return;
+    }
+
+    const deletedFromHistory = storedRecord
+      ? await commandHistoryService.deleteByRequestId(requestId)
+      : false;
+    const removedActiveRecord = activeRecord ? commandStore.remove(requestId) : null;
+    const payload = {
+      requestId,
+      agentId: String(commandRecord.agentId || removedActiveRecord?.agentId || ""),
+      deletedAt: new Date().toISOString()
+    };
+
+    logEvent(commandLogger, "info", "command.deleted", {
+      requestId,
+      agentId: payload.agentId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      deletedFromHistory,
+      removedActiveRecord: Boolean(removedActiveRecord)
+    });
+
+    browserHub.broadcast("command.deleted", payload);
+    res.json({
+      ok: true,
+      requestId,
+      deletedFromHistory,
+      removedActiveRecord: Boolean(removedActiveRecord)
+    });
+  } catch (error) {
+    logEvent(commandLogger, "error", "command.delete_failed", {
+      requestId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: error.message || "删除命令记录失败" });
+  }
+}
+
+async function handleCommandClearRequest(req, res) {
+  const agentId = String(req.query.agentId || req.body?.agentId || "").trim();
+
+  try {
+    const deletedFromHistory = await commandHistoryService.deleteClosedRuns({ agentId });
+    const removedActiveCount = commandStore.removeWhere((record) => {
+      if (!isCommandRecordDeletable(record?.status)) {
+        return false;
+      }
+
+      return !agentId || String(record?.agentId || "") === agentId;
+    });
+    const payload = {
+      agentId,
+      clearedAt: new Date().toISOString()
+    };
+
+    logEvent(commandLogger, "info", "command.cleared", {
+      agentId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      removedActiveCount,
+      deletedFromHistory
+    });
+
+    browserHub.broadcast("command.cleared", payload);
+    res.json({
+      ok: true,
+      agentId,
+      removedActiveCount,
+      deletedFromHistory
+    });
+  } catch (error) {
+    logEvent(commandLogger, "error", "command.clear_failed", {
+      agentId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: error.message || "清空命令记录失败" });
   }
 }
 

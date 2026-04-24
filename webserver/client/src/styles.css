@@ -1192,6 +1192,27 @@ textarea {
   padding: 14px 16px;
 }
 
+.tasks-toolbar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tasks-filter-field {
+  flex: 1 1 280px;
+  margin-bottom: 0;
+}
+
+.tasks-toolbar-actions {
+  flex-shrink: 0;
+  margin-top: 0;
+}
+
+.tasks-toolbar-hint {
+  margin-top: 10px;
+}
+
 .timeline-summary {
   display: grid;
   gap: 10px;
@@ -1203,6 +1224,14 @@ textarea {
   justify-content: space-between;
   gap: 10px;
   min-width: 0;
+}
+
+.timeline-summary-top-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .timeline-summary-top h3 {
@@ -1547,12 +1576,30 @@ textarea {
     padding: 12px 14px;
   }
 
+  .tasks-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tasks-filter-field {
+    flex-basis: auto;
+  }
+
+  .tasks-toolbar-actions {
+    width: 100%;
+  }
+
+  .tasks-toolbar-actions .el-button {
+    width: 100%;
+  }
+
   .timeline-summary {
     gap: 8px;
   }
 
   .timeline-summary-top {
     align-items: flex-start;
+    flex-direction: column;
   }
 
   .timeline-summary-top h3 {
@@ -1560,6 +1607,11 @@ textarea {
     display: -webkit-box;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 2;
+  }
+
+  .timeline-summary-top-actions {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .timeline-summary-meta {

@@ -181,6 +181,91 @@ export class CommandHistoryService {
 
     return rows.map(serializeStoredCommandRun);
   }
+
+  async getByRequestId(requestId) {
+    const normalizedRequestId = String(requestId || "").trim();
+
+    if (!normalizedRequestId) {
+      return null;
+    }
+
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          request_id,
+          agent_id,
+          operator_user_id,
+          operator_username,
+          command_text,
+          status,
+          secure_status,
+          security_error,
+          exit_code,
+          error_message,
+          stdout_preview,
+          stderr_preview,
+          stdout_chars,
+          stderr_chars,
+          created_at,
+          updated_at,
+          dispatched_at,
+          started_at,
+          completed_at
+        FROM command_runs
+        WHERE request_id = ?
+        LIMIT 1
+      `,
+      [normalizedRequestId]
+    );
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      return null;
+    }
+
+    return serializeStoredCommandRun(rows[0]);
+  }
+
+  async deleteByRequestId(requestId) {
+    const normalizedRequestId = String(requestId || "").trim();
+
+    if (!normalizedRequestId) {
+      return false;
+    }
+
+    const [result] = await this.pool.execute(
+      `
+        DELETE FROM command_runs
+        WHERE request_id = ?
+        LIMIT 1
+      `,
+      [normalizedRequestId]
+    );
+
+    return Number(result?.affectedRows || 0) > 0;
+  }
+
+  async deleteClosedRuns({ agentId = "" } = {}) {
+    const normalizedAgentId = String(agentId || "").trim();
+    const activeStatuses = ["queued", "running", "dispatched"];
+    const [result] = normalizedAgentId
+      ? await this.pool.execute(
+          `
+            DELETE FROM command_runs
+            WHERE agent_id = ?
+              AND status NOT IN (?, ?, ?)
+          `,
+          [normalizedAgentId, ...activeStatuses]
+        )
+      : await this.pool.execute(
+          `
+            DELETE FROM command_runs
+            WHERE status NOT IN (?, ?, ?)
+          `,
+          activeStatuses
+        );
+
+    return Number(result?.affectedRows || 0);
+  }
 }
 
 export function summarizeCommandRecord(record) {

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref, watch } from "vue";
-import { ElCard, ElOption, ElSelect, ElTag } from "element-plus";
+import { ElButton, ElCard, ElOption, ElSelect, ElTag } from "element-plus";
 
 const props = defineProps({
   commands: {
@@ -10,6 +10,18 @@ const props = defineProps({
   agents: {
     type: Array,
     required: true
+  },
+  canClearCommands: {
+    type: Boolean,
+    required: true
+  },
+  clearingCommands: {
+    type: Boolean,
+    required: true
+  },
+  deletingCommandRequestId: {
+    type: String,
+    default: ""
   },
   timelineFilterAgentId: {
     type: String,
@@ -21,7 +33,11 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(["update:timelineFilterAgentId"]);
+const emit = defineEmits([
+  "clear-commands",
+  "delete-command",
+  "update:timelineFilterAgentId"
+]);
 const expandedRequestIds = ref([]);
 let lastTimelineFilterAgentId = "";
 let lastCommandCount = 0;
@@ -41,6 +57,12 @@ const agentById = computed(
         .filter((item) => item?.agentId)
         .map((item) => [item.agentId, item])
     )
+);
+
+const clearButtonText = computed(() =>
+  props.timelineFilterAgentId && props.timelineFilterAgentId !== "all"
+    ? "清空当前设备记录"
+    : "一键清空全部记录"
 );
 
 watch(
@@ -103,6 +125,13 @@ function statusType(status) {
   return "danger";
 }
 
+function canDeleteCommand(item) {
+  return (
+    item &&
+    !["queued", "running", "dispatched"].includes(String(item.status || ""))
+  );
+}
+
 function isExpanded(requestId) {
   return expandedRequestIds.value.includes(requestId);
 }
@@ -155,22 +184,36 @@ function formatCreatedAt(value) {
     </el-card>
 
     <el-card class="surface-card info-card" shadow="never">
-      <label class="field-block">
-        <span>筛选设备</span>
-        <el-select
-          :model-value="timelineFilterAgentId"
-          placeholder="全部设备"
-          @update:model-value="emit('update:timelineFilterAgentId', $event)"
-        >
-          <el-option label="全部设备" value="all" />
-          <el-option
-            v-for="agent in agents"
-            :key="agent.agentId"
-            :label="`${agent.label} / ${agent.agentId}`"
-            :value="agent.agentId"
-          />
-        </el-select>
-      </label>
+      <div class="tasks-toolbar">
+        <label class="field-block tasks-filter-field">
+          <span>筛选设备</span>
+          <el-select
+            :model-value="timelineFilterAgentId"
+            placeholder="全部设备"
+            @update:model-value="emit('update:timelineFilterAgentId', $event)"
+          >
+            <el-option label="全部设备" value="all" />
+            <el-option
+              v-for="agent in agents"
+              :key="agent.agentId"
+              :label="`${agent.label} / ${agent.agentId}`"
+              :value="agent.agentId"
+            />
+          </el-select>
+        </label>
+        <div class="hero-actions tasks-toolbar-actions">
+          <el-button
+            round
+            plain
+            type="danger"
+            :disabled="!canClearCommands"
+            @click="emit('clear-commands')"
+          >
+            {{ clearingCommands ? "清空中..." : clearButtonText }}
+          </el-button>
+        </div>
+      </div>
+      <p class="muted tasks-toolbar-hint">仅会清空已结束记录，执行中的任务会保留。</p>
     </el-card>
 
     <section class="stack-grid">
@@ -183,7 +226,20 @@ function formatCreatedAt(value) {
         <div class="timeline-summary">
           <div class="timeline-summary-top">
             <h3 :title="item.command">{{ item.command }}</h3>
-            <el-tag :type="statusType(item.status)" effect="dark" round>{{ item.status }}</el-tag>
+            <div class="timeline-summary-top-actions">
+              <el-button
+                v-if="canDeleteCommand(item)"
+                round
+                plain
+                type="danger"
+                size="small"
+                :loading="deletingCommandRequestId === item.requestId"
+                @click="emit('delete-command', item.requestId)"
+              >
+                删除
+              </el-button>
+              <el-tag :type="statusType(item.status)" effect="dark" round>{{ item.status }}</el-tag>
+            </div>
           </div>
 
           <div class="timeline-summary-meta">

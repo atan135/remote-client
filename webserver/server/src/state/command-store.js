@@ -49,6 +49,50 @@ export class CommandStore {
     return record;
   }
 
+  get(requestId) {
+    return this.commands.get(String(requestId || "").trim()) || null;
+  }
+
+  remove(requestId) {
+    const normalizedRequestId = String(requestId || "").trim();
+
+    if (!normalizedRequestId || !this.commands.has(normalizedRequestId)) {
+      return null;
+    }
+
+    const record = this.commands.get(normalizedRequestId) || null;
+    this.commands.delete(normalizedRequestId);
+    this.order = this.order.filter((item) => item !== normalizedRequestId);
+    return record;
+  }
+
+  removeWhere(predicate) {
+    if (typeof predicate !== "function") {
+      return 0;
+    }
+
+    const removedRequestIds = [];
+
+    for (const requestId of this.order) {
+      const record = this.commands.get(requestId);
+
+      if (!record || !predicate(record)) {
+        continue;
+      }
+
+      this.commands.delete(requestId);
+      removedRequestIds.push(requestId);
+    }
+
+    if (removedRequestIds.length === 0) {
+      return 0;
+    }
+
+    const removedSet = new Set(removedRequestIds);
+    this.order = this.order.filter((requestId) => !removedSet.has(requestId));
+    return removedRequestIds.length;
+  }
+
   list({ agentId, limit }) {
     return this.order
       .map((requestId) => this.commands.get(requestId))
