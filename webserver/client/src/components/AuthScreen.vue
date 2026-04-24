@@ -34,88 +34,98 @@ const emit = defineEmits(["update:authMode", "login", "register"]);
 <template>
   <main class="center-shell">
     <el-card class="surface-card auth-card" shadow="never">
-      <p class="eyebrow">Remote Control Console</p>
-      <h2>{{ authMode === "login" ? "登录控制台" : "注册账号" }}</h2>
-      <p class="hero-copy">
-        {{
-          authMode === "login"
-            ? "先完成身份验证，再访问设备控制与命令记录。"
-            : "创建新账号后，再回到登录页进入控制台。"
-        }}
-      </p>
+      <div class="auth-card-inner">
+        <header class="auth-header">
+          <h2 class="auth-title">{{ authMode === "login" ? "登录控制台" : "注册账号" }}</h2>
+        </header>
 
-      <template v-if="authMode === 'login'">
-        <label class="field-block">
-          <span>用户名</span>
-          <el-input v-model="loginForm.username" placeholder="输入用户名" @keyup.enter="emit('login')" />
-        </label>
+        <template v-if="authMode === 'login'">
+          <div class="auth-form">
+            <label class="field-block auth-field">
+              <span>用户名</span>
+              <el-input v-model="loginForm.username" placeholder="输入用户名" @keyup.enter="emit('login')" />
+            </label>
 
-        <label class="field-block">
-          <span>密码</span>
-          <el-input
-            v-model="loginForm.password"
-            show-password
-            placeholder="输入密码"
-            @keyup.enter="emit('login')"
+            <label class="field-block auth-field">
+              <span>密码</span>
+              <el-input
+                v-model="loginForm.password"
+                show-password
+                placeholder="输入密码"
+                @keyup.enter="emit('login')"
+              />
+            </label>
+          </div>
+
+          <div class="auth-actions">
+            <el-button class="wide-button" type="primary" round :disabled="authenticating" @click="emit('login')">
+              {{ authenticating ? "登录中..." : "登录" }}
+            </el-button>
+          </div>
+        </template>
+
+        <template v-else>
+          <div class="auth-form">
+            <label class="field-block auth-field">
+              <span>用户名</span>
+              <el-input v-model="registerForm.username" placeholder="输入用户名" @keyup.enter="emit('register')" />
+            </label>
+
+            <label class="field-block auth-field">
+              <span>显示名</span>
+              <el-input
+                v-model="registerForm.displayName"
+                placeholder="输入显示名"
+                @keyup.enter="emit('register')"
+              />
+            </label>
+
+            <label class="field-block auth-field">
+              <span>密码</span>
+              <el-input
+                v-model="registerForm.password"
+                show-password
+                placeholder="至少 8 位"
+                @keyup.enter="emit('register')"
+              />
+            </label>
+          </div>
+
+          <div class="auth-actions">
+            <el-button class="wide-button" type="primary" round :disabled="authenticating" @click="emit('register')">
+              {{ authenticating ? "提交中..." : "注册" }}
+            </el-button>
+          </div>
+        </template>
+
+        <div class="auth-footer">
+          <div class="auth-switch">
+            <el-button
+              v-if="allowPublicRegistration && authMode === 'login'"
+              text
+              @click="emit('update:authMode', 'register')"
+            >
+              去注册
+            </el-button>
+            <el-button
+              v-if="authMode === 'register'"
+              text
+              @click="emit('update:authMode', 'login')"
+            >
+              返回登录
+            </el-button>
+          </div>
+
+          <el-alert
+            v-if="errorMessage"
+            class="login-error"
+            :title="errorMessage"
+            type="error"
+            :closable="false"
+            show-icon
           />
-        </label>
-
-        <el-button class="wide-button" type="primary" round :disabled="authenticating" @click="emit('login')">
-          {{ authenticating ? "登录中..." : "登录" }}
-        </el-button>
-      </template>
-
-      <template v-else>
-        <label class="field-block">
-          <span>用户名</span>
-          <el-input v-model="registerForm.username" placeholder="输入用户名" @keyup.enter="emit('register')" />
-        </label>
-
-        <label class="field-block">
-          <span>显示名</span>
-          <el-input v-model="registerForm.displayName" placeholder="输入显示名" @keyup.enter="emit('register')" />
-        </label>
-
-        <label class="field-block">
-          <span>密码</span>
-          <el-input
-            v-model="registerForm.password"
-            show-password
-            placeholder="至少 8 位"
-            @keyup.enter="emit('register')"
-          />
-        </label>
-
-        <el-button class="wide-button" type="primary" round :disabled="authenticating" @click="emit('register')">
-          {{ authenticating ? "提交中..." : "注册" }}
-        </el-button>
-      </template>
-
-      <div class="auth-switch">
-        <el-button
-          v-if="allowPublicRegistration && authMode === 'login'"
-          text
-          @click="emit('update:authMode', 'register')"
-        >
-          去注册
-        </el-button>
-        <el-button
-          v-if="authMode === 'register'"
-          text
-          @click="emit('update:authMode', 'login')"
-        >
-          返回登录
-        </el-button>
+        </div>
       </div>
-
-      <el-alert
-        v-if="errorMessage"
-        class="login-error"
-        :title="errorMessage"
-        type="error"
-        :closable="false"
-        show-icon
-      />
     </el-card>
   </main>
 </template>
