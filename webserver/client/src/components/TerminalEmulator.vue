@@ -33,6 +33,9 @@ let renderedMaxSeq = 0;
 let resizeObserver = null;
 let observedHostWidth = 0;
 let reportedTerminalSizeKey = "";
+let suppressTerminalData = false;
+let replayInProgress = false;
+let replayToken = 0;
 
 onMounted(async () => {
   createTerminal();
@@ -56,6 +59,9 @@ onBeforeUnmount(() => {
   terminal = null;
   fitAddon = null;
   renderedMaxSeq = 0;
+  suppressTerminalData = false;
+  replayInProgress = false;
+  replayToken = 0;
 });
 
 watch(
@@ -120,7 +126,7 @@ function createTerminal() {
   terminal.open(terminalHost.value);
   terminal.attachCustomKeyEventHandler(handleTerminalKeyEvent);
   terminal.onData((data) => {
-    if (!props.interactive || !props.sessionId) {
+    if (suppressTerminalData || !props.interactive || !props.sessionId) {
       return;
     }
 
@@ -275,6 +281,10 @@ function syncOutputs(forceReplay = false) {
     return;
   }
 
+  if (replayInProgress) {
+    return;
+  }
+
   if (outputs.length === 0) {
     return;
   }
@@ -296,16 +306,32 @@ function replayOutputs(outputs) {
     return;
   }
 
+  const currentReplayToken = ++replayToken;
+  const replayText = outputs.map((output) => output.chunk).join("");
+
+  replayInProgress = true;
+  suppressTerminalData = true;
   terminal.reset();
   renderedSessionId = props.sessionId;
-  renderedMaxSeq = 0;
+  renderedMaxSeq = outputs[outputs.length - 1]?.seq ?? 0;
 
-  for (const output of outputs) {
-    terminal.write(output.chunk);
-    renderedMaxSeq = output.seq;
+  const finishReplay = () => {
+    if (currentReplayToken !== replayToken) {
+      return;
+    }
+
+    replayInProgress = false;
+    suppressTerminalData = false;
+    terminal?.scrollToBottom();
+    syncOutputs();
+  };
+
+  if (!replayText) {
+    finishReplay();
+    return;
   }
 
-  terminal.scrollToBottom();
+  terminal.write(replayText, finishReplay);
 }
 
 function normalizeOutputs(outputs) {
