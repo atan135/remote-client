@@ -10,6 +10,10 @@ defineProps({
     type: Boolean,
     required: true
   },
+  registrationApprovalRequired: {
+    type: Boolean,
+    required: true
+  },
   loginForm: {
     type: Object,
     required: true
@@ -89,6 +93,16 @@ const emit = defineEmits(["update:authMode", "login", "register"]);
                 @keyup.enter="emit('register')"
               />
             </label>
+
+            <label class="field-block auth-field">
+              <span>申请备注</span>
+              <el-input
+                v-model="registerForm.applicationNote"
+                type="textarea"
+                :rows="3"
+                placeholder="可选，填写用途、团队或联系方式"
+              />
+            </label>
           </div>
 
           <div class="auth-actions">
@@ -96,6 +110,15 @@ const emit = defineEmits(["update:authMode", "login", "register"]);
               {{ authenticating ? "提交中..." : "注册" }}
             </el-button>
           </div>
+
+          <el-alert
+            v-if="registrationApprovalRequired"
+            class="login-error"
+            title="公开注册提交后需等待管理员审核，通过后才能登录。"
+            type="info"
+            :closable="false"
+            show-icon
+          />
         </template>
 
         <div class="auth-footer">

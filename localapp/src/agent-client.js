@@ -97,6 +97,18 @@ export class AgentClient {
   }
 
   handleMessage(message) {
+    if (
+      [
+        "agent.access.pending",
+        "agent.access.rejected",
+        "agent.access.disabled",
+        "agent.access.reverify_required"
+      ].includes(message.type)
+    ) {
+      this.handleAgentAccessMessage(message);
+      return;
+    }
+
     if (message.type === "command.execute.secure") {
       this.handleSecureCommand(message);
       return;
@@ -225,10 +237,21 @@ export class AgentClient {
 
   sendRegister() {
     const activeTerminalSessions = this.listActiveRemoteTerminalSessions();
+    let authIdentity = null;
+
+    try {
+      authIdentity = this.secureCommandService.loadLocalAgentIdentity();
+    } catch (error) {
+      logEvent(this.agentLogger, "warn", "agent.identity_unavailable", {
+        agentId: this.config.agentId,
+        error: error.message
+      });
+    }
 
     logEvent(this.agentLogger, "info", "agent.registering", {
       agentId: this.config.agentId,
       label: this.config.agentLabel,
+      authPublicKeyFingerprint: authIdentity?.authPublicKeyFingerprint || "",
       activeRemoteTerminalSessionCount: activeTerminalSessions.length,
       presetCommandCount: Array.isArray(this.config.presetCommands)
         ? this.config.presetCommands.length
@@ -245,6 +268,9 @@ export class AgentClient {
       platform: os.platform(),
       arch: os.arch(),
       pid: process.pid,
+      authPublicKey: authIdentity?.authPublicKey || "",
+      authPublicKeyFingerprint: authIdentity?.authPublicKeyFingerprint || "",
+      applicationNote: String(this.config.agentApplicationNote || "").trim(),
       activeTerminalSessions,
       terminalProfiles: this.listTerminalProfiles(),
       presetCommands: Array.isArray(this.config.presetCommands)
@@ -274,6 +300,19 @@ export class AgentClient {
       clearInterval(this.heartbeatTimer);
       this.heartbeatTimer = null;
     }
+  }
+
+  handleAgentAccessMessage(message) {
+    const payload = isPlainObject(message?.payload) ? message.payload : {};
+    const reason = String(payload.reason || "").trim();
+
+    logEvent(this.agentLogger, "warn", "agent.access_changed", {
+      agentId: this.config.agentId,
+      accessType: message.type,
+      reason,
+      managedAgentId: payload.managedAgentId ?? null,
+      authPublicKeyFingerprint: String(payload.authPublicKeyFingerprint || "").trim()
+    });
   }
 
   scheduleReconnect() {
@@ -718,4 +757,8 @@ function normalizeSocketCloseReason(reasonBuffer) {
     : String(reasonBuffer || "");
 
   return reason.trim();
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

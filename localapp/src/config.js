@@ -95,6 +95,7 @@ export function loadConfig() {
     serverWsUrl: process.env.SERVER_WS_URL || "ws://localhost:3100/ws/agent",
     agentId: process.env.AGENT_ID || hostname,
     agentLabel: process.env.AGENT_LABEL || hostname,
+    agentApplicationNote: process.env.AGENT_APPLICATION_NOTE || "",
     agentSharedToken: process.env.AGENT_SHARED_TOKEN || "",
     heartbeatIntervalMs: toNumber(process.env.HEARTBEAT_INTERVAL_MS, 15000),
     reconnectIntervalMs: toNumber(process.env.RECONNECT_INTERVAL_MS, 5000),

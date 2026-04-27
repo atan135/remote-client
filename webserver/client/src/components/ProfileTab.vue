@@ -19,6 +19,14 @@ const props = defineProps({
     type: Array,
     required: true
   },
+  managedAgents: {
+    type: Array,
+    required: true
+  },
+  adminAuthCodes: {
+    type: Array,
+    required: true
+  },
   authCodes: {
     type: Array,
     required: true
@@ -51,6 +59,14 @@ const props = defineProps({
     type: Boolean,
     required: true
   },
+  loadingManagedAgents: {
+    type: Boolean,
+    required: true
+  },
+  loadingAdminAuthCodes: {
+    type: Boolean,
+    required: true
+  },
   loadingAuthCodes: {
     type: Boolean,
     required: true
@@ -74,6 +90,30 @@ const props = defineProps({
   resettingUserId: {
     type: [Number, String, null],
     default: null
+  },
+  approvingUserId: {
+    type: [Number, String, null],
+    default: null
+  },
+  rejectingUserId: {
+    type: [Number, String, null],
+    default: null
+  },
+  approvingManagedAgentId: {
+    type: [Number, String, null],
+    default: null
+  },
+  rejectingManagedAgentId: {
+    type: [Number, String, null],
+    default: null
+  },
+  updatingManagedAgentId: {
+    type: [Number, String, null],
+    default: null
+  },
+  deletingAdminAuthCodeId: {
+    type: [Number, String, null],
+    default: null
   }
 });
 
@@ -82,10 +122,16 @@ const emit = defineEmits([
   "submitChangePassword",
   "createUser",
   "saveUser",
+  "approveUser",
+  "rejectUser",
   "resetPassword",
   "createAuthCode",
   "saveAuthCode",
   "deleteAuthCode",
+  "saveManagedAgent",
+  "approveManagedAgent",
+  "rejectManagedAgent",
+  "adminDeleteAuthCode",
   "useSelectedAgentId"
 ]);
 
@@ -330,9 +376,18 @@ function backToMenu() {
                 <h3>{{ user.username }}</h3>
                 <p>{{ user.createdAt }}</p>
               </div>
-              <el-tag :type="user.isActive ? 'success' : 'danger'" effect="dark" round>
-                {{ user.isActive ? "active" : "disabled" }}
-              </el-tag>
+              <div class="hero-actions">
+                <el-tag
+                  :type="user.approvalStatus === 'approved' ? 'success' : user.approvalStatus === 'pending' ? 'warning' : 'danger'"
+                  effect="dark"
+                  round
+                >
+                  {{ user.approvalStatus }}
+                </el-tag>
+                <el-tag :type="user.isActive ? 'success' : 'danger'" effect="plain" round>
+                  {{ user.isActive ? "active" : "disabled" }}
+                </el-tag>
+              </div>
             </div>
 
             <label class="field-block">
@@ -354,9 +409,39 @@ function backToMenu() {
               <el-switch v-model="user.isActive" />
             </div>
 
+            <label class="field-block">
+              <span>申请备注</span>
+              <el-input v-model="user.applicationNote" disabled />
+            </label>
+
+            <label class="field-block">
+              <span>审核备注</span>
+              <el-input v-model="user.reviewComment" type="textarea" :rows="2" />
+            </label>
+
             <div class="hero-actions">
               <el-button round :disabled="updatingUserId === user.id" @click="emit('saveUser', user)">
                 {{ updatingUserId === user.id ? "保存中..." : "保存" }}
+              </el-button>
+              <el-button
+                v-if="user.approvalStatus !== 'approved'"
+                type="primary"
+                plain
+                round
+                :disabled="approvingUserId === user.id"
+                @click="emit('approveUser', user)"
+              >
+                {{ approvingUserId === user.id ? "提交中..." : "通过" }}
+              </el-button>
+              <el-button
+                v-if="user.approvalStatus !== 'rejected' && user.id !== session.user.id"
+                type="danger"
+                plain
+                round
+                :disabled="rejectingUserId === user.id"
+                @click="emit('rejectUser', user)"
+              >
+                {{ rejectingUserId === user.id ? "提交中..." : "拒绝" }}
               </el-button>
               <el-button round :disabled="resettingUserId === user.id" @click="emit('resetPassword', user)">
                 {{ resettingUserId === user.id ? "提交中..." : "重置密码" }}
@@ -365,6 +450,146 @@ function backToMenu() {
           </el-card>
 
           <p v-if="loadingUsers" class="muted">正在加载用户列表...</p>
+        </div>
+      </el-card>
+
+      <el-card v-if="isAdmin" class="surface-card info-card" shadow="never">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h3>设备审核</h3>
+          </div>
+          <el-tag round effect="plain">{{ managedAgents.length }}</el-tag>
+        </div>
+
+        <div class="stack-grid compact-stack">
+          <el-card v-for="agent in managedAgents" :key="agent.id" class="surface-card nested-card" shadow="never">
+            <div class="card-head card-head-tight">
+              <div>
+                <h3>{{ agent.agentId }}</h3>
+                <p>{{ agent.hostname || agent.label || "未命名设备" }}</p>
+              </div>
+              <div class="hero-actions">
+                <el-tag
+                  :type="agent.approvalStatus === 'approved' ? 'success' : agent.approvalStatus === 'pending' ? 'warning' : 'danger'"
+                  effect="dark"
+                  round
+                >
+                  {{ agent.approvalStatus }}
+                </el-tag>
+                <el-tag :type="agent.isEnabled ? 'success' : 'danger'" effect="plain" round>
+                  {{ agent.isEnabled ? "enabled" : "disabled" }}
+                </el-tag>
+              </div>
+            </div>
+
+            <label class="field-block">
+              <span>显示名</span>
+              <el-input v-model="agent.label" />
+            </label>
+
+            <label class="field-block">
+              <span>平台信息</span>
+              <el-input :model-value="`${agent.platform || '-'} / ${agent.arch || '-'}`" disabled />
+            </label>
+
+            <label class="field-block">
+              <span>公钥指纹</span>
+              <el-input :model-value="agent.authPublicKeyFingerprint" disabled />
+            </label>
+
+            <label class="field-block">
+              <span>申请备注</span>
+              <el-input v-model="agent.applicationNote" type="textarea" :rows="2" />
+            </label>
+
+            <label class="field-block">
+              <span>审核备注</span>
+              <el-input v-model="agent.reviewComment" type="textarea" :rows="2" />
+            </label>
+
+            <div class="switch-row">
+              <span>启用设备</span>
+              <el-switch v-model="agent.isEnabled" />
+            </div>
+
+            <p class="muted">首次接入：{{ agent.firstSeenAt || "-" }}</p>
+            <p class="muted">最近出现：{{ agent.lastSeenAt || "-" }}</p>
+
+            <div class="hero-actions">
+              <el-button round :disabled="updatingManagedAgentId === agent.id" @click="emit('saveManagedAgent', agent)">
+                {{ updatingManagedAgentId === agent.id ? "保存中..." : "保存" }}
+              </el-button>
+              <el-button
+                v-if="agent.approvalStatus !== 'approved'"
+                type="primary"
+                plain
+                round
+                :disabled="approvingManagedAgentId === agent.id"
+                @click="emit('approveManagedAgent', agent)"
+              >
+                {{ approvingManagedAgentId === agent.id ? "提交中..." : "通过" }}
+              </el-button>
+              <el-button
+                v-if="agent.approvalStatus !== 'rejected'"
+                type="danger"
+                plain
+                round
+                :disabled="rejectingManagedAgentId === agent.id"
+                @click="emit('rejectManagedAgent', agent)"
+              >
+                {{ rejectingManagedAgentId === agent.id ? "提交中..." : "拒绝" }}
+              </el-button>
+            </div>
+          </el-card>
+
+          <p v-if="loadingManagedAgents" class="muted">正在加载设备审核列表...</p>
+        </div>
+      </el-card>
+
+      <el-card v-if="isAdmin" class="surface-card info-card" shadow="never">
+        <div class="card-head">
+          <div>
+            <p class="eyebrow">Admin</p>
+            <h3>设备绑定归属</h3>
+          </div>
+          <el-tag round effect="plain">{{ adminAuthCodes.length }}</el-tag>
+        </div>
+
+        <div class="stack-grid compact-stack">
+          <el-card v-for="binding in adminAuthCodes" :key="binding.id" class="surface-card nested-card" shadow="never">
+            <div class="card-head card-head-tight">
+              <div>
+                <h3>{{ binding.agentId }}</h3>
+                <p>{{ binding.ownerDisplayName || binding.ownerUsername || binding.userId }}</p>
+              </div>
+              <el-tag round effect="plain">{{ binding.ownerUsername }}</el-tag>
+            </div>
+
+            <label class="field-block">
+              <span>备注</span>
+              <el-input v-model="binding.remark" disabled />
+            </label>
+
+            <label class="field-block">
+              <span>公钥指纹</span>
+              <el-input :model-value="binding.fingerprint" disabled />
+            </label>
+
+            <div class="hero-actions">
+              <el-button
+                type="danger"
+                plain
+                round
+                :disabled="deletingAdminAuthCodeId === binding.id"
+                @click="emit('adminDeleteAuthCode', binding)"
+              >
+                {{ deletingAdminAuthCodeId === binding.id ? "解绑中..." : "强制解绑" }}
+              </el-button>
+            </div>
+          </el-card>
+
+          <p v-if="loadingAdminAuthCodes" class="muted">正在加载绑定归属列表...</p>
         </div>
       </el-card>
     </template>

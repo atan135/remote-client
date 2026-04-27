@@ -35,6 +35,18 @@ export class BrowserHub {
     }
   }
 
+  dropByUserId(userId) {
+    const normalizedUserId = Number(userId);
+
+    for (const socket of this.sockets) {
+      if (Number(socket?.auth?.user?.id) !== normalizedUserId) {
+        continue;
+      }
+
+      this.drop(socket);
+    }
+  }
+
   sendRaw(socket, message) {
     if (!socket || socket.readyState !== WebSocket.OPEN) {
       this.remove(socket);

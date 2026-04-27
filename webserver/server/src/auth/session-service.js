@@ -47,11 +47,13 @@ export class SessionService {
           u.username,
           u.display_name,
           u.role,
+          u.approval_status,
           u.is_active
         FROM user_sessions s
         INNER JOIN users u ON u.id = s.user_id
         WHERE s.session_token_hash = ?
           AND s.expires_at > UTC_TIMESTAMP()
+          AND u.approval_status = 'approved'
           AND u.is_active = 1
         LIMIT 1
       `,

@@ -29,6 +29,32 @@ export class AuthCodeService {
     return rows.map(toSafeAuthCode);
   }
 
+  async listAll() {
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          c.id,
+          c.user_id,
+          c.agent_id,
+          c.auth_code,
+          c.remark,
+          c.created_at,
+          c.updated_at,
+          u.username,
+          u.display_name
+        FROM user_auth_codes c
+        INNER JOIN users u ON u.id = c.user_id
+        ORDER BY c.updated_at DESC, c.id DESC
+      `
+    );
+
+    return rows.map((row) => ({
+      ...toSafeAuthCode(row),
+      ownerUsername: row.username,
+      ownerDisplayName: row.display_name
+    }));
+  }
+
   async findByIdForUser(userId, id) {
     const [rows] = await this.pool.execute(
       `
@@ -71,8 +97,39 @@ export class AuthCodeService {
     return rows[0] ? toSafeAuthCode(rows[0]) : null;
   }
 
-  async create({ userId, agentId, authCode, remark }) {
+  async findOwnerByAgentId(agentId) {
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          c.id,
+          c.user_id,
+          c.agent_id,
+          c.auth_code,
+          c.remark,
+          c.created_at,
+          c.updated_at,
+          u.username,
+          u.display_name
+        FROM user_auth_codes c
+        INNER JOIN users u ON u.id = c.user_id
+        WHERE c.agent_id = ?
+        LIMIT 1
+      `,
+      [String(agentId || "").trim()]
+    );
+
+    return rows[0]
+      ? {
+          ...toSafeAuthCode(rows[0]),
+          ownerUsername: rows[0].username,
+          ownerDisplayName: rows[0].display_name
+        }
+      : null;
+  }
+
+  async create({ userId, agentId, authCode, remark, managedAgent = null }) {
     const normalized = normalizeAuthCodePayload({ agentId, authCode, remark });
+    await this.assertBindableAgent(userId, normalized.agentId, managedAgent);
     const [result] = await this.pool.execute(
       `
         INSERT INTO user_auth_codes (
@@ -89,8 +146,9 @@ export class AuthCodeService {
     return this.findByIdForUser(userId, result.insertId);
   }
 
-  async update(id, userId, { agentId, authCode, remark }) {
+  async update(id, userId, { agentId, authCode, remark, managedAgent = null }) {
     const normalized = normalizeAuthCodePayload({ agentId, authCode, remark });
+    await this.assertBindableAgent(userId, normalized.agentId, managedAgent, id);
 
     await this.pool.execute(
       `
@@ -107,6 +165,36 @@ export class AuthCodeService {
     return this.findByIdForUser(userId, id);
   }
 
+  async assertBindableAgent(userId, agentId, managedAgent = null, ignoreAuthCodeId = null) {
+    const normalizedAgentId = String(agentId || "").trim();
+
+    if (!normalizedAgentId) {
+      throw new Error("agentId 不能为空");
+    }
+
+    if (!managedAgent) {
+      throw new Error("设备未通过审核，暂不允许绑定 auth_code");
+    }
+
+    if (String(managedAgent.approvalStatus || "") !== "approved" || managedAgent.isEnabled !== true) {
+      throw new Error("设备未通过审核，暂不允许绑定 auth_code");
+    }
+
+    const owner = await this.findOwnerByAgentId(normalizedAgentId);
+
+    if (!owner) {
+      return;
+    }
+
+    if (ignoreAuthCodeId && Number(owner.id) === Number(ignoreAuthCodeId)) {
+      return;
+    }
+
+    if (Number(owner.userId) !== Number(userId)) {
+      throw new Error("该设备已被其他用户绑定 auth_code");
+    }
+  }
+
   async delete(id, userId) {
     const existing = await this.findByIdForUser(userId, id);
 
@@ -120,6 +208,40 @@ export class AuthCodeService {
     );
 
     return existing;
+  }
+
+  async deleteAsAdmin(id) {
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          c.id,
+          c.user_id,
+          c.agent_id,
+          c.auth_code,
+          c.remark,
+          c.created_at,
+          c.updated_at,
+          u.username,
+          u.display_name
+        FROM user_auth_codes c
+        INNER JOIN users u ON u.id = c.user_id
+        WHERE c.id = ?
+        LIMIT 1
+      `,
+      [id]
+    );
+
+    if (!rows[0]) {
+      return null;
+    }
+
+    await this.pool.execute("DELETE FROM user_auth_codes WHERE id = ?", [id]);
+
+    return {
+      ...toSafeAuthCode(rows[0]),
+      ownerUsername: rows[0].username,
+      ownerDisplayName: rows[0].display_name
+    };
   }
 }
 

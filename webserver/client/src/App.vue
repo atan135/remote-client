@@ -28,6 +28,7 @@ onBeforeUnmount(() => {
       v-else-if="!store.session"
       :auth-mode="store.authMode"
       :allow-public-registration="store.appConfig.allowPublicRegistration"
+      :registration-approval-required="store.appConfig.registrationApprovalRequired"
       :login-form="store.loginForm"
       :register-form="store.registerForm"
       :authenticating="store.authenticating"

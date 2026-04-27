@@ -9,11 +9,16 @@ import cookie from "cookie";
 import express from "express";
 import WebSocket, { WebSocketServer } from "ws";
 
+import {
+  ManagedAgentService,
+  normalizeManagedAgentRegistrationPayload
+} from "./agents/managed-agent-service.js";
 import { AuthCodeService } from "./auth/auth-code-service.js";
 import { SessionService } from "./auth/session-service.js";
 import { UserService } from "./auth/user-service.js";
 import { loadConfig } from "./config.js";
 import { createMysqlPool } from "./db/mysql.js";
+import { SchemaService } from "./db/schema-service.js";
 import { configureLogging, logEvent } from "./logger.js";
 import {
   CommandHistoryService,
@@ -37,8 +42,10 @@ const config = loadConfig();
 const loggers = configureLogging(config);
 const { serverLogger, commandLogger } = loggers;
 const pool = createMysqlPool(config);
+const schemaService = new SchemaService(pool);
 const userService = new UserService(pool);
 const authCodeService = new AuthCodeService(pool);
+const managedAgentService = new ManagedAgentService(pool);
 const sessionService = new SessionService(pool, config);
 const commandHistoryService = new CommandHistoryService(pool);
 const terminalSessionHistoryService = new TerminalSessionHistoryService(pool);
@@ -75,7 +82,9 @@ app.get("/api/health", (_req, res) => {
 app.get("/api/config", async (_req, res) => {
   res.json({
     authEnabled: true,
-    allowPublicRegistration: config.allowPublicRegistration
+    allowPublicRegistration: config.allowPublicRegistration,
+    registrationApprovalRequired: config.registrationApprovalRequired,
+    agentApprovalRequired: config.agentApprovalRequired
   });
 });
 
@@ -96,16 +105,35 @@ app.post("/api/auth/login", async (req, res) => {
   }
 
   try {
-    const user = await userService.authenticate(username, password);
+    const authResult = await userService.authenticate(username, password);
 
-    if (!user) {
+    if (!authResult.ok) {
       logEvent(serverLogger, "warn", "auth.login_failed", {
         username,
+        reason: authResult.reason,
         ...getRequestContext(req)
       });
+
+      if (authResult.reason === "pending") {
+        res.status(403).json({ message: "账号待管理员审核" });
+        return;
+      }
+
+      if (authResult.reason === "rejected") {
+        res.status(403).json({ message: "账号申请未通过，请联系管理员" });
+        return;
+      }
+
+      if (authResult.reason === "disabled") {
+        res.status(403).json({ message: "账号已停用" });
+        return;
+      }
+
       res.status(401).json({ message: "用户名或密码错误" });
       return;
     }
+
+    const user = authResult.user;
 
     const session = await sessionService.createSession({
       userId: user.id,
@@ -153,22 +181,34 @@ app.post("/api/auth/register", async (req, res) => {
       return;
     }
 
+    const approvalStatus = config.registrationApprovalRequired ? "pending" : "approved";
     const user = await userService.register({
       username: payload.username,
       displayName: payload.displayName,
       password,
-      role: "operator"
+      role: "operator",
+      approvalStatus,
+      registrationSource: "public",
+      applicationNote: payload.applicationNote
     });
 
     logEvent(serverLogger, "info", "auth.register_succeeded", {
       userId: user.id,
       username: user.username,
+      approvalStatus: user.approvalStatus,
       ...getRequestContext(req)
     });
 
-    res.status(201).json({
-      item: user
-    });
+    res.status(config.registrationApprovalRequired ? 202 : 201).json(
+      config.registrationApprovalRequired
+        ? {
+            item: user,
+            message: "注册申请已提交，等待管理员审核"
+          }
+        : {
+            item: user
+          }
+    );
   } catch (error) {
     logEvent(serverLogger, "error", "auth.register_error", {
       username: payload.username,
@@ -215,6 +255,7 @@ app.post("/api/auth/change-password", requireAuth, async (req, res) => {
     }
 
     await sessionService.deleteSessionsByUserId(req.auth.user.id);
+    browserHub.dropByUserId(req.auth.user.id);
     clearSessionCookie(res);
 
     logEvent(serverLogger, "info", "auth.password_changed", {
@@ -259,7 +300,11 @@ app.post("/api/users", requireAdmin, async (req, res) => {
     displayName: payload.displayName,
     password,
     role,
-    isActive
+    isActive,
+    approvalStatus: "approved",
+    registrationSource: "admin",
+    applicationNote: payload.applicationNote,
+    approvedByUserId: req.auth.user.id
   });
 
   logEvent(serverLogger, "info", "admin.user_created", {
@@ -303,6 +348,7 @@ app.patch("/api/users/:id", requireAdmin, async (req, res) => {
 
   if (!isActive) {
     await sessionService.deleteSessionsByUserId(userId);
+    browserHub.dropByUserId(userId);
   }
 
   logEvent(serverLogger, "info", "admin.user_updated", {
@@ -334,6 +380,7 @@ app.post("/api/users/:id/reset-password", requireAdmin, async (req, res) => {
 
   await userService.adminSetPassword(userId, newPassword);
   await sessionService.deleteSessionsByUserId(userId);
+  browserHub.dropByUserId(userId);
 
   logEvent(serverLogger, "info", "admin.password_reset", {
     actorUserId: req.auth.user.id,
@@ -343,6 +390,64 @@ app.post("/api/users/:id/reset-password", requireAdmin, async (req, res) => {
   });
 
   res.json({ ok: true });
+});
+
+app.post("/api/users/:id/approve", requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const user = await userService.findUserById(userId);
+
+  if (!user) {
+    res.status(404).json({ message: "用户不存在" });
+    return;
+  }
+
+  const updatedUser = await userService.approveUser(
+    userId,
+    req.auth.user.id,
+    String(req.body?.reviewComment || "")
+  );
+
+  logEvent(serverLogger, "info", "admin.user_approved", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    userId: updatedUser.id,
+    username: updatedUser.username
+  });
+
+  res.json({ item: updatedUser });
+});
+
+app.post("/api/users/:id/reject", requireAdmin, async (req, res) => {
+  const userId = Number(req.params.id);
+  const user = await userService.findUserById(userId);
+
+  if (!user) {
+    res.status(404).json({ message: "用户不存在" });
+    return;
+  }
+
+  if (user.id === req.auth.user.id) {
+    res.status(400).json({ message: "不能拒绝当前登录账号" });
+    return;
+  }
+
+  const updatedUser = await userService.rejectUser(
+    userId,
+    req.auth.user.id,
+    String(req.body?.reviewComment || "")
+  );
+
+  await sessionService.deleteSessionsByUserId(userId);
+  browserHub.dropByUserId(userId);
+
+  logEvent(serverLogger, "info", "admin.user_rejected", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    userId: updatedUser.id,
+    username: updatedUser.username
+  });
+
+  res.json({ item: updatedUser });
 });
 
 app.get("/api/auth-codes", requireAuth, async (req, res) => {
@@ -358,13 +463,139 @@ app.get("/api/auth-codes", requireAuth, async (req, res) => {
   }
 });
 
+app.get("/api/admin/auth-codes", requireAdmin, async (req, res) => {
+  try {
+    const items = await authCodeService.listAll();
+    res.json({ items });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth_code.admin_list_failed", {
+      actorUserId: req.auth.user.id,
+      actorUsername: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: "加载全量 auth_code 绑定失败" });
+  }
+});
+
+app.get("/api/managed-agents", requireAdmin, async (req, res) => {
+  try {
+    const items = await managedAgentService.list({
+      approvalStatus: req.query.approvalStatus,
+      isEnabled: req.query.isEnabled,
+      recordStatus: req.query.recordStatus || "current"
+    });
+    res.json({
+      items: items.map((item) => serializeManagedAgent(item))
+    });
+  } catch (error) {
+    logEvent(serverLogger, "error", "managed_agent.list_failed", {
+      actorUserId: req.auth.user.id,
+      actorUsername: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: "加载设备审核列表失败" });
+  }
+});
+
+app.post("/api/managed-agents/:id/approve", requireAdmin, async (req, res) => {
+  const managedAgentId = Number(req.params.id);
+  const record = await managedAgentService.findById(managedAgentId);
+
+  if (!record) {
+    res.status(404).json({ message: "设备记录不存在" });
+    return;
+  }
+
+  const updatedRecord = await managedAgentService.approve(
+    managedAgentId,
+    req.auth.user.id,
+    String(req.body?.reviewComment || "")
+  );
+
+  logEvent(serverLogger, "info", "managed_agent.approved", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    managedAgentId: updatedRecord.id,
+    agentId: updatedRecord.agentId
+  });
+
+  res.json({ item: serializeManagedAgent(updatedRecord) });
+});
+
+app.post("/api/managed-agents/:id/reject", requireAdmin, async (req, res) => {
+  const managedAgentId = Number(req.params.id);
+  const record = await managedAgentService.findById(managedAgentId);
+
+  if (!record) {
+    res.status(404).json({ message: "设备记录不存在" });
+    return;
+  }
+
+  const updatedRecord = await managedAgentService.reject(
+    managedAgentId,
+    req.auth.user.id,
+    String(req.body?.reviewComment || "")
+  );
+
+  await disconnectApprovedAgentIfConnected(updatedRecord.agentId, {
+    type: "agent.access.rejected",
+    reason: updatedRecord.reviewComment || "设备审核未通过"
+  });
+
+  logEvent(serverLogger, "info", "managed_agent.rejected", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    managedAgentId: updatedRecord.id,
+    agentId: updatedRecord.agentId
+  });
+
+  res.json({ item: serializeManagedAgent(updatedRecord) });
+});
+
+app.patch("/api/managed-agents/:id", requireAdmin, async (req, res) => {
+  const managedAgentId = Number(req.params.id);
+  const record = await managedAgentService.findById(managedAgentId);
+
+  if (!record) {
+    res.status(404).json({ message: "设备记录不存在" });
+    return;
+  }
+
+  const updatedRecord = await managedAgentService.update(managedAgentId, {
+    label: req.body?.label,
+    applicationNote: req.body?.applicationNote,
+    reviewComment: req.body?.reviewComment,
+    isEnabled: req.body?.isEnabled
+  });
+
+  if (!updatedRecord.isEnabled) {
+    await disconnectApprovedAgentIfConnected(updatedRecord.agentId, {
+      type: "agent.access.disabled",
+      reason: updatedRecord.reviewComment || "设备已停用"
+    });
+  }
+
+  logEvent(serverLogger, "info", "managed_agent.updated", {
+    actorUserId: req.auth.user.id,
+    actorUsername: req.auth.user.username,
+    managedAgentId: updatedRecord.id,
+    agentId: updatedRecord.agentId,
+    isEnabled: updatedRecord.isEnabled
+  });
+
+  res.json({ item: serializeManagedAgent(updatedRecord) });
+});
+
 app.post("/api/auth-codes", requireAuth, async (req, res) => {
   try {
+    const agentId = String(req.body?.agentId || "").trim();
+    const managedAgent = await managedAgentService.findCurrentByAgentId(agentId);
     const item = await authCodeService.create({
       userId: req.auth.user.id,
-      agentId: req.body?.agentId,
+      agentId,
       authCode: req.body?.authCode,
-      remark: req.body?.remark
+      remark: req.body?.remark,
+      managedAgent
     });
 
     logEvent(serverLogger, "info", "auth_code.created", {
@@ -387,7 +618,7 @@ app.post("/api/auth-codes", requireAuth, async (req, res) => {
     });
 
     res.status(duplicate ? 409 : 400).json({
-      message: duplicate ? "同一设备只能保存一条授权密钥" : error.message || "创建授权密钥失败"
+      message: duplicate ? "该设备已被其他用户绑定 auth_code" : error.message || "创建授权密钥失败"
     });
   }
 });
@@ -403,10 +634,13 @@ app.patch("/api/auth-codes/:id", requireAuth, async (req, res) => {
       return;
     }
 
+    const agentId = String(req.body?.agentId || "").trim();
+    const managedAgent = await managedAgentService.findCurrentByAgentId(agentId);
     const item = await authCodeService.update(authCodeId, req.auth.user.id, {
-      agentId: req.body?.agentId,
+      agentId,
       authCode: req.body?.authCode,
-      remark: req.body?.remark
+      remark: req.body?.remark,
+      managedAgent
     });
 
     logEvent(serverLogger, "info", "auth_code.updated", {
@@ -429,7 +663,7 @@ app.patch("/api/auth-codes/:id", requireAuth, async (req, res) => {
     });
 
     res.status(duplicate ? 409 : 400).json({
-      message: duplicate ? "同一设备只能保存一条授权密钥" : error.message || "更新授权密钥失败"
+      message: duplicate ? "该设备已被其他用户绑定 auth_code" : error.message || "更新授权密钥失败"
     });
   }
 });
@@ -462,6 +696,38 @@ app.delete("/api/auth-codes/:id", requireAuth, async (req, res) => {
       error: error.message
     });
     res.status(500).json({ message: "删除授权密钥失败" });
+  }
+});
+
+app.delete("/api/admin/auth-codes/:id", requireAdmin, async (req, res) => {
+  const authCodeId = Number(req.params.id);
+
+  try {
+    const removed = await authCodeService.deleteAsAdmin(authCodeId);
+
+    if (!removed) {
+      res.status(404).json({ message: "授权密钥不存在" });
+      return;
+    }
+
+    logEvent(serverLogger, "info", "auth_code.admin_deleted", {
+      actorUserId: req.auth.user.id,
+      actorUsername: req.auth.user.username,
+      authCodeId: removed.id,
+      agentId: removed.agentId,
+      ownerUserId: removed.userId,
+      ownerUsername: removed.ownerUsername
+    });
+
+    res.json({ ok: true });
+  } catch (error) {
+    logEvent(serverLogger, "error", "auth_code.admin_delete_failed", {
+      actorUserId: req.auth.user.id,
+      actorUsername: req.auth.user.username,
+      authCodeId,
+      error: error.message
+    });
+    res.status(500).json({ message: "管理员删除授权密钥失败" });
   }
 });
 
@@ -535,6 +801,7 @@ async function handleCommandRequest(req, res) {
   }
 
   try {
+    await ensureManagedAgentReadyForControl(agentId);
     const authCodeBinding = await authCodeService.findByUserIdAndAgentId(req.auth.user.id, agentId);
 
     if (!authCodeBinding) {
@@ -637,6 +904,7 @@ async function handleTerminalSessionCreateRequest(req, res) {
   }
 
   try {
+    await ensureManagedAgentReadyForControl(agentId);
     const authCodeBinding = await authCodeService.findByUserIdAndAgentId(req.auth.user.id, agentId);
     const agent = agentRegistry.get(agentId);
     const profileConfig =
@@ -991,11 +1259,13 @@ server.on("upgrade", async (request, socket, head) => {
   socket.destroy();
 });
 
-agentSocketServer.on("connection", (socket, _request, url) => {
+agentSocketServer.on("connection", (socket, request, url) => {
   const agentId = url.searchParams.get("agentId") || "";
+  socket.remoteAddress = request.socket.remoteAddress || "";
 
   logEvent(serverLogger, "warn", "agent.websocket_connected", {
-    agentId
+    agentId,
+    ipAddress: socket.remoteAddress
   });
 
   socket.on("message", (raw) => {
@@ -1085,9 +1355,15 @@ async function bootstrap() {
   try {
     await pool.query("SELECT 1");
     await ensureUserAuthCodesTable();
+    const approvalSchemaResult = await schemaService.ensureApprovalSchema();
     await commandHistoryService.ensureTables();
     await terminalSessionHistoryService.ensureTables();
     await sessionService.purgeExpiredSessions();
+    if (approvalSchemaResult?.ok === false) {
+      logEvent(serverLogger, "warn", "schema.user_auth_codes_global_owner_index_skipped", {
+        duplicateAgents: approvalSchemaResult.duplicateAgents || []
+      });
+    }
     try {
       const signingKeyInfo = secureCommandService.getSigningKeyInfo();
       logEvent(serverLogger, "info", "security.signing_key_ready", {
@@ -1348,13 +1624,191 @@ function normalizeSocketCloseReason(reasonBuffer) {
   return reason.trim();
 }
 
+async function handleAgentRegistration(socket, payload) {
+  const rawPayload = isPlainObject(payload) ? payload : {};
+  const normalizedAgentId = String(rawPayload.agentId || "").trim();
+  const registrationPayload = {
+    ...rawPayload,
+    agentId: normalizedAgentId
+  };
+
+  if (!normalizedAgentId) {
+    sendAgentAccessMessage(socket, "agent.access.rejected", {
+      reason: "agentId 缺失"
+    });
+    closeAgentSocket(socket, "agent_id_missing");
+    return { allowed: false };
+  }
+
+  if (!config.agentApprovalRequired) {
+    return {
+      allowed: true,
+      payload: registrationPayload,
+      managedAgent: null
+    };
+  }
+
+  let normalizedRegistration;
+  try {
+    normalizedRegistration = normalizeManagedAgentRegistrationPayload({
+      ...rawPayload,
+      agentId: normalizedAgentId,
+      lastSeenIp: socket.remoteAddress || ""
+    });
+  } catch (error) {
+    logEvent(serverLogger, "warn", "agent.registration_invalid", {
+      agentId: normalizedAgentId,
+      ipAddress: socket.remoteAddress || "",
+      error: error.message
+    });
+    sendAgentAccessMessage(socket, "agent.access.rejected", {
+      agentId: normalizedAgentId,
+      reason: error.message
+    });
+    closeAgentSocket(socket, "invalid_registration");
+    return { allowed: false };
+  }
+
+  const currentRecord = await managedAgentService.findCurrentByAgentId(normalizedAgentId);
+
+  if (!currentRecord) {
+    const createdRecord = await managedAgentService.createPendingRegistration(normalizedRegistration);
+    logEvent(serverLogger, "info", "agent.registration_pending_created", {
+      agentId: createdRecord.agentId,
+      managedAgentId: createdRecord.id,
+      authPublicKeyFingerprint: createdRecord.authPublicKeyFingerprint,
+      ipAddress: socket.remoteAddress || ""
+    });
+    sendAgentAccessMessage(socket, "agent.access.pending", {
+      managedAgentId: createdRecord.id,
+      agentId: createdRecord.agentId,
+      authPublicKeyFingerprint: createdRecord.authPublicKeyFingerprint,
+      reason: "设备待管理员审核"
+    });
+    closeAgentSocket(socket, "pending_approval");
+    return { allowed: false };
+  }
+
+  if (currentRecord.authPublicKeyFingerprint !== normalizedRegistration.authPublicKeyFingerprint) {
+    const reverifyRecord = await managedAgentService.createReverifyRegistration(
+      currentRecord.id,
+      normalizedRegistration
+    );
+    logEvent(serverLogger, "warn", "agent.registration_reverify_required", {
+      agentId: reverifyRecord.agentId,
+      previousManagedAgentId: currentRecord.id,
+      managedAgentId: reverifyRecord.id,
+      previousFingerprint: currentRecord.authPublicKeyFingerprint,
+      authPublicKeyFingerprint: reverifyRecord.authPublicKeyFingerprint,
+      ipAddress: socket.remoteAddress || ""
+    });
+    sendAgentAccessMessage(socket, "agent.access.reverify_required", {
+      managedAgentId: reverifyRecord.id,
+      agentId: reverifyRecord.agentId,
+      authPublicKeyFingerprint: reverifyRecord.authPublicKeyFingerprint,
+      reason: "设备公钥指纹发生变化，待管理员复核"
+    });
+    closeAgentSocket(socket, "reverify_required");
+    return { allowed: false };
+  }
+
+  const currentManagedAgent = await managedAgentService.touchCurrentRegistration(
+    currentRecord.id,
+    normalizedRegistration
+  );
+
+  if (currentManagedAgent.approvalStatus === "pending") {
+    sendAgentAccessMessage(socket, "agent.access.pending", {
+      managedAgentId: currentManagedAgent.id,
+      agentId: currentManagedAgent.agentId,
+      authPublicKeyFingerprint: currentManagedAgent.authPublicKeyFingerprint,
+      reason: "设备待管理员审核"
+    });
+    closeAgentSocket(socket, "pending_approval");
+    return { allowed: false };
+  }
+
+  if (currentManagedAgent.approvalStatus === "rejected") {
+    sendAgentAccessMessage(socket, "agent.access.rejected", {
+      managedAgentId: currentManagedAgent.id,
+      agentId: currentManagedAgent.agentId,
+      authPublicKeyFingerprint: currentManagedAgent.authPublicKeyFingerprint,
+      reason: currentManagedAgent.reviewComment || "设备审核未通过"
+    });
+    closeAgentSocket(socket, "rejected");
+    return { allowed: false };
+  }
+
+  if (!currentManagedAgent.isEnabled) {
+    sendAgentAccessMessage(socket, "agent.access.disabled", {
+      managedAgentId: currentManagedAgent.id,
+      agentId: currentManagedAgent.agentId,
+      authPublicKeyFingerprint: currentManagedAgent.authPublicKeyFingerprint,
+      reason: currentManagedAgent.reviewComment || "设备已停用"
+    });
+    closeAgentSocket(socket, "disabled");
+    return { allowed: false };
+  }
+
+  return {
+    allowed: true,
+    managedAgent: currentManagedAgent,
+    payload: {
+      ...registrationPayload,
+      authPublicKeyFingerprint: currentManagedAgent.authPublicKeyFingerprint,
+      managedAgentId: currentManagedAgent.id
+    }
+  };
+}
+
+function sendAgentAccessMessage(socket, type, payload) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  try {
+    socket.send(
+      JSON.stringify({
+        type,
+        payload,
+        sentAt: new Date().toISOString()
+      })
+    );
+  } catch {}
+}
+
+function closeAgentSocket(socket, reason = "") {
+  if (!socket) {
+    return;
+  }
+
+  const safeReason = String(reason || "")
+    .slice(0, 120)
+    .replace(/[^\x20-\x7E]/g, "_");
+
+  try {
+    socket.close(4003, safeReason);
+    return;
+  } catch {}
+
+  try {
+    socket.terminate();
+  } catch {}
+}
+
 async function handleAgentMessage(agentId, socket, message) {
   if (message.type === "agent.register") {
-    const agent = agentRegistry.register(message.payload, socket);
+    const registration = await handleAgentRegistration(socket, message.payload);
+
+    if (!registration?.allowed) {
+      return;
+    }
+
+    const agent = agentRegistry.register(registration.payload, socket);
     const pendingDisconnect = clearPendingAgentDisconnect(agent.agentId);
     const syncedTerminalSessions = await syncAgentTerminalSessions(
       agent.agentId,
-      message.payload.activeTerminalSessions
+      registration.payload.activeTerminalSessions
     );
     const missingTerminalSessions = pendingDisconnect
       ? reconcileMissingAgentTerminalSessions(agent.agentId, syncedTerminalSessions)
@@ -1365,6 +1819,10 @@ async function handleAgentMessage(agentId, socket, message) {
       hostname: agent.hostname,
       platform: agent.platform,
       arch: agent.arch,
+      managedAgentId: registration.managedAgent?.id ?? null,
+      authPublicKeyFingerprint:
+        registration.managedAgent?.authPublicKeyFingerprint ||
+        String(registration.payload?.authPublicKeyFingerprint || "").trim(),
       presetCommandCount: Array.isArray(agent.presetCommands) ? agent.presetCommands.length : 0,
       commonWorkingDirectoryCount: agent.commonWorkingDirectories.length,
       activeTerminalSessionCount: syncedTerminalSessions.length,
@@ -1752,7 +2210,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
       browserHub.broadcast("command.updated", serializeCommandRecord(failedRecord));
     }
 
-    return false;
+    return "failed";
   }
 
   const dispatchedAt = secureEnvelope.sentAt;
@@ -1976,6 +2434,7 @@ async function dispatchTerminalSessionInputForUser({ user, sessionId, input, log
     throw createHttpError(409, "目标 agent 当前不在线");
   }
 
+  await ensureManagedAgentReadyForControl(session.agentId);
   const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, session.agentId);
 
   if (!authCodeBinding) {
@@ -2026,6 +2485,7 @@ async function dispatchTerminalSessionResizeForUser({ user, sessionId, cols, row
     throw createHttpError(409, "目标 agent 当前不在线");
   }
 
+  await ensureManagedAgentReadyForControl(session.agentId);
   const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, session.agentId);
 
   if (!authCodeBinding) {
@@ -2057,6 +2517,7 @@ async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePat
     throw createHttpError(409, "目标 agent 当前不在线");
   }
 
+  await ensureManagedAgentReadyForControl(normalizedAgentId);
   const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, normalizedAgentId);
 
   if (!authCodeBinding) {
@@ -2304,6 +2765,7 @@ async function resolveRequestAuth(req) {
         username: session.username,
         displayName: session.display_name,
         role: session.role,
+        approvalStatus: session.approval_status,
         isActive: Boolean(session.is_active)
       }
     };
@@ -2346,11 +2808,86 @@ function clearSessionCookie(res) {
   );
 }
 
+function serializeManagedAgent(record) {
+  if (!record) {
+    return null;
+  }
+
+  return {
+    id: record.id,
+    agentId: record.agentId,
+    recordStatus: record.recordStatus,
+    label: record.label,
+    hostname: record.hostname,
+    platform: record.platform,
+    arch: record.arch,
+    authPublicKeyFingerprint: record.authPublicKeyFingerprint,
+    approvalStatus: record.approvalStatus,
+    isEnabled: record.isEnabled,
+    applicationNote: record.applicationNote,
+    reviewComment: record.reviewComment,
+    approvedAt: record.approvedAt,
+    approvedByUserId: record.approvedByUserId,
+    rejectedAt: record.rejectedAt,
+    rejectedByUserId: record.rejectedByUserId,
+    firstSeenAt: record.firstSeenAt,
+    lastSeenAt: record.lastSeenAt,
+    lastSeenIp: record.lastSeenIp,
+    supersededAt: record.supersededAt,
+    supersededByAgentRecordId: record.supersededByAgentRecordId,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt
+  };
+}
+
 function getRequestContext(req) {
   return {
     ipAddress: req.headers?.["x-forwarded-for"] || req.socket?.remoteAddress || "",
     userAgent: req.headers?.["user-agent"] || ""
   };
+}
+
+async function ensureManagedAgentReadyForControl(agentId) {
+  if (!config.agentApprovalRequired) {
+    return null;
+  }
+
+  const record = await managedAgentService.findCurrentByAgentId(agentId);
+
+  if (!record) {
+    throw createHttpError(403, "设备未通过审核");
+  }
+
+  if (record.approvalStatus !== "approved") {
+    throw createHttpError(403, "设备未通过审核");
+  }
+
+  if (!record.isEnabled) {
+    throw createHttpError(403, "设备已停用");
+  }
+
+  return record;
+}
+
+async function disconnectApprovedAgentIfConnected(agentId, options = {}) {
+  const normalizedAgentId = String(agentId || "").trim();
+
+  if (!normalizedAgentId) {
+    return false;
+  }
+
+  const socket = agentRegistry.getSocket(normalizedAgentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+
+  sendAgentAccessMessage(socket, String(options.type || "agent.access.disabled"), {
+    agentId: normalizedAgentId,
+    reason: String(options.reason || "").trim()
+  });
+  closeAgentSocket(socket, String(options.type || "agent_access_changed"));
+  return true;
 }
 
 function normalizeUsername(value) {
@@ -2360,7 +2897,8 @@ function normalizeUsername(value) {
 function normalizeUserPayload(body) {
   return {
     username: normalizeUsername(body?.username),
-    displayName: String(body?.displayName || "").trim()
+    displayName: String(body?.displayName || "").trim(),
+    applicationNote: String(body?.applicationNote || "").trim().slice(0, 255)
   };
 }
 
@@ -2999,7 +3537,9 @@ async function ensureUserAuthCodesTable() {
       updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
       PRIMARY KEY (id),
       UNIQUE KEY uk_user_auth_codes_user_agent (user_id, agent_id),
+      UNIQUE KEY uk_user_auth_codes_agent_id (agent_id),
       KEY idx_user_auth_codes_user_id (user_id),
+      KEY idx_user_auth_codes_agent_id (agent_id),
       CONSTRAINT fk_user_auth_codes_user_id
         FOREIGN KEY (user_id) REFERENCES users (id)
         ON DELETE CASCADE

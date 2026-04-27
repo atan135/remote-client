@@ -19,6 +19,9 @@ export class AgentRegistry {
       hostname: payload.hostname || "",
       platform: payload.platform || "",
       arch: payload.arch || "",
+      managedAgentId: payload.managedAgentId ?? previous?.managedAgentId ?? null,
+      authPublicKeyFingerprint:
+        String(payload.authPublicKeyFingerprint || previous?.authPublicKeyFingerprint || "").trim(),
       pid: payload.pid || null,
       presetCommands: hasPresetCommands ? presetCommands : previous?.presetCommands || [],
       commonWorkingDirectories: hasCommonWorkingDirectories

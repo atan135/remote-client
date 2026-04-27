@@ -34,7 +34,9 @@ export const useConsoleStore = defineStore("console", () => {
   const commands = ref([]);
   const terminalSessions = ref([]);
   const users = ref([]);
+  const managedAgents = ref([]);
   const authCodes = ref([]);
+  const adminAuthCodes = ref([]);
   const selectedAgentId = ref("");
   const selectedTerminalSessionId = ref("");
   const autoOpenTerminalSessionId = ref("");
@@ -51,14 +53,22 @@ export const useConsoleStore = defineStore("console", () => {
   const sendingTerminalInput = ref(false);
   const readingRemoteFile = ref(false);
   const loadingUsers = ref(false);
+  const loadingManagedAgents = ref(false);
   const loadingAuthCodes = ref(false);
+  const loadingAdminAuthCodes = ref(false);
   const creatingUser = ref(false);
   const creatingAuthCode = ref(false);
   const changingPassword = ref(false);
   const resettingUserId = ref(null);
   const updatingUserId = ref(null);
+  const approvingUserId = ref(null);
+  const rejectingUserId = ref(null);
+  const approvingManagedAgentId = ref(null);
+  const rejectingManagedAgentId = ref(null);
+  const updatingManagedAgentId = ref(null);
   const savingAuthCodeId = ref(null);
   const deletingAuthCodeId = ref(null);
+  const deletingAdminAuthCodeId = ref(null);
   const terminatingTerminalSessionId = ref(null);
   const deletingTerminalSessionId = ref(null);
   const deletingCommandRequestId = ref(null);
@@ -78,7 +88,8 @@ export const useConsoleStore = defineStore("console", () => {
   const registerForm = reactive({
     username: "",
     displayName: "",
-    password: ""
+    password: "",
+    applicationNote: ""
   });
 
   const passwordForm = reactive({
@@ -106,7 +117,9 @@ export const useConsoleStore = defineStore("console", () => {
   });
 
   const appConfig = reactive({
-    allowPublicRegistration: true
+    allowPublicRegistration: true,
+    registrationApprovalRequired: false,
+    agentApprovalRequired: false
   });
 
   let socket = null;
@@ -400,6 +413,8 @@ export const useConsoleStore = defineStore("console", () => {
 
     const payload = await response.json();
     appConfig.allowPublicRegistration = Boolean(payload.allowPublicRegistration);
+    appConfig.registrationApprovalRequired = Boolean(payload.registrationApprovalRequired);
+    appConfig.agentApprovalRequired = Boolean(payload.agentApprovalRequired);
   }
 
   async function loadSession() {
@@ -483,7 +498,8 @@ export const useConsoleStore = defineStore("console", () => {
         body: JSON.stringify({
           username: registerForm.username.trim(),
           displayName: registerForm.displayName.trim(),
-          password: registerForm.password
+          password: registerForm.password,
+          applicationNote: registerForm.applicationNote.trim()
         })
       });
 
@@ -498,7 +514,8 @@ export const useConsoleStore = defineStore("console", () => {
       registerForm.username = "";
       registerForm.displayName = "";
       registerForm.password = "";
-      ElMessage.success("注册成功，请登录");
+      registerForm.applicationNote = "";
+      ElMessage.success(payload.message || "注册成功，请登录");
       return true;
     } catch (error) {
       wsState.error = error.message;
@@ -525,8 +542,12 @@ export const useConsoleStore = defineStore("console", () => {
 
     if (isAdmin.value) {
       jobs.push(loadUsers());
+      jobs.push(loadManagedAgents());
+      jobs.push(loadAdminAuthCodes());
     } else {
       users.value = [];
+      managedAgents.value = [];
+      adminAuthCodes.value = [];
     }
 
     await Promise.all(jobs);
@@ -632,6 +653,66 @@ export const useConsoleStore = defineStore("console", () => {
       users.value = payload.items || [];
     } finally {
       loadingUsers.value = false;
+    }
+  }
+
+  async function loadManagedAgents() {
+    if (!isAdmin.value) {
+      return;
+    }
+
+    loadingManagedAgents.value = true;
+
+    try {
+      const response = await fetch("/api/managed-agents");
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return;
+      }
+
+      if (response.status === 403) {
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("加载设备审核列表失败");
+      }
+
+      const payload = await response.json();
+      managedAgents.value = payload.items || [];
+    } finally {
+      loadingManagedAgents.value = false;
+    }
+  }
+
+  async function loadAdminAuthCodes() {
+    if (!isAdmin.value) {
+      return;
+    }
+
+    loadingAdminAuthCodes.value = true;
+
+    try {
+      const response = await fetch("/api/admin/auth-codes");
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return;
+      }
+
+      if (response.status === 403) {
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("加载全量 auth_code 绑定失败");
+      }
+
+      const payload = await response.json();
+      adminAuthCodes.value = payload.items || [];
+    } finally {
+      loadingAdminAuthCodes.value = false;
     }
   }
 
@@ -1363,6 +1444,9 @@ export const useConsoleStore = defineStore("console", () => {
       authCodeForm.remark = "";
       authCodeForm.authCode = "";
       await loadAuthCodes();
+      if (isAdmin.value) {
+        await loadAdminAuthCodes();
+      }
       ElMessage.success("auth_code 已创建");
       return true;
     } catch (error) {
@@ -1402,6 +1486,9 @@ export const useConsoleStore = defineStore("console", () => {
       }
 
       Object.assign(item, payload.item);
+      if (isAdmin.value) {
+        await loadAdminAuthCodes();
+      }
       ElMessage.success("auth_code 已更新");
       return true;
     } catch (error) {
@@ -1443,6 +1530,9 @@ export const useConsoleStore = defineStore("console", () => {
       }
 
       authCodes.value = authCodes.value.filter((candidate) => candidate.id !== item.id);
+      if (isAdmin.value) {
+        await loadAdminAuthCodes();
+      }
       ElMessage.success("auth_code 已删除");
       return true;
     } catch (error) {
@@ -1450,6 +1540,52 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     } finally {
       deletingAuthCodeId.value = null;
+    }
+  }
+
+  async function adminDeleteAuthCode(item) {
+    try {
+      await ElMessageBox.confirm(
+        `确认解绑设备 ${item.agentId} 当前归属的 auth_code 吗？解绑后其他用户才可重新绑定。`,
+        "管理员解绑 auth_code",
+        {
+          type: "warning",
+          confirmButtonText: "解绑",
+          cancelButtonText: "取消"
+        }
+      );
+    } catch {
+      return false;
+    }
+
+    deletingAdminAuthCodeId.value = item.id;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/admin/auth-codes/${item.id}`, {
+        method: "DELETE"
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "管理员解绑 auth_code 失败");
+      }
+
+      adminAuthCodes.value = adminAuthCodes.value.filter((candidate) => candidate.id !== item.id);
+      authCodes.value = authCodes.value.filter((candidate) => candidate.id !== item.id);
+      ElMessage.success("绑定已解绑");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      deletingAdminAuthCodeId.value = null;
     }
   }
 
@@ -1588,6 +1724,80 @@ export const useConsoleStore = defineStore("console", () => {
     }
   }
 
+  async function approveUser(user) {
+    approvingUserId.value = user.id;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/users/${user.id}/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reviewComment: user.reviewComment || ""
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "审核通过失败");
+      }
+
+      Object.assign(user, payload.item);
+      ElMessage.success("用户已审核通过");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      approvingUserId.value = null;
+    }
+  }
+
+  async function rejectUser(user) {
+    rejectingUserId.value = user.id;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/users/${user.id}/reject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reviewComment: user.reviewComment || ""
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "拒绝用户失败");
+      }
+
+      Object.assign(user, payload.item);
+      ElMessage.success("用户已拒绝");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      rejectingUserId.value = null;
+    }
+  }
+
   async function resetPassword(user) {
     let nextPassword = "";
 
@@ -1637,6 +1847,120 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     } finally {
       resettingUserId.value = null;
+    }
+  }
+
+  async function saveManagedAgent(agent) {
+    updatingManagedAgentId.value = agent.id;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/managed-agents/${agent.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          label: agent.label,
+          applicationNote: agent.applicationNote,
+          reviewComment: agent.reviewComment,
+          isEnabled: agent.isEnabled
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "更新设备记录失败");
+      }
+
+      Object.assign(agent, payload.item);
+      ElMessage.success("设备记录已更新");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      updatingManagedAgentId.value = null;
+    }
+  }
+
+  async function approveManagedAgent(agent) {
+    approvingManagedAgentId.value = agent.id;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/managed-agents/${agent.id}/approve`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reviewComment: agent.reviewComment || ""
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "设备审核通过失败");
+      }
+
+      Object.assign(agent, payload.item);
+      ElMessage.success("设备已审核通过");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      approvingManagedAgentId.value = null;
+    }
+  }
+
+  async function rejectManagedAgent(agent) {
+    rejectingManagedAgentId.value = agent.id;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/managed-agents/${agent.id}/reject`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          reviewComment: agent.reviewComment || ""
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "拒绝设备失败");
+      }
+
+      Object.assign(agent, payload.item);
+      ElMessage.success("设备已拒绝");
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      rejectingManagedAgentId.value = null;
     }
   }
 
@@ -1904,7 +2228,9 @@ export const useConsoleStore = defineStore("console", () => {
     pendingTaskCount.value = 0;
     failedTaskCount.value = 0;
     users.value = [];
+    managedAgents.value = [];
     authCodes.value = [];
+    adminAuthCodes.value = [];
     selectedAgentId.value = "";
     selectedTerminalSessionId.value = "";
     autoOpenTerminalSessionId.value = "";
@@ -1926,6 +2252,12 @@ export const useConsoleStore = defineStore("console", () => {
     }
     pendingTerminalResizes.clear();
     flushingTerminalResize = false;
+    approvingUserId.value = null;
+    rejectingUserId.value = null;
+    approvingManagedAgentId.value = null;
+    rejectingManagedAgentId.value = null;
+    updatingManagedAgentId.value = null;
+    deletingAdminAuthCodeId.value = null;
     if (terminalResizeFlushTimer) {
       window.clearTimeout(terminalResizeFlushTimer);
       terminalResizeFlushTimer = null;
@@ -2464,6 +2796,8 @@ export const useConsoleStore = defineStore("console", () => {
     activeAgent,
     activeAuthCodeBinding,
     activeTerminalSession,
+    adminAuthCodes,
+    adminDeleteAuthCode,
     agents,
     appConfig,
     authCodeForm,
@@ -2480,6 +2814,10 @@ export const useConsoleStore = defineStore("console", () => {
     canSubmitCommand,
     canTerminateTerminalSession,
     changingPassword,
+    approveManagedAgent,
+    approveUser,
+    approvingManagedAgentId,
+    approvingUserId,
     clearAutoOpenTerminalSession,
     clearCommandRecords,
     commandInput,
@@ -2495,6 +2833,7 @@ export const useConsoleStore = defineStore("console", () => {
     deleteCommandRecord,
     deleteTerminalSession,
     deletingAuthCodeId,
+    deletingAdminAuthCodeId,
     deletingCommandRequestId,
     deletingTerminalSessionId,
     displayName,
@@ -2502,11 +2841,14 @@ export const useConsoleStore = defineStore("console", () => {
     failedTaskCount,
     latestVisibleCommandRequestId,
     loadDashboard,
+    loadingAdminAuthCodes,
     loadingAuthCodes,
+    loadingManagedAgents,
     loadingUsers,
     login,
     loginForm,
     logout,
+    managedAgents,
     onlineAgentCount,
     openRemoteFile,
     passwordForm,
@@ -2520,9 +2862,14 @@ export const useConsoleStore = defineStore("console", () => {
     remoteFileError,
     remoteFilePath,
     remoteFileViewer,
+    rejectManagedAgent,
+    rejectUser,
+    rejectingManagedAgentId,
+    rejectingUserId,
     resolvedTabs,
     resettingUserId,
     saveAuthCode,
+    saveManagedAgent,
     saveUser,
     selectedAgentId,
     selectedTerminalSessionId,
@@ -2539,6 +2886,7 @@ export const useConsoleStore = defineStore("console", () => {
     terminatingTerminalSessionId,
     timelineFilterAgentId,
     updateRemoteFilePath,
+    updatingManagedAgentId,
     updatingUserId,
     useSelectedAgentIdForAuthCode,
     userForm,

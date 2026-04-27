@@ -50,6 +50,16 @@ export class SecureCommandService {
     };
   }
 
+  loadLocalAgentIdentity() {
+    const authPrivateKeyInfo = this.loadAuthPrivateKey();
+
+    return {
+      authPublicKey: authPrivateKeyInfo.publicKeyPem,
+      authPublicKeyFingerprint: authPrivateKeyInfo.publicKeyFingerprint,
+      suggestedAuthPublicKeyPath: authPrivateKeyInfo.suggestedAuthPublicKeyPath
+    };
+  }
+
   unwrapMessage(message, options = {}) {
     const expectedType = options.expectedType || "command.execute.secure";
 
@@ -158,11 +168,13 @@ export class SecureCommandService {
       privateKeyPem,
       this.config.authPrivateKeyPassphrase
     );
+    const publicKeyPem = exportPublicKeyPemFromPrivateKey(privateKey);
 
     return {
       privateKey,
       path: privateKeyPath,
-      publicKeyFingerprint: createPublicKeyFingerprint(exportPublicKeyPemFromPrivateKey(privateKey)),
+      publicKeyPem,
+      publicKeyFingerprint: createPublicKeyFingerprint(publicKeyPem),
       suggestedAuthPublicKeyPath: suggestAuthPublicKeyPath(privateKeyPath)
     };
   }

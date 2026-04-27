@@ -10,11 +10,21 @@ CREATE TABLE IF NOT EXISTS `users` (
   `display_name` VARCHAR(128) NOT NULL,
   `password_hash` VARCHAR(255) NOT NULL,
   `role` VARCHAR(32) NOT NULL DEFAULT 'operator',
+  `approval_status` VARCHAR(32) NOT NULL DEFAULT 'approved',
+  `registration_source` VARCHAR(32) NOT NULL DEFAULT 'admin',
+  `application_note` VARCHAR(255) NOT NULL DEFAULT '',
+  `approved_at` DATETIME NULL,
+  `approved_by_user_id` BIGINT UNSIGNED NULL,
+  `rejected_at` DATETIME NULL,
+  `rejected_by_user_id` BIGINT UNSIGNED NULL,
+  `review_comment` VARCHAR(255) NOT NULL DEFAULT '',
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
-  UNIQUE KEY `uk_users_username` (`username`)
+  UNIQUE KEY `uk_users_username` (`username`),
+  KEY `idx_users_approval_status` (`approval_status`),
+  KEY `idx_users_registration_source` (`registration_source`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `user_sessions` (
@@ -45,10 +55,43 @@ CREATE TABLE IF NOT EXISTS `user_auth_codes` (
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (`id`),
   UNIQUE KEY `uk_user_auth_codes_user_agent` (`user_id`, `agent_id`),
+  UNIQUE KEY `uk_user_auth_codes_agent_id` (`agent_id`),
   KEY `idx_user_auth_codes_user_id` (`user_id`),
   CONSTRAINT `fk_user_auth_codes_user_id`
     FOREIGN KEY (`user_id`) REFERENCES `users` (`id`)
     ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `managed_agents` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  `agent_id` VARCHAR(128) NOT NULL,
+  `record_status` VARCHAR(32) NOT NULL DEFAULT 'current',
+  `label` VARCHAR(128) NOT NULL DEFAULT '',
+  `hostname` VARCHAR(255) NOT NULL DEFAULT '',
+  `platform` VARCHAR(64) NOT NULL DEFAULT '',
+  `arch` VARCHAR(64) NOT NULL DEFAULT '',
+  `auth_public_key` LONGTEXT NOT NULL,
+  `auth_public_key_fingerprint` CHAR(64) NOT NULL,
+  `approval_status` VARCHAR(32) NOT NULL DEFAULT 'pending',
+  `is_enabled` TINYINT(1) NOT NULL DEFAULT 1,
+  `application_note` VARCHAR(255) NOT NULL DEFAULT '',
+  `review_comment` VARCHAR(255) NOT NULL DEFAULT '',
+  `approved_at` DATETIME NULL,
+  `approved_by_user_id` BIGINT UNSIGNED NULL,
+  `rejected_at` DATETIME NULL,
+  `rejected_by_user_id` BIGINT UNSIGNED NULL,
+  `first_seen_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_seen_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `last_seen_ip` VARCHAR(128) NOT NULL DEFAULT '',
+  `superseded_at` DATETIME NULL,
+  `superseded_by_agent_record_id` BIGINT UNSIGNED NULL,
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  KEY `idx_managed_agents_agent_id` (`agent_id`),
+  KEY `idx_managed_agents_agent_record_status` (`agent_id`, `record_status`),
+  KEY `idx_managed_agents_agent_review_status` (`agent_id`, `approval_status`, `is_enabled`),
+  KEY `idx_managed_agents_key_fingerprint` (`auth_public_key_fingerprint`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `command_runs` (
@@ -141,6 +184,9 @@ INSERT INTO `users` (
   `display_name`,
   `password_hash`,
   `role`,
+  `approval_status`,
+  `registration_source`,
+  `approved_at`,
   `is_active`
 )
 SELECT
@@ -148,6 +194,9 @@ SELECT
   'System Admin',
   'sha256$120000$70f3738d90a2372d328bdd1fc9992fbe$05bd2d2bdc6349c8fb919d2e71d01e79bab1593b59387f4c81b4b5754dd963d6',
   'admin',
+  'approved',
+  'system',
+  UTC_TIMESTAMP(),
   1
 WHERE NOT EXISTS (
   SELECT 1 FROM `users` WHERE `username` = 'admin'

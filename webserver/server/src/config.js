@@ -35,6 +35,8 @@ export function loadConfig() {
     sessionTtlHours: toNumber(process.env.SESSION_TTL_HOURS, 24),
     sessionSecure: process.env.SESSION_SECURE === "true",
     allowPublicRegistration: process.env.ALLOW_PUBLIC_REGISTRATION !== "false",
+    registrationApprovalRequired: process.env.REGISTRATION_APPROVAL_REQUIRED === "true",
+    agentApprovalRequired: process.env.AGENT_APPROVAL_REQUIRED === "true",
     webserverSignPrivateKeyPath:
       process.env.WEBSERVER_SIGN_PRIVATE_KEY_PATH || "./keys/webserver_sign_private.pem",
     webserverSignPrivateKeyPassphrase: process.env.WEBSERVER_SIGN_PRIVATE_KEY_PASSPHRASE || "",
