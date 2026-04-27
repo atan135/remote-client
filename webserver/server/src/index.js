@@ -994,7 +994,7 @@ server.on("upgrade", async (request, socket, head) => {
 agentSocketServer.on("connection", (socket, _request, url) => {
   const agentId = url.searchParams.get("agentId") || "";
 
-  logEvent(serverLogger, "info", "agent.websocket_connected", {
+  logEvent(serverLogger, "warn", "agent.websocket_connected", {
     agentId
   });
 
@@ -1359,7 +1359,7 @@ async function handleAgentMessage(agentId, socket, message) {
     const missingTerminalSessions = pendingDisconnect
       ? reconcileMissingAgentTerminalSessions(agent.agentId, syncedTerminalSessions)
       : [];
-    logEvent(serverLogger, "info", "agent.registered", {
+    logEvent(serverLogger, "warn", "agent.registered", {
       agentId: agent.agentId,
       label: agent.label,
       hostname: agent.hostname,
