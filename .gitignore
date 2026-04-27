@@ -6,6 +6,7 @@ logs/
 .runlogs/
 localapp/keys/
 webserver/server/keys/
+testfolder/
 .env
 .env.local
 .DS_Store
