@@ -24,7 +24,8 @@ export class AgentClient {
     this.profileRegistry = profileRegistry;
     this.socket = null;
     this.reconnectTimer = null;
-    this.heartbeatTimer = null;
+    this.idlePingTimer = null;
+    this.lastSocketActivityAt = 0;
     this.commandQueue = [];
     this.processing = false;
     this.outbox = [];
@@ -58,14 +59,16 @@ export class AgentClient {
       logEvent(this.agentLogger, "info", "agent.connected", {
         agentId: this.config.agentId
       });
+      this.touchSocketActivity();
       this.flushReconnectTimer();
-      this.startHeartbeat();
+      this.startIdlePing();
       this.sendRegister();
       this.flushOutbox();
       this.processQueue();
     });
 
     this.socket.on("message", (raw) => {
+      this.touchSocketActivity();
       try {
         const message = JSON.parse(String(raw));
         this.handleMessage(message);
@@ -84,7 +87,7 @@ export class AgentClient {
         closeCode: code,
         closeReason: normalizeSocketCloseReason(reasonBuffer)
       });
-      this.stopHeartbeat();
+      this.stopIdlePing();
       this.scheduleReconnect();
     });
 
@@ -97,6 +100,10 @@ export class AgentClient {
   }
 
   handleMessage(message) {
+    if (message.type === "agent.pong") {
+      return;
+    }
+
     if (
       [
         "agent.access.pending",
@@ -285,20 +292,35 @@ export class AgentClient {
     });
   }
 
-  startHeartbeat() {
-    this.stopHeartbeat();
-    this.heartbeatTimer = setInterval(() => {
-      this.send("agent.heartbeat", {
+  startIdlePing() {
+    this.stopIdlePing();
+    this.lastSocketActivityAt = Date.now();
+    const idlePingIntervalMs = resolveIdlePingIntervalMs(this.config);
+
+    this.idlePingTimer = setInterval(() => {
+      if (!this.isOpen()) {
+        return;
+      }
+
+      const idleForMs = Date.now() - this.lastSocketActivityAt;
+
+      if (idleForMs < idlePingIntervalMs) {
+        return;
+      }
+
+      this.send("agent.ping", {
         agentId: this.config.agentId,
-        lastSeenAt: new Date().toISOString()
+        pingId: randomUUID(),
+        idleForMs,
+        pingedAt: new Date().toISOString()
       });
-    }, this.config.heartbeatIntervalMs);
+    }, idlePingIntervalMs);
   }
 
-  stopHeartbeat() {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
+  stopIdlePing() {
+    if (this.idlePingTimer) {
+      clearInterval(this.idlePingTimer);
+      this.idlePingTimer = null;
     }
   }
 
@@ -349,6 +371,7 @@ export class AgentClient {
     while (this.outbox.length > 0 && this.isOpen()) {
       const message = this.outbox.shift();
       this.socket.send(message);
+      this.touchSocketActivity();
     }
   }
 
@@ -370,6 +393,7 @@ export class AgentClient {
 
     if (this.isOpen()) {
       this.socket.send(message);
+      this.touchSocketActivity();
       return;
     }
 
@@ -385,6 +409,10 @@ export class AgentClient {
 
   isOpen() {
     return this.socket && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  touchSocketActivity() {
+    this.lastSocketActivityAt = Date.now();
   }
 
   handleSecureCommand(message) {
@@ -761,4 +789,14 @@ function normalizeSocketCloseReason(reasonBuffer) {
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function resolveIdlePingIntervalMs(config) {
+  const intervalMs = Number(config?.heartbeatIntervalMs);
+
+  if (Number.isFinite(intervalMs) && intervalMs > 0) {
+    return intervalMs;
+  }
+
+  return 15000;
 }

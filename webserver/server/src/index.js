@@ -1855,6 +1855,18 @@ async function handleAgentMessage(agentId, socket, message) {
     return;
   }
 
+  if (message.type === "agent.ping") {
+    const agent = agentRegistry.heartbeat(agentId);
+    sendAgentPong(socket, agentId, message.payload);
+
+    if (agent && shouldBroadcastHeartbeat(agent.agentId)) {
+      browserHub.broadcast("agent.updated", agent);
+      rememberAgentBroadcast(agent, "ping");
+    }
+
+    return;
+  }
+
   if (message.type === "command.started") {
     const record = commandStore.update(message.payload.requestId, {
       status: "running",
@@ -2917,6 +2929,33 @@ function isDuplicateEntryError(error) {
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function sendAgentPong(socket, agentId, payload) {
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    return;
+  }
+
+  const pingPayload = isPlainObject(payload) ? payload : {};
+
+  try {
+    socket.send(
+      JSON.stringify({
+        type: "agent.pong",
+        payload: {
+          agentId,
+          pingId: String(pingPayload.pingId || ""),
+          receivedAt: new Date().toISOString()
+        },
+        sentAt: new Date().toISOString()
+      })
+    );
+  } catch (error) {
+    logEvent(serverLogger, "warn", "agent.pong_send_failed", {
+      agentId,
+      error: error.message
+    });
+  }
 }
 
 function createHttpError(statusCode, message) {
