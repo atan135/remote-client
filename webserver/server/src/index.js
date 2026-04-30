@@ -1296,12 +1296,26 @@ agentSocketServer.on("connection", (socket, request, url) => {
   });
 
   socket.on("close", (code, reasonBuffer) => {
-    const agent = agentRegistry.disconnect(agentId);
+    const disconnectResult = agentRegistry.disconnect(agentId, socket);
+    const agent = disconnectResult.agent;
     const reason = normalizeSocketCloseReason(reasonBuffer);
-    scheduleAgentDisconnectHandling(agentId, {
-      closeCode: code,
-      closeReason: reason
-    });
+
+    if (disconnectResult.stale) {
+      logEvent(serverLogger, "warn", "agent.websocket_stale_close_ignored", {
+        agentId,
+        closeCode: code,
+        closeReason: reason,
+        disconnectGraceMs: config.agentDisconnectGraceMs
+      });
+      return;
+    }
+
+    if (disconnectResult.disconnected) {
+      scheduleAgentDisconnectHandling(agentId, {
+        closeCode: code,
+        closeReason: reason
+      });
+    }
 
     logEvent(serverLogger, "warn", "agent.websocket_disconnected", {
       agentId,
@@ -1845,7 +1859,7 @@ async function handleAgentMessage(agentId, socket, message) {
   }
 
   if (message.type === "agent.heartbeat") {
-    const agent = agentRegistry.heartbeat(agentId);
+    const agent = agentRegistry.heartbeat(agentId, socket);
 
     if (agent && shouldBroadcastHeartbeat(agent.agentId)) {
       browserHub.broadcast("agent.updated", agent);
@@ -1856,7 +1870,7 @@ async function handleAgentMessage(agentId, socket, message) {
   }
 
   if (message.type === "agent.ping") {
-    const agent = agentRegistry.heartbeat(agentId);
+    const agent = agentRegistry.heartbeat(agentId, socket);
     sendAgentPong(socket, agentId, message.payload);
 
     if (agent && shouldBroadcastHeartbeat(agent.agentId)) {
@@ -2155,10 +2169,14 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
   const socket = agentRegistry.getSocket(command.agentId);
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
+    const agent = agentRegistry.get(command.agentId);
+
     logEvent(commandLogger, "info", "command.queued", {
       requestId: command.requestId,
       agentId: command.agentId,
-      command: command.command
+      command: command.command,
+      agentStatus: agent?.status || "missing",
+      socketReadyState: socket?.readyState ?? null
     });
     return "queued";
   }

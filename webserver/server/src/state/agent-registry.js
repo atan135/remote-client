@@ -41,11 +41,21 @@ export class AgentRegistry {
     return agent;
   }
 
-  heartbeat(agentId) {
+  heartbeat(agentId, socket = null) {
     const agent = this.agents.get(agentId);
 
     if (!agent) {
       return null;
+    }
+
+    const currentSocket = this.sockets.get(agentId) || null;
+
+    if (socket && currentSocket && currentSocket !== socket) {
+      return null;
+    }
+
+    if (socket) {
+      this.sockets.set(agentId, socket);
     }
 
     agent.lastSeenAt = new Date().toISOString();
@@ -53,22 +63,43 @@ export class AgentRegistry {
     return agent;
   }
 
-  disconnect(agentId) {
+  disconnect(agentId, socket = null) {
     if (!agentId) {
-      return null;
+      return {
+        agent: null,
+        disconnected: false,
+        stale: false
+      };
+    }
+
+    const agent = this.agents.get(agentId);
+    const currentSocket = this.sockets.get(agentId) || null;
+
+    if (socket && currentSocket && currentSocket !== socket) {
+      return {
+        agent,
+        disconnected: false,
+        stale: true
+      };
     }
 
     this.sockets.delete(agentId);
 
-    const agent = this.agents.get(agentId);
-
     if (!agent) {
-      return null;
+      return {
+        agent: null,
+        disconnected: true,
+        stale: false
+      };
     }
 
     agent.status = "offline";
     agent.lastDisconnectAt = new Date().toISOString();
-    return agent;
+    return {
+      agent,
+      disconnected: true,
+      stale: false
+    };
   }
 
   getSocket(agentId) {
