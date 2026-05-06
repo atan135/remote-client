@@ -160,6 +160,21 @@ function resolveAgentSummary(item) {
   return `${hostname} / ${item.agentId}`;
 }
 
+function resolveShellLabel(shellValue) {
+  switch (String(shellValue || "")) {
+    case "cmd":
+      return "cmd";
+    case "powershell":
+      return "PowerShell";
+    case "pwsh":
+      return "PowerShell 7";
+    case "bash":
+      return "Bash";
+    default:
+      return shellValue || "-";
+  }
+}
+
 function formatCreatedAt(value) {
   const normalizedValue = String(value || "");
 
@@ -257,6 +272,10 @@ function formatCreatedAt(value) {
             <span class="timeline-summary-item">
               <span class="timeline-summary-label">退出码</span>
               <strong>{{ item.exitCode ?? "-" }}</strong>
+            </span>
+            <span class="timeline-summary-item">
+              <span class="timeline-summary-label">Shell</span>
+              <strong>{{ resolveShellLabel(item.commandShell) }}</strong>
             </span>
             <span class="timeline-summary-item">
               <span class="timeline-summary-label">安全</span>

@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS `command_runs` (
   `operator_user_id` BIGINT UNSIGNED NULL,
   `operator_username` VARCHAR(64) NOT NULL DEFAULT '',
   `command_text` LONGTEXT NOT NULL,
+  `command_shell` VARCHAR(32) NOT NULL DEFAULT '',
   `status` VARCHAR(32) NOT NULL,
   `secure_status` VARCHAR(64) NOT NULL DEFAULT '',
   `security_error` TEXT NOT NULL,

@@ -2,9 +2,13 @@ import { exec } from "node:child_process";
 import os from "node:os";
 import iconv from "iconv-lite";
 
-export function runCommand(command, options) {
+const SUPPORTED_COMMAND_SHELLS = new Set(["cmd", "powershell", "pwsh", "bash"]);
+
+export function runCommand(command, options, executionOptions = {}) {
   const platform = os.platform();
-  const executedCommand = normalizeCommandForExecution(command, platform);
+  const commandShell = normalizeCommandShell(executionOptions.shell, platform);
+  const executedShell = resolveCommandShell(commandShell, platform);
+  const executedCommand = normalizeCommandForExecution(command, platform, commandShell);
   const startedAt = new Date().toISOString();
 
   return new Promise((resolve) => {
@@ -14,7 +18,7 @@ export function runCommand(command, options) {
         timeout: options.commandTimeoutMs,
         maxBuffer: options.maxBufferBytes,
         windowsHide: true,
-        shell: platform === "win32" ? process.env.ComSpec : undefined,
+        shell: executedShell,
         encoding: platform === "win32" ? "buffer" : "utf8"
       },
       (error, stdout, stderr) => {
@@ -28,6 +32,8 @@ export function runCommand(command, options) {
             exitCode: 0,
             stdout: decodedStdout,
             stderr: decodedStderr,
+            commandShell,
+            executedShell,
             executedCommand,
             startedAt,
             completedAt
@@ -41,6 +47,8 @@ export function runCommand(command, options) {
           stdout: decodedStdout,
           stderr: decodedStderr,
           error: buildErrorMessage(error, executedCommand, decodedStdout, decodedStderr),
+          commandShell,
+          executedShell,
           executedCommand,
           startedAt,
           completedAt
@@ -50,8 +58,16 @@ export function runCommand(command, options) {
   });
 }
 
-export function normalizeCommandForExecution(command, platform = os.platform()) {
+export function normalizeCommandForExecution(
+  command,
+  platform = os.platform(),
+  commandShell = normalizeCommandShell("", platform)
+) {
   if (platform !== "win32") {
+    return command;
+  }
+
+  if (commandShell === "bash") {
     return command;
   }
 
@@ -73,6 +89,52 @@ function normalizeWindowsLookupTarget(targetExpression) {
   }
 
   return trimmed;
+}
+
+export function normalizeCommandShell(value, platform = os.platform()) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^powershell7$/, "pwsh")
+    .replace(/^power-shell$/, "powershell")
+    .replace(/^ps$/, "powershell")
+    .replace(/^ps7$/, "pwsh");
+
+  if (SUPPORTED_COMMAND_SHELLS.has(normalized)) {
+    return normalized;
+  }
+
+  return platform === "win32" ? "powershell" : "bash";
+}
+
+export function resolveCommandShell(commandShell, platform = os.platform()) {
+  const normalized = normalizeCommandShell(commandShell, platform);
+
+  if (platform === "win32") {
+    switch (normalized) {
+      case "cmd":
+        return process.env.ComSpec || "cmd.exe";
+      case "pwsh":
+        return "pwsh.exe";
+      case "bash":
+        return "bash.exe";
+      case "powershell":
+      default:
+        return "powershell.exe";
+    }
+  }
+
+  switch (normalized) {
+    case "cmd":
+      return "cmd";
+    case "powershell":
+      return "powershell";
+    case "pwsh":
+      return "pwsh";
+    case "bash":
+    default:
+      return "/bin/bash";
+  }
 }
 
 function decodeCommandOutput(value, platform, options) {

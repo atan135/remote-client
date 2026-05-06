@@ -1320,6 +1320,11 @@ textarea {
   margin-top: 0;
 }
 
+.chat-shell-field {
+  flex: 0 1 220px;
+  margin-top: 0;
+}
+
 .chat-state-tags,
 .chat-action-tags,
 .chat-result-meta {

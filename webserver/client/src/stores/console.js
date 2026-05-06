@@ -28,6 +28,24 @@ const TERMINAL_OUTPUT_BUFFER_LIMIT = 1200;
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
 const PENDING_COMMAND_STATUSES = new Set(["queued", "running", "dispatched"]);
 const FAILED_COMMAND_STATUSES = new Set(["failed", "timed_out", "connection_lost"]);
+const commandShellOptions = Object.freeze([
+  {
+    value: "cmd",
+    label: "cmd"
+  },
+  {
+    value: "powershell",
+    label: "PowerShell"
+  },
+  {
+    value: "pwsh",
+    label: "PowerShell 7"
+  },
+  {
+    value: "bash",
+    label: "Bash"
+  }
+]);
 
 export const useConsoleStore = defineStore("console", () => {
   const agents = ref([]);
@@ -42,6 +60,7 @@ export const useConsoleStore = defineStore("console", () => {
   const autoOpenTerminalSessionId = ref("");
   const timelineFilterAgentId = ref("all");
   const commandInput = ref("");
+  const commandShell = ref("powershell");
   const terminalProfile = ref("");
   const terminalCwd = ref("");
   const terminalInput = ref("");
@@ -370,6 +389,7 @@ export const useConsoleStore = defineStore("console", () => {
   watch(selectedAgentId, () => {
     ensureSelectedTerminalProfile();
     ensureSelectedTerminalSession();
+    ensureSelectedCommandShell();
     resetRemoteFileViewer();
   });
 
@@ -716,9 +736,13 @@ export const useConsoleStore = defineStore("console", () => {
     }
   }
 
-  async function submitCommand(commandOverride) {
+  async function submitCommand(commandOverride, options = {}) {
     const commandSource = commandOverride === undefined ? commandInput.value : commandOverride;
     const command = String(commandSource || "").trim();
+    const shell = normalizeCommandShell(
+      options?.shell || commandShell.value || getDefaultCommandShellForAgent(activeAgent.value),
+      activeAgent.value
+    );
 
     if (!selectedAgentId.value || !command) {
       return false;
@@ -740,7 +764,8 @@ export const useConsoleStore = defineStore("console", () => {
         },
         body: JSON.stringify({
           agentId: selectedAgentId.value,
-          command
+          command,
+          shell
         })
       });
 
@@ -2219,6 +2244,10 @@ export const useConsoleStore = defineStore("console", () => {
     selectedTerminalSessionId.value = runningSession?.sessionId || sessions[0]?.sessionId || "";
   }
 
+  function ensureSelectedCommandShell() {
+    commandShell.value = getDefaultCommandShellForAgent(activeAgent.value);
+  }
+
   async function handleUnauthorized() {
     disconnectBrowserSocket();
     resetAuthedState();
@@ -2241,6 +2270,7 @@ export const useConsoleStore = defineStore("console", () => {
     autoOpenTerminalSessionId.value = "";
     timelineFilterAgentId.value = "all";
     commandInput.value = "";
+    commandShell.value = "powershell";
     terminalProfile.value = "";
     terminalCwd.value = "";
     terminalInput.value = "";
@@ -2797,6 +2827,27 @@ export const useConsoleStore = defineStore("console", () => {
     }
   }
 
+  function normalizeCommandShell(value, agent = activeAgent.value) {
+    const normalized = String(value || "")
+      .trim()
+      .toLowerCase()
+      .replace(/^powershell7$/, "pwsh")
+      .replace(/^power-shell$/, "powershell")
+      .replace(/^ps$/, "powershell")
+      .replace(/^ps7$/, "pwsh");
+
+    if (commandShellOptions.some((item) => item.value === normalized)) {
+      return normalized;
+    }
+
+    return getDefaultCommandShellForAgent(agent);
+  }
+
+  function getDefaultCommandShellForAgent(agent) {
+    const platform = String(agent?.platform || agent?.os || "").toLowerCase();
+    return platform && !platform.startsWith("win") ? "bash" : "powershell";
+  }
+
   return {
     activeAgent,
     activeAuthCodeBinding,
@@ -2826,6 +2877,8 @@ export const useConsoleStore = defineStore("console", () => {
     clearAutoOpenTerminalSession,
     clearCommandRecords,
     commandInput,
+    commandShell,
+    commandShellOptions,
     commands,
     createAuthCode,
     createTerminalSession,

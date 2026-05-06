@@ -802,12 +802,14 @@ async function handleCommandRequest(req, res) {
 
   try {
     await ensureManagedAgentReadyForControl(agentId);
+    const commandShell = normalizeCommandShell(req.body?.shell, agentRegistry.get(agentId)?.platform);
     const authCodeBinding = await authCodeService.findByUserIdAndAgentId(req.auth.user.id, agentId);
 
     if (!authCodeBinding) {
       logEvent(commandLogger, "warn", "command.auth_code_missing", {
         agentId,
         command,
+        commandShell,
         userId: req.auth.user.id,
         username: req.auth.user.username,
         ...getRequestContext(req)
@@ -825,6 +827,7 @@ async function handleCommandRequest(req, res) {
         authCodeId: authCodeBinding.id,
         authCodeFingerprint: authCodeBinding.fingerprint,
         authCodeRemark: authCodeBinding.remark,
+        commandShell,
         secureStatus: "pending",
         securityError: ""
       }
@@ -844,6 +847,7 @@ async function handleCommandRequest(req, res) {
       requestId: record.requestId,
       agentId,
       command,
+      commandShell,
       queued,
       dispatchResult,
       userId: req.auth.user.id,
@@ -872,6 +876,7 @@ async function handleCommandRequest(req, res) {
     logEvent(commandLogger, "error", "command.request_failed", {
       agentId,
       command,
+      commandShell: normalizeCommandShell(req.body?.shell, agentRegistry.get(agentId)?.platform),
       userId: req.auth.user.id,
       username: req.auth.user.username,
       error: error.message,
@@ -1882,11 +1887,18 @@ async function handleAgentMessage(agentId, socket, message) {
   }
 
   if (message.type === "command.started") {
-    const record = commandStore.update(message.payload.requestId, {
+    const patch = {
       status: "running",
       secureStatus: message.payload.secureStatus || "verified",
       startedAt: message.payload.startedAt || new Date().toISOString()
-    });
+    };
+    const commandShell = String(message.payload.commandShell || message.payload.shell || "").trim();
+
+    if (commandShell) {
+      patch.commandShell = commandShell;
+    }
+
+    const record = commandStore.update(message.payload.requestId, patch);
 
     if (record) {
       void persistCommandRecord(record);
@@ -1894,6 +1906,7 @@ async function handleAgentMessage(agentId, socket, message) {
         requestId: record.requestId,
         agentId: record.agentId,
         command: record.command,
+        commandShell: record.commandShell || "",
         startedAt: record.startedAt
       });
       browserHub.broadcast("command.updated", serializeCommandRecord(record));
@@ -1905,7 +1918,7 @@ async function handleAgentMessage(agentId, socket, message) {
   if (message.type === "command.finished") {
     const stdout = String(message.payload.stdout || "");
     const stderr = String(message.payload.stderr || "");
-    const record = commandStore.update(message.payload.requestId, {
+    const patch = {
       status: message.payload.status,
       secureStatus: message.payload.secureStatus || inferSecureStatusFromResult(message.payload),
       exitCode: message.payload.exitCode,
@@ -1917,7 +1930,14 @@ async function handleAgentMessage(agentId, socket, message) {
       securityError: message.payload.securityError || "",
       startedAt: message.payload.startedAt || null,
       completedAt: message.payload.completedAt || new Date().toISOString()
-    });
+    };
+    const commandShell = String(message.payload.commandShell || message.payload.shell || "").trim();
+
+    if (commandShell) {
+      patch.commandShell = commandShell;
+    }
+
+    const record = commandStore.update(message.payload.requestId, patch);
 
     if (record) {
       const summary = summarizeCommandRecord(record);
@@ -1930,6 +1950,7 @@ async function handleAgentMessage(agentId, socket, message) {
           requestId: record.requestId,
           agentId: record.agentId,
           command: record.command,
+          commandShell: record.commandShell || "",
           status: record.status,
           exitCode: record.exitCode,
           stdoutChars: summary.stdoutChars,
@@ -2175,6 +2196,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
       requestId: command.requestId,
       agentId: command.agentId,
       command: command.command,
+      commandShell: command.commandShell || "",
       agentStatus: agent?.status || "missing",
       socketReadyState: socket?.readyState ?? null
     });
@@ -2195,6 +2217,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
       requestId: command.requestId,
       agentId: command.agentId,
       command: command.command,
+      commandShell: command.commandShell || "",
       userId: command.operatorUserId,
       username: command.operatorUsername,
       authCodeId: command.authCodeId
@@ -2228,6 +2251,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
       requestId: command.requestId,
       agentId: command.agentId,
       command: command.command,
+      commandShell: command.commandShell || "",
       userId: command.operatorUserId,
       username: command.operatorUsername,
       authCodeId: command.authCodeId,
@@ -2260,6 +2284,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
     requestId: command.requestId,
     agentId: command.agentId,
     command: command.command,
+    commandShell: command.commandShell || "",
     userId: command.operatorUserId,
     username: command.operatorUsername,
     authCodeId: command.authCodeId,
@@ -2283,6 +2308,7 @@ function dispatchCommand(command, context = loadCommandDispatchContext(command))
       requestId: command.requestId,
       agentId: command.agentId,
       command: command.command,
+      commandShell: command.commandShell || "",
       error: error.message
     });
 
@@ -3001,6 +3027,23 @@ function normalizeTerminalDimension(value) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
 }
 
+function normalizeCommandShell(value, agentPlatform = "") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/^powershell7$/, "pwsh")
+    .replace(/^power-shell$/, "powershell")
+    .replace(/^ps$/, "powershell")
+    .replace(/^ps7$/, "pwsh");
+
+  if (["cmd", "powershell", "pwsh", "bash"].includes(normalized)) {
+    return normalized;
+  }
+
+  const platform = String(agentPlatform || "").toLowerCase();
+  return platform && !platform.startsWith("win") ? "bash" : "powershell";
+}
+
 function isTerminalSessionClosedStatus(status) {
   return ["completed", "failed", "terminated", "connection_lost"].includes(String(status || ""));
 }
@@ -3169,6 +3212,7 @@ function serializeCommandRecord(record) {
     operatorUserId: summary.operatorUserId,
     operatorUsername: summary.operatorUsername,
     command: summary.command,
+    commandShell: summary.commandShell,
     status: summary.status,
     secureStatus: summary.secureStatus,
     securityError: summary.securityError,

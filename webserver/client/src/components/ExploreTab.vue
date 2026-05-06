@@ -44,6 +44,14 @@ const props = defineProps({
     type: String,
     required: true
   },
+  commandShell: {
+    type: String,
+    required: true
+  },
+  commandShellOptions: {
+    type: Array,
+    required: true
+  },
   terminalProfile: {
     type: String,
     required: true
@@ -129,6 +137,7 @@ const props = defineProps({
 const emit = defineEmits([
   "update:selectedAgentId",
   "update:commandInput",
+  "update:commandShell",
   "update:terminalProfile",
   "update:terminalCwd",
   "update:terminalInput",
@@ -607,6 +616,15 @@ function formatCompactDateTime(value) {
             <p v-else-if="selectedAgentId" class="muted explore-preset-command-empty">
               当前设备未配置 PRESET_COMMANDS，仍可直接手动输入命令。
             </p>
+
+            <label class="field-block field-block-tight">
+              <span>执行 Shell</span>
+              <el-select :model-value="commandShell" placeholder="请选择执行 Shell"
+                @update:model-value="emit('update:commandShell', $event)">
+                <el-option v-for="shell in commandShellOptions" :key="shell.value" :label="shell.label"
+                  :value="shell.value" />
+              </el-select>
+            </label>
 
             <label class="field-block field-block-tight">
               <span>命令内容</span>

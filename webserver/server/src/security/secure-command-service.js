@@ -52,6 +52,7 @@ export class SecureCommandService {
         requestId: commandRecord.requestId,
         agentId: commandRecord.agentId,
         command: commandRecord.command,
+        shell: commandRecord.commandShell || "",
         createdAt: commandRecord.createdAt,
         issuedAt: sentAt,
         expiresAt,

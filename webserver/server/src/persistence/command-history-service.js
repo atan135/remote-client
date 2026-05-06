@@ -12,6 +12,7 @@ export class CommandHistoryService {
         operator_user_id BIGINT UNSIGNED NULL,
         operator_username VARCHAR(64) NOT NULL DEFAULT '',
         command_text LONGTEXT NOT NULL,
+        command_shell VARCHAR(32) NOT NULL DEFAULT '',
         status VARCHAR(32) NOT NULL,
         secure_status VARCHAR(64) NOT NULL DEFAULT '',
         security_error TEXT NOT NULL,
@@ -43,6 +44,12 @@ export class CommandHistoryService {
       "idx_command_runs_created_at",
       "ALTER TABLE command_runs ADD INDEX idx_command_runs_created_at (created_at)"
     );
+    await ensureColumn(
+      this.pool,
+      "command_runs",
+      "command_shell",
+      "ALTER TABLE command_runs ADD COLUMN command_shell VARCHAR(32) NOT NULL DEFAULT '' AFTER command_text"
+    );
   }
 
   async create(record) {
@@ -55,6 +62,7 @@ export class CommandHistoryService {
           operator_user_id,
           operator_username,
           command_text,
+          command_shell,
           status,
           secure_status,
           security_error,
@@ -70,12 +78,13 @@ export class CommandHistoryService {
           started_at,
           completed_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           agent_id = VALUES(agent_id),
           operator_user_id = VALUES(operator_user_id),
           operator_username = VALUES(operator_username),
           command_text = VALUES(command_text),
+          command_shell = VALUES(command_shell),
           status = VALUES(status),
           secure_status = VALUES(secure_status),
           security_error = VALUES(security_error),
@@ -96,6 +105,7 @@ export class CommandHistoryService {
         summary.operatorUserId,
         summary.operatorUsername,
         summary.command,
+        summary.commandShell,
         summary.status,
         summary.secureStatus,
         summary.securityError,
@@ -130,6 +140,7 @@ export class CommandHistoryService {
               operator_user_id,
               operator_username,
               command_text,
+              command_shell,
               status,
               secure_status,
               security_error,
@@ -159,6 +170,7 @@ export class CommandHistoryService {
               operator_user_id,
               operator_username,
               command_text,
+              command_shell,
               status,
               secure_status,
               security_error,
@@ -197,6 +209,7 @@ export class CommandHistoryService {
           operator_user_id,
           operator_username,
           command_text,
+          command_shell,
           status,
           secure_status,
           security_error,
@@ -280,6 +293,7 @@ export function summarizeCommandRecord(record) {
     operatorUserId: toNullableNumber(record?.operatorUserId),
     operatorUsername: String(record?.operatorUsername || ""),
     command: String(record?.command || ""),
+    commandShell: String(record?.commandShell || record?.shell || ""),
     status: String(record?.status || ""),
     secureStatus: String(record?.secureStatus || ""),
     securityError: String(record?.securityError || ""),
@@ -368,6 +382,7 @@ export function serializeStoredCommandRun(row) {
     operatorUserId: row.operator_user_id ?? null,
     operatorUsername: row.operator_username || "",
     command: row.command_text || "",
+    commandShell: row.command_shell || "",
     status: row.status || "",
     secureStatus: row.secure_status || "",
     securityError: row.security_error || "",
@@ -396,6 +411,26 @@ async function ensureIndex(pool, tableName, indexName, alterSql) {
       LIMIT 1
     `,
     [tableName, indexName]
+  );
+
+  if (Array.isArray(rows) && rows.length > 0) {
+    return;
+  }
+
+  await pool.execute(alterSql);
+}
+
+async function ensureColumn(pool, tableName, columnName, alterSql) {
+  const [rows] = await pool.execute(
+    `
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_schema = DATABASE()
+        AND table_name = ?
+        AND column_name = ?
+      LIMIT 1
+    `,
+    [tableName, columnName]
   );
 
   if (Array.isArray(rows) && rows.length > 0) {

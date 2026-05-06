@@ -7,8 +7,8 @@ export class ExecutionGateway {
     this.ptySessionManager = ptySessionManager;
   }
 
-  executeCommand(command) {
-    return runCommand(command, this.config);
+  executeCommand(command, options = {}) {
+    return runCommand(command, this.config, options);
   }
 
   async readTextFile(filePath, options = {}) {

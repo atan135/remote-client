@@ -39,6 +39,14 @@ const props = defineProps({
     type: Boolean,
     required: true
   },
+  commandShell: {
+    type: String,
+    required: true
+  },
+  commandShellOptions: {
+    type: Array,
+    required: true
+  },
   commandSubmitter: {
     type: Function,
     required: true
@@ -53,7 +61,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(["update:selectedAgentId"]);
+const emit = defineEmits(["update:selectedAgentId", "update:commandShell"]);
 
 const chatInput = ref("");
 const expandedResultIds = ref([]);
@@ -154,6 +162,7 @@ function createMessage(payload) {
     role: "assistant",
     text: "",
     command: "",
+    commandShell: props.commandShell,
     requestId: "",
     status: "draft",
     riskLevel: "low",
@@ -209,6 +218,7 @@ function appendActionMessage(parsed) {
       role: "action",
       text: parsed.intent || "待执行命令",
       command: parsed.command,
+      commandShell: props.commandShell,
       riskLevel: risk.level,
       riskReason: risk.reason,
       status: "draft"
@@ -362,7 +372,7 @@ async function executeAction(message) {
   message.status = "pending";
   message.agentId = props.selectedAgentId;
 
-  const result = await emitSubmitCommand(message.command);
+  const result = await emitSubmitCommand(message.command, message.commandShell || props.commandShell);
 
   if (!result) {
     message.status = "failed";
@@ -379,8 +389,10 @@ async function executeAction(message) {
   message.status = "pending";
 }
 
-function emitSubmitCommand(command) {
-  return props.commandSubmitter(command);
+function emitSubmitCommand(command, shell) {
+  return props.commandSubmitter(command, {
+    shell
+  });
 }
 
 function cancelAction(message) {
@@ -504,6 +516,11 @@ function riskText(level) {
   return "低风险";
 }
 
+function resolveShellLabel(shellValue) {
+  const normalized = String(shellValue || "").trim();
+  return props.commandShellOptions.find((item) => item.value === normalized)?.label || normalized || "-";
+}
+
 function resolveAgentLabel(agentId) {
   const agent = props.agents.find((item) => item.agentId === agentId) || null;
 
@@ -623,6 +640,22 @@ watch(
           </el-select>
         </label>
 
+        <label class="field-block field-block-tight chat-shell-field">
+          <span>执行 Shell</span>
+          <el-select
+            :model-value="commandShell"
+            placeholder="请选择执行 Shell"
+            @update:model-value="emit('update:commandShell', $event)"
+          >
+            <el-option
+              v-for="shell in commandShellOptions"
+              :key="shell.value"
+              :label="shell.label"
+              :value="shell.value"
+            />
+          </el-select>
+        </label>
+
         <div class="chat-state-tags">
           <el-tag :type="activeAgentStatusType" effect="dark" round>{{ activeAgentStatusText }}</el-tag>
           <el-tag :type="authCodeStatusType" effect="dark" round>{{ authCodeStatusText }}</el-tag>
@@ -651,7 +684,10 @@ watch(
             <div class="chat-action-head">
               <div>
                 <strong>{{ message.text }}</strong>
-                <small>{{ resolveAgentLabel(message.agentId || selectedAgentId) }}</small>
+                <small>
+                  {{ resolveAgentLabel(message.agentId || selectedAgentId) }} ·
+                  {{ resolveShellLabel(message.commandShell) }}
+                </small>
               </div>
               <div class="chat-action-tags">
                 <el-tag :type="riskType(message.riskLevel)" effect="dark" round>
@@ -686,6 +722,7 @@ watch(
               <template v-if="resolveCommandRecord(message)">
                 <div class="chat-result-meta">
                   <span>退出码：{{ resolveCommandRecord(message).exitCode ?? "-" }}</span>
+                  <span>Shell：{{ resolveShellLabel(resolveCommandRecord(message).commandShell || message.commandShell) }}</span>
                   <span>安全：{{ resolveCommandRecord(message).secureStatus || "-" }}</span>
                   <span>{{ formatCreatedAt(resolveCommandRecord(message).updatedAt) }}</span>
                 </div>

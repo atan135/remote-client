@@ -159,13 +159,15 @@ export class AgentClient {
 
     this.processing = true;
     const payload = this.commandQueue.shift();
-    const executedCommand = normalizeCommandForExecution(payload.command);
+    const commandShell = String(payload.shell || payload.commandShell || "");
+    const executedCommand = normalizeCommandForExecution(payload.command, undefined, commandShell);
 
     try {
       logEvent(this.commandLogger, "info", "command.started", {
         requestId: payload.requestId,
         agentId: this.config.agentId,
         command: payload.command,
+        commandShell,
         secureStatus: payload.secureStatus || "verified",
         executedCommand
       });
@@ -175,13 +177,16 @@ export class AgentClient {
         {
           requestId: payload.requestId,
           agentId: this.config.agentId,
+          commandShell,
           secureStatus: payload.secureStatus || "verified",
           startedAt: new Date().toISOString()
         },
         true
       );
 
-      const result = await this.executionGateway.executeCommand(payload.command);
+      const result = await this.executionGateway.executeCommand(payload.command, {
+        shell: commandShell
+      });
 
       logEvent(
         this.commandLogger,
@@ -191,6 +196,7 @@ export class AgentClient {
           requestId: payload.requestId,
           agentId: this.config.agentId,
           command: payload.command,
+          commandShell: result.commandShell || commandShell,
           secureStatus: payload.secureStatus || "verified",
           securityError: "",
           ...result
@@ -203,6 +209,7 @@ export class AgentClient {
           requestId: payload.requestId,
           agentId: this.config.agentId,
           command: payload.command,
+          commandShell: result.commandShell || commandShell,
           secureStatus: payload.secureStatus || "verified",
           securityError: "",
           ...result
@@ -216,6 +223,7 @@ export class AgentClient {
           requestId: payload.requestId,
           agentId: this.config.agentId,
           command: payload.command,
+          commandShell,
           status: "failed",
           secureStatus: payload.secureStatus || "verified",
           securityError: error.message,
@@ -233,6 +241,7 @@ export class AgentClient {
         requestId: payload.requestId,
         agentId: this.config.agentId,
         command: payload.command,
+        commandShell,
         secureStatus: payload.secureStatus || "verified",
         error: error.message
       });
