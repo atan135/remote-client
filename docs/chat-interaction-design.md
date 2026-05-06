@@ -199,6 +199,136 @@ LLM 相关逻辑建议放在 `webserver/server`，不要放在前端，原因是
 
 这个模式适合接入长期运行的 CLI 或模型代理，但复杂度明显高于一次性命令模式，建议作为后续增强。
 
+## Codex / AI Agent 会话模式
+
+在普通命令聊天之外，聊天页后续需要支持 Codex、Claude Code 等 AI agent 的返回方式。推荐不要新增一套独立 AI 协议，而是复用当前已经存在的终端会话能力：
+
+- `localapp/config/tool-profiles.json` 中的 `codex_code_session`
+- `/api/terminal-sessions` 创建远程 PTY 会话
+- `sendTerminalInput()` 向同一终端会话持续发送输入
+- `terminalSessions.finalText` 提取最终答案
+- `/api/remote-files/read` 打开 AI 返回的文件路径
+
+这样可以继续沿用现有 `auth_code`、安全封装、agent 主动外连和文件读取链路。
+
+### 会话类型
+
+聊天页顶部增加会话类型选择：
+
+- `普通会话`：保持当前逻辑，用户输入生成命令确认卡，执行走 `/api/commands`。
+- `Codex 会话`：用户选择工作目录后启动 `codex_code_session`，后续每轮输入发给同一个 Codex 终端会话，聊天框只展示 Codex 的最终答案。
+
+Codex 会话模式下建议显示以下控件：
+
+- 目标设备
+- 工作目录：支持常用目录下拉和手动输入
+- AI Agent：默认 `Codex CLI`，后续可扩展 `Claude Code`
+- 会话状态：未启动、启动中、运行中、已结束
+- 操作按钮：开始会话、结束会话
+
+### 输出展示
+
+Codex 会话模式下，聊天页默认不展示原始终端输出，只展示 `finalText`。原始输出可以保留为调试折叠区，默认收起。
+
+`finalText` 的处理规则：
+
+- 如果是普通短文本，直接作为 assistant 消息显示。
+- 如果看起来是文件路径，显示文件卡片和“打开文件”按钮。
+- 点击“打开文件”时调用现有 `openRemoteFile({ sessionId, filePath })`，其中 `sessionId` 必须使用当前 Codex 终端会话 ID，便于后端解析相对路径。
+
+文件路径识别建议支持：
+
+- Windows 绝对路径：`C:\project\xxx\result.md`
+- Unix 绝对路径：`/home/user/project/result.md`
+- 相对路径：`.remote-client/codex-results/result.md`
+- 简单结果目录路径：`codex-results/result.md`
+
+如果 `finalText` 不是文件路径但明显过长，例如超过 300 字，前端可以给出轻量提示：“内容偏长，建议让 Codex 写入文件”，但第一版不强行改写。
+
+### 输入包装提示词
+
+Codex 会话的每轮用户输入不要直接原样发送，应由前端或 store 包装成固定提示词后再写入终端会话。提示词建议如下：
+
+```text
+请直接完成用户请求，不要输出中间思考、计划、工具调用解释或执行日志。
+
+输出规则：
+1. 最终结果必须放在 <<<FINAL>>> 和 <<<END_FINAL>>> 之间。
+2. 如果结果适合在聊天框直接阅读，请直接返回 100 字以内摘要。
+3. 如果结果包含以下任一情况，请写入文件并只返回文件路径：
+   - 超过 100 个中文字符；
+   - 包含代码块、日志、表格、清单、长命令输出；
+   - 需要用户后续保存、复制或反复查看；
+   - 多步骤方案或详细分析。
+4. 文件请写入当前工作目录下 .remote-client/codex-results/，文件名格式为 codex-YYYYMMDD-HHmmss.md。
+5. 标记中不要返回额外说明。
+
+用户请求：
+<用户输入>
+```
+
+说明：
+
+- AI agent 负责按规则判断“直接返回短文本”还是“写入文件并返回路径”。
+- 系统只负责识别 `finalText` 是短文本还是文件路径。
+- 第一版不做系统侧自动落盘，避免新增远程写文件协议。
+- 如果测试发现 Codex 经常不遵守规则，再考虑由 agent 或 server 增加系统级结果落盘能力。
+
+### 状态设计
+
+建议在 `useConsoleStore` 中增加 Chat AI 会话状态：
+
+```js
+{
+  chatMode: "normal" | "codex",
+  chatAiProfile: "codex_code_session",
+  chatAiCwd: "",
+  chatAiSessionId: "",
+  chatAiPendingMessageId: "",
+  chatAiLastFinalText: ""
+}
+```
+
+消息结构建议扩展：
+
+```js
+{
+  id: "msg_xxx",
+  role: "user" | "assistant" | "system" | "action" | "file",
+  mode: "normal" | "codex",
+  agentId: "office-pc-01",
+  sessionId: "",
+  text: "",
+  filePath: "",
+  command: "",
+  requestId: "",
+  status: "draft" | "pending" | "running" | "completed" | "failed",
+  createdAt: ""
+}
+```
+
+### 执行流
+
+Codex 会话建议执行流：
+
+1. 用户切换到 `Codex 会话`
+2. 选择目标设备和工作目录
+3. 点击“开始会话”
+4. 前端调用 `/api/terminal-sessions` 创建 `codex_code_session`
+5. 保存返回的 `sessionId`
+6. 用户发送聊天消息
+7. 前端追加用户消息
+8. 前端用固定提示词包装用户输入
+9. 调用 `sendTerminalInput({ sessionId, input })`
+10. 服务端通过 `terminal.session.updated` 推送 `finalText`
+11. 前端根据 `finalText` 更新 assistant 消息或文件卡片
+
+### 与普通命令模式的边界
+
+Codex 会话不生成命令确认卡，也不直接走 `/api/commands`。它本质上是一个受控的远程终端会话，所有输入都发给 Codex CLI，由 Codex 在选定工作目录中完成任务。
+
+普通命令模式继续保留确认卡和风险级别判断。用户需要明确执行系统命令时，仍建议使用普通会话或终端页，避免把所有操作都隐式交给 AI agent。
+
 ## 数据持久化
 
 第一阶段建议聊天记录只保存在前端内存中，页面刷新后丢失。
