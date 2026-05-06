@@ -749,14 +749,19 @@ export const useConsoleStore = defineStore("console", () => {
         return false;
       }
 
+      const payload = await response.json().catch(() => ({}));
+
       if (!response.ok) {
-        const payload = await response.json().catch(() => ({}));
         throw new Error(payload.message || "命令提交失败");
+      }
+
+      if (payload.item) {
+        upsertCommand(payload.item);
       }
 
       commandInput.value = "";
       timelineFilterAgentId.value = selectedAgentId.value || "all";
-      return true;
+      return payload.item || true;
     } catch (error) {
       wsState.error = error.message;
       return false;

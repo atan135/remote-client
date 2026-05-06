@@ -24,6 +24,12 @@ const routes = [
     meta: navByKey.get("explore")
   },
   {
+    path: navByKey.get("chat").path,
+    name: navByKey.get("chat").name,
+    component: () => import("../pages/ChatPage.vue"),
+    meta: navByKey.get("chat")
+  },
+  {
     path: navByKey.get("tasks").path,
     name: navByKey.get("tasks").name,
     component: () => import("../pages/TasksPage.vue"),

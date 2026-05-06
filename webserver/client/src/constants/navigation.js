@@ -14,6 +14,13 @@ export const NAV_ITEMS = Object.freeze([
     description: "安全命令、交互式会话与文件浏览"
   },
   {
+    key: "chat",
+    name: "chat",
+    path: "/chat",
+    label: "对话",
+    description: "以聊天方式下发命令并查看结果"
+  },
+  {
     key: "tasks",
     name: "tasks",
     path: "/tasks",
