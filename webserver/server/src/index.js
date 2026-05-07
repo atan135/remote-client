@@ -2,7 +2,7 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import cookie from "cookie";
@@ -756,14 +756,7 @@ app.get("/api/terminal-sessions", requireAuth, (req, res) => {
 });
 
 app.get("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
-  const session = terminalSessionStore.get(String(req.params.sessionId || ""));
-
-  if (!session) {
-    res.status(404).json({ message: "会话不存在" });
-    return;
-  }
-
-  res.json({ item: serializeTerminalSession(session) });
+  void handleTerminalSessionDetailRequest(req, res);
 });
 
 app.post("/api/terminal-sessions", requireAuth, (req, res) => {
@@ -1183,6 +1176,7 @@ async function handleRemoteFileReadRequest(req, res) {
   const agentId = String(req.body?.agentId || "").trim();
   const sessionId = String(req.body?.sessionId || "").trim();
   const filePath = normalizeRemoteFilePath(req.body?.filePath);
+  const baseCwd = normalizeRemoteFilePath(req.body?.baseCwd || req.body?.cwd);
 
   if (!agentId || !filePath) {
     res.status(400).json({ message: "agentId and filePath are required" });
@@ -1194,7 +1188,8 @@ async function handleRemoteFileReadRequest(req, res) {
       user: req.auth.user,
       agentId,
       sessionId,
-      filePath
+      filePath,
+      baseCwd
     });
 
     res.json({ item });
@@ -1203,6 +1198,7 @@ async function handleRemoteFileReadRequest(req, res) {
       agentId,
       sessionId,
       filePath,
+      baseCwd,
       userId: req.auth.user.id,
       username: req.auth.user.username,
       error: error.message
@@ -1829,9 +1825,10 @@ async function handleAgentMessage(agentId, socket, message) {
       agent.agentId,
       registration.payload.activeTerminalSessions
     );
-    const missingTerminalSessions = pendingDisconnect
-      ? reconcileMissingAgentTerminalSessions(agent.agentId, syncedTerminalSessions)
-      : [];
+    const missingTerminalSessions = reconcileMissingAgentTerminalSessions(
+      agent.agentId,
+      syncedTerminalSessions
+    );
     logEvent(serverLogger, "warn", "agent.registered", {
       agentId: agent.agentId,
       label: agent.label,
@@ -2038,6 +2035,7 @@ async function handleAgentMessage(agentId, socket, message) {
 
       void persistTerminalSessionRecord(updatedRecord);
       void maybeSyncTerminalSessionTurn(updatedRecord, { allowEmpty: false });
+      const outputDiagnostics = createTerminalOutputDiagnostics(result.output.chunk);
       logEvent(commandLogger, "info", "terminal.session.output_forwarded", {
         sessionId: result.record.sessionId,
         requestId: result.record.requestId,
@@ -2045,13 +2043,27 @@ async function handleAgentMessage(agentId, socket, message) {
         profile: result.record.profile,
         seq: result.output.seq,
         chunkLength: String(result.output.chunk || "").length,
+        ...outputDiagnostics,
         outputsInMemory: Array.isArray(updatedRecord.outputs) ? updatedRecord.outputs.length : 0,
         lastOutputAt: updatedRecord.lastOutputAt || result.output.sentAt,
+        finalPatchApplied: Boolean(finalPatch),
+        finalTextChars: String(updatedRecord.finalText || "").length,
         browserSubscribers: browserHub.sockets.size
       });
       browserHub.broadcast("terminal.session.output", result.output);
 
       if (reconnectPatch || finalPatch) {
+        if (finalPatch) {
+          logEvent(commandLogger, "info", "terminal.session.final_text_updated", {
+            sessionId: result.record.sessionId,
+            requestId: result.record.requestId,
+            agentId: result.record.agentId,
+            profile: result.record.profile,
+            finalTextChars: String(updatedRecord.finalText || "").length,
+            finalTextSha256: createTextSha256(updatedRecord.finalText || ""),
+            hasFinalText: Boolean(String(updatedRecord.finalText || "").trim())
+          });
+        }
         broadcastTerminalSessionUpdate(
           terminalSessionStore.get(result.record.sessionId) || updatedRecord
         );
@@ -2059,11 +2071,13 @@ async function handleAgentMessage(agentId, socket, message) {
     }
 
     if (!result) {
+      const droppedChunk = String(message.payload?.chunk || "");
       logEvent(commandLogger, "warn", "terminal.session.output_dropped", {
         sessionId: String(message.payload?.sessionId || ""),
         agentId,
         seq: Number(message.payload?.seq || 0),
-        chunkLength: String(message.payload?.chunk || "").length
+        chunkLength: droppedChunk.length,
+        ...createTerminalOutputDiagnostics(droppedChunk)
       });
     }
 
@@ -2071,7 +2085,7 @@ async function handleAgentMessage(agentId, socket, message) {
   }
 
   if (message.type === "terminal.session.closed") {
-    const record = terminalSessionStore.update(message.payload.sessionId, {
+    let record = terminalSessionStore.update(message.payload.sessionId, {
       status: message.payload.status || "completed",
       exitCode: message.payload.exitCode ?? null,
       error: message.payload.error || "",
@@ -2079,6 +2093,22 @@ async function handleAgentMessage(agentId, socket, message) {
     });
 
     if (record) {
+      const finalPatch = deriveTerminalSessionDisplayPatch(record);
+
+      if (finalPatch) {
+        record = terminalSessionStore.update(record.sessionId, finalPatch) || record;
+        logEvent(commandLogger, "info", "terminal.session.final_text_updated", {
+          sessionId: record.sessionId,
+          requestId: record.requestId,
+          agentId: record.agentId,
+          profile: record.profile,
+          finalTextChars: String(record.finalText || "").length,
+          finalTextSha256: createTextSha256(record.finalText || ""),
+          hasFinalText: Boolean(String(record.finalText || "").trim()),
+          source: "closed"
+        });
+      }
+
       void persistTerminalSessionRecord(record);
       void maybeSyncTerminalSessionTurn(record, { allowEmpty: true });
       broadcastTerminalSessionUpdate(record);
@@ -2447,6 +2477,7 @@ function dispatchRemoteFileRead(agentId, context) {
     agentId,
     sessionId: context.sessionId,
     filePath: context.filePath,
+    baseCwd: context.baseCwd,
     operatorUser: context.user,
     authCodeBinding: context.authCodeBinding
   });
@@ -2558,10 +2589,11 @@ async function dispatchTerminalSessionResizeForUser({ user, sessionId, cols, row
   return session;
 }
 
-async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePath }) {
+async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePath, baseCwd }) {
   const normalizedAgentId = String(agentId || "").trim();
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedFilePath = normalizeRemoteFilePath(filePath);
+  const requestedBaseCwd = normalizeRemoteFilePath(baseCwd);
 
   if (!normalizedAgentId || !normalizedFilePath) {
     throw createHttpError(400, "agentId and filePath are required");
@@ -2580,10 +2612,17 @@ async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePat
     throw createHttpError(400, "当前用户未为该设备配置 auth_code");
   }
 
+  const fileSessionContext = await resolveRemoteFileSessionContext({
+    agentId: normalizedAgentId,
+    sessionId: normalizedSessionId
+  });
+
   logEvent(commandLogger, "info", "file.read.requested", {
     agentId: normalizedAgentId,
     sessionId: normalizedSessionId,
     filePath: normalizedFilePath,
+    sessionStatus: fileSessionContext?.status || "",
+    hasBaseCwd: Boolean(fileSessionContext?.baseCwd || requestedBaseCwd),
     userId: user.id,
     username: user.username
   });
@@ -2593,11 +2632,49 @@ async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePat
       user,
       authCodeBinding,
       sessionId: normalizedSessionId,
-      filePath: normalizedFilePath
+      filePath: normalizedFilePath,
+      baseCwd: fileSessionContext?.baseCwd || requestedBaseCwd || ""
     });
   } catch (error) {
     throw createHttpError(error.statusCode || 500, error.message || "远程读取文件失败");
   }
+}
+
+async function resolveRemoteFileSessionContext({ agentId, sessionId }) {
+  const normalizedAgentId = String(agentId || "").trim();
+  const normalizedSessionId = String(sessionId || "").trim();
+
+  if (!normalizedSessionId) {
+    return null;
+  }
+
+  const activeSession = terminalSessionStore.get(normalizedSessionId);
+  const storedSession =
+    activeSession || (await terminalSessionHistoryService.getBySessionId(normalizedSessionId));
+  const session = activeSession || storedSession;
+
+  if (!session) {
+    logEvent(commandLogger, "warn", "file.read.session_context_missing", {
+      agentId: normalizedAgentId,
+      sessionId: normalizedSessionId
+    });
+    return null;
+  }
+
+  const sessionAgentId = String(session.agentId || "").trim();
+
+  if (sessionAgentId && sessionAgentId !== normalizedAgentId) {
+    throw createHttpError(403, "终端会话不属于当前 agent");
+  }
+
+  const shouldUseStoredCwd =
+    !activeSession || isTerminalSessionClosedStatus(activeSession.status);
+
+  return {
+    sessionId: normalizedSessionId,
+    status: String(session.status || ""),
+    baseCwd: shouldUseStoredCwd ? String(session.cwd || "").trim() : ""
+  };
 }
 
 async function handleBrowserMessage(socket, raw) {
@@ -2636,8 +2713,25 @@ async function handleBrowserTerminalSessionInput(socket, payload) {
   const sessionId = String(payload?.sessionId || "").trim();
   const input = String(payload?.input || "");
   const logicalInput = String(payload?.logicalInput || "");
+  const inputDiagnostics = createTerminalInputDiagnostics(input, logicalInput);
+
+  logEvent(commandLogger, "info", "terminal.session.input_received", {
+    inputId,
+    sessionId,
+    userId: socket.auth.user.id,
+    username: socket.auth.user.username,
+    ...inputDiagnostics
+  });
 
   if (!inputId || !sessionId || !input) {
+    logEvent(commandLogger, "warn", "terminal.session.input_invalid", {
+      inputId,
+      sessionId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      reason: "missing_required_field",
+      ...inputDiagnostics
+    });
     sendTerminalSessionInputAck(socket, {
       inputId,
       sessionId,
@@ -2650,6 +2744,15 @@ async function handleBrowserTerminalSessionInput(socket, payload) {
   const receipt = terminalSessionStore.getInputReceipt(sessionId, inputId);
 
   if (receipt) {
+    logEvent(commandLogger, "info", "terminal.session.input_duplicate", {
+      inputId,
+      sessionId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      receiptStatus: receipt.status || "",
+      receiptAcceptedAt: receipt.acceptedAt || "",
+      ...inputDiagnostics
+    });
     sendTerminalSessionInputAck(socket, {
       ...receipt,
       status: "duplicate",
@@ -2677,7 +2780,25 @@ async function handleBrowserTerminalSessionInput(socket, payload) {
     });
 
     sendTerminalSessionInputAck(socket, acceptedReceipt);
+    logEvent(commandLogger, "info", "terminal.session.input_dispatched", {
+      inputId,
+      sessionId,
+      agentId: session.agentId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      receiptStatus: acceptedReceipt.status,
+      ...inputDiagnostics
+    });
   } catch (error) {
+    logEvent(commandLogger, "warn", "terminal.session.input_rejected", {
+      inputId,
+      sessionId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      error: error.message || "terminal session input dispatch failed",
+      statusCode: error.statusCode || null,
+      ...inputDiagnostics
+    });
     sendTerminalSessionInputAck(socket, {
       inputId,
       sessionId,
@@ -2732,6 +2853,97 @@ function sendTerminalSessionInputAck(socket, payload) {
     acceptedAt: payload?.acceptedAt || null,
     error: String(payload?.error || "")
   });
+}
+
+function createTerminalInputDiagnostics(input, logicalInput = "") {
+  const text = String(input || "");
+  const logicalText = String(logicalInput || "");
+  const source = `${text}\n${logicalText}`;
+
+  return {
+    inputLength: text.length,
+    logicalInputLength: logicalText.length,
+    inputSha256: createTextSha256(text),
+    logicalInputSha256: logicalText ? createTextSha256(logicalText) : "",
+    lineBreakCount: countLineBreaks(text),
+    endsWithLineBreak: /[\r\n]$/.test(text),
+    commandKind: classifyTerminalInput(source),
+    containsCodexExec: /\bcodex\s+exec\b/i.test(source),
+    containsCodexAskForApproval: /--ask-for-approval\b/i.test(source),
+    containsRemoteClientMarker: /\[remote-client\]\s+codex\.exec\./i.test(source),
+    containsFinalStartMarker: /<<<FINAL>>>/.test(source),
+    containsFinalEndMarker: /<<<END_FINAL>>>/.test(source)
+  };
+}
+
+function createTerminalOutputDiagnostics(chunk) {
+  const text = String(chunk || "");
+  const cleaned = cleanTerminalText(text);
+  const source = `${text}\n${cleaned}`;
+  const containsCodexError = /\berror:\s/i.test(cleaned) || /unexpected argument/i.test(cleaned);
+  const containsCodexUsage = /Usage:\s+codex\s+exec/i.test(cleaned);
+  const containsRemoteClientMarker = /\[remote-client\]\s+codex\.exec\./i.test(source);
+  const containsUnexpectedArgument = /unexpected argument/i.test(cleaned);
+  const needsPreview =
+    containsCodexError ||
+    containsCodexUsage ||
+    containsUnexpectedArgument ||
+    containsRemoteClientMarker;
+
+  return {
+    outputSha256: createTextSha256(text),
+    containsCodexError,
+    containsCodexUsage,
+    containsUnexpectedArgument,
+    containsRemoteClientMarker,
+    containsCodexExecExitMarker: /\[remote-client\]\s+codex\.exec\.exit/i.test(source),
+    containsFinalStartMarker: /<<<FINAL>>>/.test(source),
+    containsFinalEndMarker: /<<<END_FINAL>>>/.test(source),
+    containsPowerShellPrompt: /(?:^|\n)PS\s+[^>\r\n]{1,160}>\s*$/m.test(cleaned),
+    diagnosticPreview: needsPreview ? createTerminalDiagnosticPreview(cleaned) : ""
+  };
+}
+
+function classifyTerminalInput(value) {
+  const text = String(value || "");
+
+  if (/\bcodex\s+exec\b/i.test(text)) {
+    return "codex_exec";
+  }
+
+  if (/\b(?:pwsh|powershell)(?:\.exe)?\b/i.test(text)) {
+    return "powershell";
+  }
+
+  if (/\b(?:cmd|cmd\.exe)\b/i.test(text)) {
+    return "cmd";
+  }
+
+  if (/\b(?:bash|sh|zsh)\b/i.test(text)) {
+    return "posix_shell";
+  }
+
+  return "terminal_input";
+}
+
+function createTerminalDiagnosticPreview(text) {
+  const redacted = redactDiagnosticText(text);
+  return redacted.length > 320 ? redacted.slice(-320) : redacted;
+}
+
+function redactDiagnosticText(text) {
+  return cleanTerminalText(text)
+    .replace(/[A-Za-z0-9+/]{120,}={0,2}/g, (match) => `<redacted-base64:${match.length}>`)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function createTextSha256(value) {
+  return createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+
+function countLineBreaks(value) {
+  return (String(value || "").match(/\r\n|\r|\n/g) || []).length;
 }
 
 function loadCommandDispatchContext(command) {
@@ -3189,11 +3401,11 @@ function looksLikePromptEchoContent(text) {
     return true;
   }
 
-  if (["与", "and", "正文"].includes(lowered) || ["与", "正文"].includes(value)) {
+  if (["与", "和", "and", "正文"].includes(lowered) || ["与", "和", "正文"].includes(value)) {
     return true;
   }
 
-  return /(用户请求|不要输出中间思考|最终只允许输出|标记包裹)/.test(value);
+  return /(用户请求|不要输出中间思考|最终只允许输出|标记包裹|输出规则|开始标记|结束标记|最终结果必须)/.test(value);
 }
 
 function isCommandRecordDeletable(status) {
@@ -3572,6 +3784,40 @@ async function handleTerminalSessionHistoryRequest(req, res) {
     res.json({ items });
   } catch (error) {
     logEvent(serverLogger, "error", "terminal.session.history_load_failed", {
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: "加载终端会话失败" });
+  }
+}
+
+async function handleTerminalSessionDetailRequest(req, res) {
+  const sessionId = String(req.params.sessionId || "").trim();
+
+  if (!sessionId) {
+    res.status(400).json({ message: "sessionId is required" });
+    return;
+  }
+
+  try {
+    const activeSession = terminalSessionStore.get(sessionId);
+    const storedSession = activeSession
+      ? null
+      : await terminalSessionHistoryService.getBySessionId(sessionId);
+    const session = activeSession || storedSession;
+
+    if (!session) {
+      res.status(404).json({ message: "会话不存在" });
+      return;
+    }
+
+    res.json({
+      item: activeSession ? serializeTerminalSession(activeSession) : storedSession
+    });
+  } catch (error) {
+    logEvent(serverLogger, "error", "terminal.session.detail_load_failed", {
+      sessionId,
       userId: req.auth.user.id,
       username: req.auth.user.username,
       error: error.message

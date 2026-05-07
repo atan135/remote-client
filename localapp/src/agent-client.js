@@ -596,7 +596,8 @@ export class AgentClient {
       });
       payload = unwrapped.payload;
       const result = await this.executionGateway.readTextFile(String(payload.filePath), {
-        sessionId: String(payload.sessionId || "")
+        sessionId: String(payload.sessionId || ""),
+        baseCwd: String(payload.baseCwd || "")
       });
 
       this.send(

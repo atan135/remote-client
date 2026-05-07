@@ -12,7 +12,9 @@ export class ExecutionGateway {
   }
 
   async readTextFile(filePath, options = {}) {
-    const baseCwd = await this.resolveRemoteFileBaseCwd(options.sessionId, filePath);
+    const baseCwd =
+      String(options.baseCwd || "").trim() ||
+      (await this.resolveRemoteFileBaseCwd(options.sessionId, filePath));
 
     return readTextFilePreview(filePath, {
       baseCwd,

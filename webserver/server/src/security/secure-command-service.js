@@ -213,6 +213,7 @@ export class SecureCommandService {
     agentId,
     sessionId,
     filePath,
+    baseCwd,
     operatorUser,
     authCodeBinding
   }) {
@@ -231,6 +232,7 @@ export class SecureCommandService {
         agentId,
         sessionId: String(sessionId || ""),
         filePath,
+        baseCwd: String(baseCwd || ""),
         issuedAt: sentAt,
         expiresAt,
         nonce: randomUUID()
@@ -239,7 +241,8 @@ export class SecureCommandService {
       expiresAt,
       metaExtra: {
         sessionId: String(sessionId || ""),
-        filePath
+        filePath,
+        hasBaseCwd: Boolean(String(baseCwd || "").trim())
       }
     });
   }

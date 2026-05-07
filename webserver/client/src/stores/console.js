@@ -918,8 +918,19 @@ export const useConsoleStore = defineStore("console", () => {
     }
   }
 
-  async function createTerminalSession() {
-    if (!selectedAgentId.value || !terminalProfile.value) {
+  async function createTerminalSession(options = {}) {
+    const requestedProfile = String(options?.profile || terminalProfile.value || "").trim();
+    const requestedCwd = String(
+      options && Object.prototype.hasOwnProperty.call(options, "cwd")
+        ? options.cwd
+        : terminalCwd.value
+    ).trim();
+    const profileConfig =
+      availableTerminalProfiles.value.find((item) => item.name === requestedProfile) || null;
+    const shouldSelect = options?.select !== false;
+    const shouldAutoOpen = options?.autoOpen !== false;
+
+    if (!selectedAgentId.value || !requestedProfile) {
       return false;
     }
 
@@ -928,10 +939,10 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     }
 
-    if (selectedTerminalProfileConfig.value?.isAvailable === false) {
+    if (profileConfig?.isAvailable === false) {
       wsState.error =
-        selectedTerminalProfileConfig.value.unavailableReason ||
-        `终端 profile 当前不可用: ${terminalProfile.value}`;
+        profileConfig.unavailableReason ||
+        `终端 profile 当前不可用: ${requestedProfile}`;
       return false;
     }
 
@@ -946,8 +957,8 @@ export const useConsoleStore = defineStore("console", () => {
         },
         body: JSON.stringify({
           agentId: selectedAgentId.value,
-          profile: terminalProfile.value,
-          cwd: terminalCwd.value.trim(),
+          profile: requestedProfile,
+          cwd: requestedCwd,
           env: {},
           cols: 120,
           rows: 30
@@ -967,12 +978,18 @@ export const useConsoleStore = defineStore("console", () => {
 
       if (payload.item) {
         upsertTerminalSession(payload.item);
-        selectedTerminalSessionId.value = payload.item.sessionId;
-        autoOpenTerminalSessionId.value = payload.item.sessionId;
+
+        if (shouldSelect) {
+          selectedTerminalSessionId.value = payload.item.sessionId;
+        }
+
+        if (shouldAutoOpen) {
+          autoOpenTerminalSessionId.value = payload.item.sessionId;
+        }
       }
 
       terminalInput.value = "";
-      return true;
+      return payload.item || true;
     } catch (error) {
       wsState.error = error.message;
       return false;
@@ -1022,12 +1039,14 @@ export const useConsoleStore = defineStore("console", () => {
   }
 
   async function openRemoteFile(payload = {}) {
+    const agentId = String(payload?.agentId || selectedAgentId.value || "").trim();
     const sessionId = String(
       payload?.sessionId || activeTerminalSession.value?.sessionId || ""
     ).trim();
     const filePath = String(payload?.filePath || remoteFilePath.value || "").trim();
+    const baseCwd = String(payload?.baseCwd || payload?.cwd || "").trim();
 
-    if (!selectedAgentId.value || !sessionId) {
+    if (!agentId || !sessionId) {
       return false;
     }
 
@@ -1051,9 +1070,10 @@ export const useConsoleStore = defineStore("console", () => {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          agentId: selectedAgentId.value,
+          agentId,
           sessionId,
-          filePath
+          filePath,
+          baseCwd
         })
       });
 
@@ -1070,7 +1090,7 @@ export const useConsoleStore = defineStore("console", () => {
 
       remoteFileViewer.value = normalizeRemoteFileViewer(result.item, sessionId);
       remoteFilePath.value = remoteFileViewer.value.filePath || filePath;
-      return true;
+      return remoteFileViewer.value;
     } catch (error) {
       remoteFileError.value = error.message;
       return false;
@@ -2577,21 +2597,61 @@ export const useConsoleStore = defineStore("console", () => {
 
     if (prefersFinalAnswerView(sessionRecord)) {
       const markers = normalizeFinalOutputMarkers(sessionRecord?.finalOutputMarkers);
-      const wrapped = markers
-        ? [
-            "请直接完成下面的用户请求，不要输出中间思考、分析过程、计划或工具调用解释。",
-            `最终只允许输出以下标记包裹的结果正文：${markers.start} 与 ${markers.end}。`,
-            "如果需要代码、命令或步骤，请直接写在最终结果正文中。",
-            "",
-            "用户请求：",
-            normalizedInput
-          ].join("\n")
-        : normalizedInput;
+      const wrapped = markers ? buildFinalAnswerPrompt(markers, normalizedInput) : normalizedInput;
+
+      if (isCodexExecShellSession(sessionRecord)) {
+        return buildCodexExecShellInput(wrapped);
+      }
 
       return /[\r\n]$/.test(wrapped) ? wrapped : `${wrapped}\r`;
     }
 
     return /[\r\n]$/.test(normalizedInput) ? normalizedInput : `${normalizedInput}\r`;
+  }
+
+  function buildFinalAnswerPrompt(markers, input) {
+    return [
+      "请直接完成用户请求，不要输出中间思考、计划、工具调用解释或执行日志。",
+      `最终结果必须用开始标记和结束标记包裹；开始标记为 ${markers.start}；结束标记为 ${markers.end}；两个标记都必须单独占一行。`,
+      "如果结果适合在聊天框直接阅读，请在标记内返回 100 字以内摘要。",
+      "如果结果超过 100 个中文字符，或包含代码块、日志、表格、清单、长命令输出、多步骤方案、详细分析、需要保存或反复查看的内容，请写入当前工作目录下 .remote-client/codex-results/codex-YYYYMMDD-HHmmss.md，并在标记内只返回文件路径。",
+      "标记内不要返回额外说明。",
+      "",
+      "用户请求：",
+      input
+    ].join("\n");
+  }
+
+  function buildCodexExecShellInput(prompt) {
+    const promptBase64 = encodeUtf8Base64(prompt);
+    const promptBase64Length = promptBase64.length;
+    const command = [
+      `$__rcPromptBase64 = '${promptBase64}'`,
+      "$__rcPrompt = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($__rcPromptBase64))",
+      `Write-Output "[remote-client] codex.exec.start promptBase64Chars=${promptBase64Length}"`,
+      "$__rcPrompt | codex exec --skip-git-repo-check --color never",
+      "$__rcExitCode = if ($null -ne $LASTEXITCODE) { $LASTEXITCODE } else { 0 }",
+      'Write-Output ("[remote-client] codex.exec.exit code={0}" -f $__rcExitCode)',
+      "Remove-Variable __rcPrompt,__rcPromptBase64,__rcExitCode -ErrorAction SilentlyContinue"
+    ].join("; ");
+
+    return `${command}\r`;
+  }
+
+  function isCodexExecShellSession(sessionRecord) {
+    return /codex/i.test(`${sessionRecord?.profile || ""} ${sessionRecord?.profileLabel || ""}`);
+  }
+
+  function encodeUtf8Base64(value) {
+    const bytes = new TextEncoder().encode(String(value || ""));
+    const chunkSize = 0x8000;
+    let binary = "";
+
+    for (let index = 0; index < bytes.length; index += chunkSize) {
+      binary += String.fromCharCode(...bytes.slice(index, index + chunkSize));
+    }
+
+    return btoa(binary);
   }
 
   function prefersFinalAnswerView(sessionRecord) {

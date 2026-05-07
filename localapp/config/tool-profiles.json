@@ -22,8 +22,13 @@
     "codex_code_session": {
       "label": "Codex CLI",
       "runner": "pty",
-      "command": "codex",
-      "argsTemplate": [],
+      "command": "pwsh",
+      "argsTemplate": [
+        "-NoLogo",
+        "-NoExit",
+        "-Command",
+        "[Console]::InputEncoding=[System.Text.Encoding]::UTF8; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8"
+      ],
       "cwdPolicy": "allowlist",
       "outputMode": "final_only",
       "finalOutputMarkers": {
@@ -39,6 +44,8 @@
         "HTTPS_PROXY",
         "NO_PROXY"
       ],
+      "kind": "cli",
+      "description": "Run Codex non-interactively through codex exec in a persistent PowerShell session.",
       "idleTimeoutMs": 1800000
     }
   }
