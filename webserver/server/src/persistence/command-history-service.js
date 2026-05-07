@@ -329,15 +329,23 @@ export function createCommandOutputPreview(text) {
     return "";
   }
 
-  const normalized = value.trim();
+  const normalized = trimTrailingOutput(value);
 
   if (normalized.length <= 4000) {
     return normalized;
   }
 
-  const head = normalized.slice(0, 2000).trimEnd();
-  const tail = normalized.slice(-1600).trimStart();
+  const head = trimTrailingOutput(normalized.slice(0, 2000));
+  const tail = trimLeadingOutputBreaks(normalized.slice(-1600));
   return `${head}\n\n...[truncated ${normalized.length - 3600} chars]...\n\n${tail}`.slice(0, 4000);
+}
+
+function trimTrailingOutput(value) {
+  return String(value || "").replace(/[\r\n]+$/g, "");
+}
+
+function trimLeadingOutputBreaks(value) {
+  return String(value || "").replace(/^[\r\n]+/g, "");
 }
 
 function clampText(value, maxLength) {

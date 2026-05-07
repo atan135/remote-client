@@ -61,8 +61,8 @@ const agentById = computed(
 
 const clearButtonText = computed(() =>
   props.timelineFilterAgentId && props.timelineFilterAgentId !== "all"
-    ? "清空当前设备记录"
-    : "一键清空全部记录"
+    ? "清空当前设备"
+    : "清空已结束记录"
 );
 
 watch(
@@ -175,6 +175,10 @@ function resolveShellLabel(shellValue) {
   }
 }
 
+function formatExitCode(value) {
+  return value ?? "-";
+}
+
 function formatCreatedAt(value) {
   const normalizedValue = String(value || "");
 
@@ -242,18 +246,9 @@ function formatCreatedAt(value) {
           <div class="timeline-summary-top">
             <h3 :title="item.command">{{ item.command }}</h3>
             <div class="timeline-summary-top-actions">
-              <el-button
-                v-if="canDeleteCommand(item)"
-                round
-                plain
-                type="danger"
-                size="small"
-                :loading="deletingCommandRequestId === item.requestId"
-                @click="emit('delete-command', item.requestId)"
-              >
-                删除
-              </el-button>
-              <el-tag :type="statusType(item.status)" effect="dark" round>{{ item.status }}</el-tag>
+              <el-tag class="timeline-status-tag" :type="statusType(item.status)" effect="dark" round>
+                {{ item.status }}
+              </el-tag>
             </div>
           </div>
 
@@ -271,7 +266,7 @@ function formatCreatedAt(value) {
             </span>
             <span class="timeline-summary-item">
               <span class="timeline-summary-label">退出码</span>
-              <strong>{{ item.exitCode ?? "-" }}</strong>
+              <strong>{{ formatExitCode(item.exitCode) }}</strong>
             </span>
             <span class="timeline-summary-item">
               <span class="timeline-summary-label">Shell</span>
@@ -281,6 +276,20 @@ function formatCreatedAt(value) {
               <span class="timeline-summary-label">安全</span>
               <strong>{{ item.secureStatus || "-" }}</strong>
             </span>
+          </div>
+
+          <div class="timeline-summary-footer">
+            <el-button
+              v-if="canDeleteCommand(item)"
+              class="timeline-delete-button"
+              link
+              type="danger"
+              :loading="deletingCommandRequestId === item.requestId"
+              @click="emit('delete-command', item.requestId)"
+            >
+              删除
+            </el-button>
+            <span v-else></span>
             <button
               class="timeline-toggle"
               type="button"
