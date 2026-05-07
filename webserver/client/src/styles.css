@@ -1532,7 +1532,7 @@ textarea {
   font-size: 12px;
 }
 
-.chat-file-dialog.el-dialog {
+.remote-file-dialog.el-dialog {
   max-width: calc(100vw - 24px);
   overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.12);
@@ -1543,42 +1543,43 @@ textarea {
   box-shadow: 0 24px 72px rgba(0, 0, 0, 0.45);
 }
 
-.chat-file-dialog .el-dialog__header {
+.remote-file-dialog .el-dialog__header {
   margin: 0;
   padding: 16px 18px;
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.chat-file-dialog .el-dialog__body {
+.remote-file-dialog .el-dialog__body {
   padding: 0;
 }
 
-.chat-file-dialog-head {
+.remote-file-dialog-head {
   display: grid;
   gap: 4px;
   min-width: 0;
   padding-right: 28px;
 }
 
-.chat-file-dialog-head strong {
+.remote-file-dialog-head strong {
   color: var(--text);
   font-size: 16px;
 }
 
-.chat-file-dialog-head small {
+.remote-file-dialog-head small {
   color: var(--text-dim);
   overflow-wrap: anywhere;
 }
 
-.chat-file-dialog-body {
+.remote-file-dialog-body {
   display: flex;
   flex-direction: column;
   min-height: 320px;
   max-height: min(78vh, 820px);
 }
 
-.chat-file-dialog-meta {
+.remote-file-dialog-meta {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   padding: 10px 18px;
@@ -1587,7 +1588,50 @@ textarea {
   font-size: 12px;
 }
 
-.chat-file-dialog-body pre {
+.remote-file-meta-collapse {
+  border-top: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.remote-file-meta-collapse .el-collapse-item__header,
+.remote-file-meta-collapse .el-collapse-item__wrap,
+.remote-file-meta-collapse .el-collapse-item__content {
+  background: transparent;
+}
+
+.remote-file-meta-collapse .el-collapse-item__header {
+  min-height: 34px;
+  padding: 0 18px;
+  border-bottom: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.remote-file-meta-collapse .el-collapse-item__wrap {
+  border-bottom: 0;
+}
+
+.remote-file-meta-collapse .el-collapse-item__content {
+  padding: 0 18px 12px;
+}
+
+.remote-file-meta {
+  gap: 8px;
+}
+
+.remote-file-meta .detail-row-wrap {
+  display: grid;
+  justify-content: stretch;
+  gap: 6px;
+}
+
+.remote-file-meta .detail-row-wrap span,
+.remote-file-meta .detail-row-wrap strong {
+  min-width: 0;
+}
+
+.remote-file-dialog-body > pre,
+.remote-file-markdown {
   flex: 1 1 auto;
   min-height: 0;
   margin: 0;
@@ -1598,7 +1642,95 @@ textarea {
   font-family: "Cascadia Code", Consolas, "Liberation Mono", monospace;
   font-size: 13px;
   line-height: 1.55;
-  white-space: pre;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  scrollbar-width: thin;
+}
+
+.remote-file-markdown {
+  font-family: inherit;
+  line-height: 1.72;
+}
+
+.remote-file-markdown > :first-child {
+  margin-top: 0;
+}
+
+.remote-file-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.remote-file-markdown h1,
+.remote-file-markdown h2,
+.remote-file-markdown h3,
+.remote-file-markdown h4,
+.remote-file-markdown h5,
+.remote-file-markdown h6 {
+  margin: 1.3em 0 0.55em;
+  line-height: 1.35;
+}
+
+.remote-file-markdown p,
+.remote-file-markdown ul,
+.remote-file-markdown ol,
+.remote-file-markdown blockquote {
+  margin: 0 0 1em;
+}
+
+.remote-file-markdown ul,
+.remote-file-markdown ol {
+  padding-left: 1.3em;
+}
+
+.remote-file-markdown li + li {
+  margin-top: 0.35em;
+}
+
+.remote-file-markdown a {
+  color: #8fc0ff;
+}
+
+.remote-file-markdown code {
+  padding: 0.14em 0.38em;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.remote-file-markdown pre {
+  margin: 1em 0;
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.remote-file-markdown pre code {
+  display: block;
+  padding: 0;
+  background: transparent;
+}
+
+.remote-file-markdown blockquote {
+  padding-left: 12px;
+  border-left: 3px solid rgba(242, 166, 90, 0.5);
+  color: rgba(238, 243, 248, 0.84);
+}
+
+.remote-file-markdown hr {
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin: 1.2em 0;
+}
+
+.remote-file-empty {
+  padding: 16px 18px;
 }
 
 .chat-action-buttons {
@@ -1893,6 +2025,113 @@ textarea {
     grid-template-columns: 1fr;
   }
 
+  .home-page {
+    gap: 8px;
+  }
+
+  .home-page .hero-card > .el-card__body {
+    padding: 14px 16px;
+  }
+
+  .home-page .hero-card h2 {
+    margin-bottom: 12px;
+    font-size: 1.35rem;
+    line-height: 1.15;
+  }
+
+  .home-page .hero-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    gap: 8px;
+    margin-top: 0;
+  }
+
+  .home-page .hero-actions .el-button {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0 !important;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .home-page .metrics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .home-page .metric-card {
+    min-height: auto;
+  }
+
+  .home-page .metric-card > .el-card__body {
+    padding: 12px;
+  }
+
+  .home-page .metric-card strong {
+    margin: 4px 0;
+    font-size: 1.45rem;
+    line-height: 1.12;
+    overflow-wrap: anywhere;
+  }
+
+  .home-page .metric-card span,
+  .home-page .metric-card small {
+    font-size: 12px;
+    line-height: 1.3;
+  }
+
+  .home-page .metric-card:nth-child(3) {
+    grid-column: 1 / -1;
+  }
+
+  .home-page .metric-card:nth-child(3) > .el-card__body {
+    display: grid;
+    gap: 4px;
+  }
+
+  .home-page .home-stack-grid {
+    gap: 8px;
+  }
+
+  .home-page .info-card > .el-card__body {
+    padding: 12px;
+  }
+
+  .home-page .card-head {
+    align-items: center;
+    flex-direction: row;
+    margin-bottom: 8px;
+  }
+
+  .home-page .card-head h3 {
+    margin: 0;
+    font-size: 1rem;
+    line-height: 1.25;
+  }
+
+  .home-page .list-grid {
+    gap: 8px;
+  }
+
+  .home-page .settings-item {
+    padding: 10px 12px;
+    border-radius: 12px;
+  }
+
+  .home-page .detail-grid {
+    gap: 8px;
+  }
+
+  .home-page .detail-row {
+    align-items: center;
+    flex-direction: row;
+    padding: 8px 10px;
+  }
+
+  .home-page .compact-stack {
+    margin-top: 10px;
+  }
+
   .surface-card > .el-card__body {
     padding: 16px;
   }
@@ -2008,22 +2247,118 @@ textarea {
     width: 100%;
   }
 
+  .chat-page {
+    min-height: auto;
+    gap: 8px;
+    padding-bottom: 8px;
+  }
+
+  .chat-toolbar-card > .el-card__body,
+  .chat-main-card > .el-card__body {
+    padding: 12px;
+  }
+
+  .chat-toolbar {
+    gap: 10px;
+  }
+
+  .chat-device-field,
+  .chat-shell-field,
+  .chat-ai-profile-field,
+  .chat-ai-cwd-field,
+  .chat-ai-history-field {
+    flex: none;
+    width: 100%;
+    margin-top: 0;
+  }
+
+  .chat-ai-session-bar {
+    margin-top: 10px;
+    padding-top: 10px;
+  }
+
+  .chat-ai-session-bar .hero-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    width: 100%;
+    gap: 8px;
+    margin-top: 0;
+  }
+
+  .chat-ai-session-bar .hero-actions .el-button {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0 !important;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
   .chat-state-tags,
   .chat-action-tags {
     justify-content: flex-start;
   }
 
   .chat-message-list {
-    min-height: 320px;
-    max-height: min(58vh, 560px);
+    min-height: 210px;
+    max-height: min(46dvh, 420px);
   }
 
   .chat-bubble {
-    max-width: 94%;
+    max-width: 100%;
   }
 
   .chat-action-card {
     width: 100%;
+    padding: 10px;
+    border-radius: 12px;
+  }
+
+  .chat-shortcuts {
+    max-height: 118px;
+    overflow-y: auto;
+    padding-right: 2px;
+    scrollbar-width: thin;
+  }
+
+  .chat-shortcut {
+    min-height: 30px;
+    padding: 5px 9px;
+    font-size: 14px;
+  }
+
+  .remote-file-dialog.el-dialog {
+    display: flex;
+    flex-direction: column;
+    width: 100vw !important;
+    max-width: 100vw;
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0 !important;
+    border-radius: 0;
+  }
+
+  .remote-file-dialog .el-dialog__header {
+    flex: 0 0 auto;
+    padding: 16px;
+  }
+
+  .remote-file-dialog .el-dialog__body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .remote-file-dialog-body {
+    min-height: 0;
+    max-height: none;
+    height: 100%;
+  }
+
+  .remote-file-dialog-body > pre,
+  .remote-file-markdown {
+    padding: 14px 16px calc(18px + env(safe-area-inset-bottom, 0px));
+    font-size: 12px;
+    line-height: 1.6;
   }
 
   .chat-composer .el-button {

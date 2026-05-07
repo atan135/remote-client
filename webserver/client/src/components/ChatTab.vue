@@ -6,13 +6,13 @@ import {
   ElCard,
   ElCollapse,
   ElCollapseItem,
-  ElDialog,
   ElInput,
   ElMessageBox,
   ElOption,
   ElSelect,
   ElTag
 } from "element-plus";
+import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
 
 const CHAT_OUTPUT_PREVIEW_LIMIT = 1200;
 const CHAT_AI_LONG_TEXT_HINT_LIMIT = 300;
@@ -709,28 +709,6 @@ async function openAiFile(message) {
 function showAiFileViewer(viewer) {
   activeAiFileViewer.value = viewer || null;
   aiFileDialogVisible.value = Boolean(viewer);
-}
-
-function getAiFileViewerTitle(viewer) {
-  return String(viewer?.resolvedPath || viewer?.filePath || "文件预览");
-}
-
-function getAiFileViewerMeta(viewer) {
-  const parts = [];
-
-  if (viewer?.encoding) {
-    parts.push(`编码 ${viewer.encoding}`);
-  }
-
-  if (Number(viewer?.bytesRead || 0) > 0) {
-    parts.push(`读取 ${viewer.bytesRead} / ${viewer.totalBytes || viewer.bytesRead} 字节`);
-  }
-
-  if (viewer?.truncated) {
-    parts.push("内容已截断");
-  }
-
-  return parts.join(" · ");
 }
 
 function applyAiFinalText(session) {
@@ -1620,27 +1598,9 @@ watch(
       </div>
     </el-card>
 
-    <el-dialog
+    <RemoteFilePreviewDialog
       v-model="aiFileDialogVisible"
-      append-to-body
-      class="chat-file-dialog"
-      destroy-on-close
-      top="5vh"
-      width="min(1120px, 92vw)"
-    >
-      <template #header>
-        <div class="chat-file-dialog-head">
-          <strong>文件预览</strong>
-          <small>{{ getAiFileViewerTitle(activeAiFileViewer) }}</small>
-        </div>
-      </template>
-
-      <div v-if="activeAiFileViewer" class="chat-file-dialog-body">
-        <div class="chat-file-dialog-meta">
-          <span>{{ getAiFileViewerMeta(activeAiFileViewer) || "文本文件" }}</span>
-        </div>
-        <pre>{{ activeAiFileViewer.content }}</pre>
-      </div>
-    </el-dialog>
+      :viewer="activeAiFileViewer"
+    />
   </section>
 </template>

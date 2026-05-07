@@ -48,7 +48,7 @@ function statusType(status) {
 </script>
 
 <template>
-  <section class="page">
+  <section class="page home-page">
     <el-card class="surface-card hero-card" shadow="never">
       <h2>{{ displayName || "控制台" }}</h2>
       <p v-if="!wsConnected" class="hero-copy">

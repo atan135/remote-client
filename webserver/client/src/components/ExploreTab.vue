@@ -14,14 +14,8 @@ import {
   ElTabs,
   ElTag
 } from "element-plus";
-import MarkdownIt from "markdown-it";
+import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
 import TerminalEmulator from "./TerminalEmulator.vue";
-
-const markdownRenderer = new MarkdownIt({
-  html: false,
-  linkify: true,
-  breaks: true
-});
 
 const props = defineProps({
   agents: {
@@ -160,6 +154,7 @@ const sessionScreen = ref("main");
 const detailSessionId = ref("");
 const sessionMetaPanels = ref([]);
 const devicePanels = ref([]);
+const remoteFileDialogVisible = ref(false);
 
 const currentSession = computed(
   () =>
@@ -315,42 +310,6 @@ const currentRemoteFileViewer = computed(() => {
 
   return viewer;
 });
-const remoteFileMetaPanels = ref([]);
-const isMarkdownFile = computed(() => {
-  const viewer = currentRemoteFileViewer.value;
-  const targetPath = String(viewer?.resolvedPath || viewer?.filePath || "");
-  return /\.(md|markdown|mdown|mkd|mkdn)$/i.test(targetPath);
-});
-const remoteFileSummary = computed(() => {
-  const viewer = currentRemoteFileViewer.value;
-
-  if (!viewer) {
-    return "";
-  }
-
-  const encoding = String(viewer.encoding || "utf8");
-  const sizeText = `${Number(viewer.bytesRead || 0)} / ${Number(viewer.totalBytes || 0)} 字节`;
-  const modifiedAt = viewer.modifiedAt ? formatCompactDateTime(viewer.modifiedAt) : "修改时间未知";
-  const extra = viewer.truncated ? "，已截断" : "";
-  return `${encoding} · ${sizeText} · ${modifiedAt}${extra}`;
-});
-const renderedRemoteFileHtml = computed(() => {
-  if (!currentRemoteFileViewer.value || !isMarkdownFile.value) {
-    return "";
-  }
-
-  return markdownRenderer.render(String(currentRemoteFileViewer.value.content || ""));
-});
-const shouldShowResolvedPathSeparately = computed(() => {
-  const viewer = currentRemoteFileViewer.value;
-
-  if (!viewer) {
-    return false;
-  }
-
-  return String(viewer.filePath || "").trim() !== String(viewer.resolvedPath || "").trim();
-});
-
 const rawTerminalPanels = ref(["raw"]);
 
 function createPresetCommandKey(label, command, index) {
@@ -462,10 +421,6 @@ function goBackToSessionList() {
   sessionScreen.value = "main";
 }
 
-function goBackToSessionDetail() {
-  sessionScreen.value = currentSession.value ? "detail" : "main";
-}
-
 function openRemoteFileViewer() {
   if (!currentSession.value) {
     return;
@@ -536,7 +491,7 @@ watch(currentSession, (session) => {
     return;
   }
 
-  if (sessionScreen.value === "detail" || sessionScreen.value === "file") {
+  if (sessionScreen.value === "detail") {
     sessionScreen.value = "main";
   }
 
@@ -549,39 +504,9 @@ watch(currentSession, (session) => {
 watch(
   () => currentRemoteFileViewer.value?.openedAt || "",
   (openedAt) => {
-    if (openedAt) {
-      sessionScreen.value = "file";
-      return;
-    }
-
-    if (sessionScreen.value === "file") {
-      sessionScreen.value = currentSession.value ? "detail" : "main";
-    }
+    remoteFileDialogVisible.value = Boolean(openedAt);
   }
 );
-
-watch(
-  () => currentRemoteFileViewer.value?.requestId || "",
-  () => {
-    remoteFileMetaPanels.value = [];
-  }
-);
-
-function formatCompactDateTime(value) {
-  const time = Date.parse(String(value || ""));
-
-  if (!Number.isFinite(time)) {
-    return String(value || "");
-  }
-
-  return new Date(time).toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
 </script>
 
 <template>
@@ -872,81 +797,6 @@ function formatCompactDateTime(value) {
       </div>
     </el-card>
 
-    <el-card v-else class="surface-card info-card explore-session-detail-card" shadow="never">
-      <div class="explore-session-screen explore-file-screen">
-        <div class="profile-screen-top explore-session-detail-top">
-          <el-button class="back-button" round plain @click="goBackToSessionDetail">
-            返回终端
-          </el-button>
-          <div class="explore-session-top-actions">
-            <el-tag effect="dark" round>文件预览</el-tag>
-            <el-tag v-if="currentRemoteFileViewer?.truncated" type="warning" effect="dark" round>
-              已截断
-            </el-tag>
-          </div>
-        </div>
-
-        <div v-if="currentRemoteFileViewer" class="console-block explore-file-viewer">
-          <h4>目标文件内容</h4>
-          <div class="explore-file-summary-row">
-            <p class="muted explore-file-summary-text">
-              {{ remoteFileSummary }}
-            </p>
-            <el-tag v-if="isMarkdownFile" type="success" effect="dark" round>
-              Markdown
-            </el-tag>
-          </div>
-
-          <el-collapse v-model="remoteFileMetaPanels" class="explore-file-meta-collapse">
-            <el-collapse-item name="meta" title="路径与文件详情">
-              <div class="detail-grid explore-file-meta">
-                <div class="detail-row detail-row-wrap">
-                  <span>{{ shouldShowResolvedPathSeparately ? "输入路径" : "文件路径" }}</span>
-                  <strong class="detail-value-wrap">
-                    {{
-                      shouldShowResolvedPathSeparately
-                        ? currentRemoteFileViewer.filePath
-                        : currentRemoteFileViewer.resolvedPath || currentRemoteFileViewer.filePath || "-"
-                    }}
-                  </strong>
-                </div>
-                <div v-if="shouldShowResolvedPathSeparately" class="detail-row detail-row-wrap">
-                  <span>实际路径</span>
-                  <strong class="detail-value-wrap">{{ currentRemoteFileViewer.resolvedPath || "-" }}</strong>
-                </div>
-                <div class="detail-row">
-                  <span>编码</span>
-                  <strong>{{ currentRemoteFileViewer.encoding || "-" }}</strong>
-                </div>
-                <div class="detail-row">
-                  <span>读取字节</span>
-                  <strong>{{ currentRemoteFileViewer.bytesRead }}</strong>
-                </div>
-                <div class="detail-row">
-                  <span>文件总字节</span>
-                  <strong>{{ currentRemoteFileViewer.totalBytes }}</strong>
-                </div>
-                <div class="detail-row detail-row-wrap">
-                  <span>修改时间</span>
-                  <strong class="detail-value-wrap">{{ currentRemoteFileViewer.modifiedAt || "-" }}</strong>
-                </div>
-              </div>
-            </el-collapse-item>
-          </el-collapse>
-
-          <div v-if="isMarkdownFile && currentRemoteFileViewer.content" class="explore-file-markdown"
-            v-html="renderedRemoteFileHtml" />
-          <pre v-else-if="currentRemoteFileViewer.content">{{ currentRemoteFileViewer.content }}</pre>
-          <p v-else class="muted explore-transcript-empty">文件内容为空。</p>
-        </div>
-
-        <div v-else class="console-block error">
-          <h4>File Error</h4>
-          <pre>当前文件预览不可用，请返回终端后重新打开。</pre>
-        </div>
-      </div>
-    </el-card>
-
     <el-card class="surface-card info-card explore-device-card" shadow="never">
       <el-collapse v-model="devicePanels" class="explore-device-collapse">
         <el-collapse-item name="device">
@@ -972,5 +822,10 @@ function formatCompactDateTime(value) {
         </el-collapse-item>
       </el-collapse>
     </el-card>
+
+    <RemoteFilePreviewDialog
+      v-model="remoteFileDialogVisible"
+      :viewer="currentRemoteFileViewer"
+    />
   </section>
 </template>
