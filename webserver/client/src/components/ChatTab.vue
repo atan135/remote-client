@@ -117,6 +117,7 @@ const aiFileDialogVisible = ref(false);
 const activeAiFileViewer = ref(null);
 const activeCommandDetailMessageId = ref("");
 const messageListRef = ref(null);
+const advancedPanels = ref([]);
 let messageSeed = 0;
 const messages = ref([createSystemMessage("选择在线设备后，可以通过确认卡下发安全命令。")]);
 
@@ -281,11 +282,98 @@ const activeAgentStatusText = computed(() => {
     return "未选择设备";
   }
 
-  return props.activeAgent?.status === "online" ? "online" : props.activeAgent?.status || "offline";
+  if (!props.activeAgent) {
+    return "未上报";
+  }
+
+  return props.activeAgent.status === "online" ? "在线" : props.activeAgent.status || "离线";
 });
 
 const authCodeStatusType = computed(() => (props.activeAuthCodeBinding ? "success" : "danger"));
 const authCodeStatusText = computed(() => (props.activeAuthCodeBinding ? "已绑定公钥" : "缺少公钥"));
+
+const activeAgentDisplayName = computed(
+  () => props.activeAgent?.label || props.activeAgent?.agentId || props.selectedAgentId || "未选择设备"
+);
+
+const activeAgentSubtext = computed(() => {
+  const agentId = String(props.activeAgent?.agentId || props.selectedAgentId || "").trim();
+  const label = String(props.activeAgent?.label || "").trim();
+
+  if (!agentId) {
+    return "请在高级选项中选择目标设备";
+  }
+
+  return label && label !== agentId ? agentId : "当前目标";
+});
+
+const activeAgentOnline = computed(() => props.activeAgent?.status === "online");
+
+const chatModeLabel = computed(() => (chatMode.value === CHAT_MODE_CODEX ? "Codex 会话" : "普通会话"));
+
+const visibleHistoryCount = computed(() => messages.value.filter((item) => item.role !== "system").length);
+
+const latestActionMessage = computed(() => {
+  for (let index = messages.value.length - 1; index >= 0; index -= 1) {
+    const message = messages.value[index];
+
+    if (message?.role === "action") {
+      return message;
+    }
+  }
+
+  return null;
+});
+
+const executionStatus = computed(() => {
+  if (chatMode.value === CHAT_MODE_CODEX) {
+    if (props.creatingTerminalSession) {
+      return {
+        type: "warning",
+        text: "Codex 启动中"
+      };
+    }
+
+    if (props.sendingTerminalInput || chatAiPendingMessageId.value) {
+      return {
+        type: "warning",
+        text: "等待 Codex"
+      };
+    }
+
+    if (currentAiSession.value) {
+      return {
+        type: statusType(currentAiSession.value.status),
+        text: `Codex ${currentAiSessionStatus.value}`
+      };
+    }
+
+    return {
+      type: "info",
+      text: "Codex 未启动"
+    };
+  }
+
+  if (props.submitting) {
+    return {
+      type: "warning",
+      text: "命令提交中"
+    };
+  }
+
+  if (latestActionMessage.value) {
+    const status = resolveMessageStatus(latestActionMessage.value);
+    return {
+      type: statusType(status),
+      text: statusText(status)
+    };
+  }
+
+  return {
+    type: "info",
+    text: "等待输入"
+  };
+});
 
 const canSend = computed(() => {
   if (!chatInput.value.trim()) {
@@ -1315,121 +1403,163 @@ watch(
 
 <template>
   <section class="page chat-page">
-    <el-card class="surface-card section-banner tab-banner" shadow="never">
-      <h2>对话控制台</h2>
-    </el-card>
-
     <el-card class="surface-card chat-toolbar-card" shadow="never">
-      <div class="chat-mode-switch" role="group" aria-label="会话类型">
-        <button
-          type="button"
-          :class="{ active: chatMode === CHAT_MODE_NORMAL }"
-          @click="chatMode = CHAT_MODE_NORMAL"
-        >
-          普通会话
-        </button>
-        <button
-          type="button"
-          :class="{ active: chatMode === CHAT_MODE_CODEX }"
-          @click="chatMode = CHAT_MODE_CODEX"
-        >
-          Codex 会话
-        </button>
-      </div>
+      <div class="chat-context-main">
+        <div class="chat-target-summary">
+          <span class="chat-target-dot" :class="{ online: activeAgentOnline }"></span>
+          <div class="chat-target-copy">
+            <span>当前设备</span>
+            <strong>{{ activeAgentDisplayName }}</strong>
+            <small>{{ activeAgentSubtext }}</small>
+          </div>
+          <div class="chat-state-tags">
+            <el-tag :type="activeAgentStatusType" effect="plain" round>{{ activeAgentStatusText }}</el-tag>
+            <el-tag :type="authCodeStatusType" effect="plain" round>{{ authCodeStatusText }}</el-tag>
+            <el-tag :type="wsConnected ? 'success' : 'warning'" effect="plain" round>
+              {{ wsConnected ? "实时同步" : "重连中" }}
+            </el-tag>
+          </div>
+        </div>
 
-      <div class="chat-toolbar">
-        <label class="field-block field-block-tight chat-device-field">
-          <span>目标设备</span>
-          <el-select
-            :model-value="selectedAgentId"
-            placeholder="请选择设备"
-            filterable
-            @update:model-value="emit('update:selectedAgentId', $event)"
-          >
-            <el-option
-              v-for="agent in agents"
-              :key="agent.agentId"
-              :label="`${agent.label} / ${agent.agentId}`"
-              :value="agent.agentId"
-            />
-          </el-select>
-        </label>
-
-        <label v-if="chatMode === CHAT_MODE_NORMAL" class="field-block field-block-tight chat-shell-field">
-          <span>执行 Shell</span>
-          <el-select
-            :model-value="commandShell"
-            placeholder="请选择执行 Shell"
-            @update:model-value="emit('update:commandShell', $event)"
-          >
-            <el-option
-              v-for="shell in commandShellOptions"
-              :key="shell.value"
-              :label="shell.label"
-              :value="shell.value"
-            />
-          </el-select>
-        </label>
-
-        <template v-else>
-          <label class="field-block field-block-tight chat-ai-profile-field">
-            <span>AI Agent</span>
-            <el-select v-model="chatAiProfile" placeholder="请选择 AI Agent" filterable>
-              <el-option
-                v-for="profile in aiTerminalProfiles"
-                :key="profile.name"
-                :label="getAiProfileOptionLabel(profile)"
-                :value="profile.name"
-                :disabled="profile.isAvailable === false"
-              />
-            </el-select>
-          </label>
-
-          <label class="field-block field-block-tight chat-ai-cwd-field">
-            <span>工作目录</span>
-            <el-autocomplete
-              v-model="chatAiCwd"
-              :fetch-suggestions="queryCommonWorkingDirectories"
-              :trigger-on-focus="Boolean(activeAgent?.commonWorkingDirectories?.length)"
-              clearable
-              placeholder="选择常用目录或手动输入；留空使用默认目录"
-            />
-          </label>
-        </template>
-
-        <div class="chat-state-tags">
-          <el-tag :type="activeAgentStatusType" effect="dark" round>{{ activeAgentStatusText }}</el-tag>
-          <el-tag :type="authCodeStatusType" effect="dark" round>{{ authCodeStatusText }}</el-tag>
-          <el-tag :type="wsConnected ? 'success' : 'warning'" effect="plain" round>
-            {{ wsConnected ? "实时同步" : "重连中" }}
-          </el-tag>
-          <el-tag v-if="chatMode === CHAT_MODE_CODEX" :type="currentAiSession && !isTerminalSessionClosed(currentAiSession.status) ? 'success' : 'info'" effect="plain" round>
-            Codex：{{ currentAiSessionStatus }}
-          </el-tag>
+        <div class="chat-context-controls">
+          <div class="chat-mode-switch" role="group" aria-label="会话类型">
+            <button
+              type="button"
+              :class="{ active: chatMode === CHAT_MODE_NORMAL }"
+              @click="chatMode = CHAT_MODE_NORMAL"
+            >
+              普通会话
+            </button>
+            <button
+              type="button"
+              :class="{ active: chatMode === CHAT_MODE_CODEX }"
+              @click="chatMode = CHAT_MODE_CODEX"
+            >
+              Codex 会话
+            </button>
+          </div>
         </div>
       </div>
 
-      <div v-if="chatMode === CHAT_MODE_CODEX" class="chat-ai-session-bar">
-        <label class="field-block field-block-tight chat-ai-history-field">
-          <span>最近会话</span>
-          <el-select
-            v-model="chatAiSessionId"
-            placeholder="选择已启动的 Codex 会话"
-            filterable
-            clearable
-          >
-            <el-option
-              v-for="session in codexTerminalSessions"
-              :key="session.sessionId"
-              :label="getAiSessionOptionLabel(session)"
-              :value="session.sessionId"
-            />
-          </el-select>
-        </label>
-        <div class="hero-actions">
+      <el-collapse v-model="advancedPanels" class="chat-advanced-collapse">
+        <el-collapse-item name="advanced" title="高级选项">
+          <div class="chat-toolbar">
+            <label class="field-block field-block-tight chat-device-field">
+              <span>目标设备</span>
+              <el-select
+                :model-value="selectedAgentId"
+                placeholder="请选择设备"
+                filterable
+                @update:model-value="emit('update:selectedAgentId', $event)"
+              >
+                <el-option
+                  v-for="agent in agents"
+                  :key="agent.agentId"
+                  :label="`${agent.label} / ${agent.agentId}`"
+                  :value="agent.agentId"
+                />
+              </el-select>
+            </label>
+
+            <label v-if="chatMode === CHAT_MODE_NORMAL" class="field-block field-block-tight chat-shell-field">
+              <span>执行 Shell</span>
+              <el-select
+                :model-value="commandShell"
+                placeholder="请选择执行 Shell"
+                @update:model-value="emit('update:commandShell', $event)"
+              >
+                <el-option
+                  v-for="shell in commandShellOptions"
+                  :key="shell.value"
+                  :label="shell.label"
+                  :value="shell.value"
+                />
+              </el-select>
+            </label>
+
+            <template v-else>
+              <label class="field-block field-block-tight chat-ai-profile-field">
+                <span>AI Agent</span>
+                <el-select v-model="chatAiProfile" placeholder="请选择 AI Agent" filterable>
+                  <el-option
+                    v-for="profile in aiTerminalProfiles"
+                    :key="profile.name"
+                    :label="getAiProfileOptionLabel(profile)"
+                    :value="profile.name"
+                    :disabled="profile.isAvailable === false"
+                  />
+                </el-select>
+              </label>
+
+              <label class="field-block field-block-tight chat-ai-cwd-field">
+                <span>工作目录</span>
+                <el-autocomplete
+                  v-model="chatAiCwd"
+                  :fetch-suggestions="queryCommonWorkingDirectories"
+                  :trigger-on-focus="Boolean(activeAgent?.commonWorkingDirectories?.length)"
+                  clearable
+                  placeholder="选择常用目录或手动输入；留空使用默认目录"
+                />
+              </label>
+
+              <label class="field-block field-block-tight chat-ai-history-field">
+                <span>最近会话</span>
+                <el-select
+                  v-model="chatAiSessionId"
+                  placeholder="选择已启动的 Codex 会话"
+                  filterable
+                  clearable
+                >
+                  <el-option
+                    v-for="session in codexTerminalSessions"
+                    :key="session.sessionId"
+                    :label="getAiSessionOptionLabel(session)"
+                    :value="session.sessionId"
+                  />
+                </el-select>
+              </label>
+            </template>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+
+      <p v-if="wsError" class="muted chat-toolbar-error">{{ wsError }}</p>
+    </el-card>
+
+    <el-card class="surface-card chat-main-card" shadow="never">
+      <div class="chat-compose-panel">
+        <div class="chat-compose-head">
+          <div>
+            <h3>输入并发送</h3>
+            <p>{{ chatModeLabel }} · {{ activeAgentDisplayName }}</p>
+          </div>
+          <div class="chat-compose-status">
+            <el-tag :type="executionStatus.type" effect="plain" round>{{ executionStatus.text }}</el-tag>
+          </div>
+        </div>
+
+        <div class="chat-composer">
+          <el-input
+            v-model="chatInput"
+            type="textarea"
+            :autosize="{ minRows: 2, maxRows: 5 }"
+            :placeholder="chatMode === CHAT_MODE_CODEX ? '输入要交给 Codex 处理的请求' : '输入命令，或输入：查看主机名、当前用户、查看网络信息'"
+            @keydown.ctrl.enter.prevent="submitChatInput"
+            @keydown.meta.enter.prevent="submitChatInput"
+          />
+          <el-button type="primary" round :disabled="!canSend" @click="submitChatInput">
+            {{ chatMode === CHAT_MODE_CODEX ? (sendingTerminalInput ? "发送中..." : "发送给 Codex") : (submitting ? "提交中..." : "发送") }}
+          </el-button>
+        </div>
+
+        <div
+          v-if="chatMode === CHAT_MODE_CODEX"
+          class="chat-ai-session-actions"
+        >
           <el-button
             type="primary"
             round
+            plain
             :disabled="!canStartAiSession"
             @click="startAiSession"
           >
@@ -1452,11 +1582,36 @@ watch(
             结束会话
           </el-button>
         </div>
-      </div>
-      <p v-if="wsError" class="muted chat-toolbar-error">{{ wsError }}</p>
-    </el-card>
 
-    <el-card class="surface-card chat-main-card" shadow="never">
+        <div v-if="chatMode === CHAT_MODE_NORMAL && (quickActions.length || presetCommands.length)" class="chat-shortcuts">
+          <button
+            v-for="item in quickActions"
+            :key="`quick-${item.label}`"
+            class="chat-shortcut"
+            type="button"
+            :disabled="submitting"
+            @click="useQuickCommand(item)"
+          >
+            {{ item.label }}
+          </button>
+          <button
+            v-for="item in presetCommands"
+            :key="`preset-${item.key}`"
+            class="chat-shortcut chat-shortcut-preset"
+            type="button"
+            :disabled="submitting"
+            @click="usePresetCommand(item)"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+      </div>
+
+      <div class="chat-history-head">
+        <h3>历史结果</h3>
+        <el-tag effect="plain" round>{{ visibleHistoryCount }} 条</el-tag>
+      </div>
+
       <div ref="messageListRef" class="chat-message-list">
         <div
           v-for="message in messages"
@@ -1604,43 +1759,6 @@ watch(
             <time>{{ formatCreatedAt(getMessageDisplayTime(message)) }}</time>
           </div>
         </div>
-      </div>
-
-      <div v-if="chatMode === CHAT_MODE_NORMAL && (quickActions.length || presetCommands.length)" class="chat-shortcuts">
-        <button
-          v-for="item in quickActions"
-          :key="`quick-${item.label}`"
-          class="chat-shortcut"
-          type="button"
-          :disabled="submitting"
-          @click="useQuickCommand(item)"
-        >
-          {{ item.label }}
-        </button>
-        <button
-          v-for="item in presetCommands"
-          :key="`preset-${item.key}`"
-          class="chat-shortcut chat-shortcut-preset"
-          type="button"
-          :disabled="submitting"
-          @click="usePresetCommand(item)"
-        >
-          {{ item.label }}
-        </button>
-      </div>
-
-      <div class="chat-composer">
-        <el-input
-          v-model="chatInput"
-          type="textarea"
-          :autosize="{ minRows: 2, maxRows: 5 }"
-          :placeholder="chatMode === CHAT_MODE_CODEX ? '输入要交给 Codex 处理的请求' : '输入命令，或输入：查看主机名、当前用户、查看网络信息'"
-          @keydown.ctrl.enter.prevent="submitChatInput"
-          @keydown.meta.enter.prevent="submitChatInput"
-        />
-        <el-button type="primary" round :disabled="!canSend" @click="submitChatInput">
-          {{ chatMode === CHAT_MODE_CODEX ? (sendingTerminalInput ? "发送中..." : "发送给 Codex") : (submitting ? "提交中..." : "发送") }}
-        </el-button>
       </div>
     </el-card>
 
