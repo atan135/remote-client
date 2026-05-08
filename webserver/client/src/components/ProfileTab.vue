@@ -139,6 +139,12 @@ const profileView = ref("menu");
 
 const profileEntries = [
   {
+    key: "identity",
+    group: "账号信息",
+    title: "个人资料",
+    description: "查看登录账号、角色和授权设备"
+  },
+  {
     key: "password",
     group: "账户安全",
     title: "修改密码",
@@ -182,6 +188,25 @@ const currentEntry = computed(
   () => profileEntries.find((item) => item.key === profileView.value) || null
 );
 
+const profileMetaRows = computed(() => [
+  {
+    label: "登录账号",
+    value: props.session.user.username
+  },
+  {
+    label: "当前角色",
+    value: props.session.user.role
+  },
+  {
+    label: "授权设备",
+    value: `${props.authCodes.length} 个`
+  },
+  {
+    label: "账号权限",
+    value: props.isAdmin ? "管理员" : "个人账号"
+  }
+]);
+
 const profilePanelVisible = computed({
   get: () => profileView.value !== "menu",
   set: (visible) => {
@@ -202,61 +227,49 @@ function backToMenu() {
 
 <template>
   <section class="page profile-page">
-    <el-card class="surface-card profile-hero" shadow="never">
-      <div class="profile-header">
-        <el-avatar :size="64">{{ displayName.slice(0, 1) || "Q" }}</el-avatar>
-        <div>
-          <p class="eyebrow">Profile</p>
-          <h2>{{ displayName }}</h2>
-          <p class="muted">{{ session.user.username }} / {{ session.user.role }}</p>
-        </div>
-      </div>
+    <div class="profile-layout">
+      <div class="profile-main">
+        <el-card class="surface-card info-card profile-settings-card" shadow="never">
+          <div class="profile-summary-strip">
+            <el-avatar :size="44">{{ displayName.slice(0, 1) || "Q" }}</el-avatar>
+            <div class="profile-summary-copy">
+              <strong>{{ displayName }}</strong>
+              <span>{{ session.user.username }} / {{ session.user.role }}</span>
+            </div>
+          </div>
 
-      <div class="hero-actions">
-        <el-button round @click="emit('logout')">退出登录</el-button>
-      </div>
-    </el-card>
+          <div class="profile-section-title">
+            <div>
+              <h3>账户与授权</h3>
+            </div>
+          </div>
 
-    <el-card class="surface-card info-card profile-settings-card" shadow="never">
-      <div class="card-head">
-        <div>
-          <h3>账户设置</h3>
-          <p>管理登录安全和设备授权。</p>
-        </div>
-      </div>
+          <div class="profile-settings-groups">
+            <section v-for="group in profileEntryGroups" :key="group.title" class="profile-settings-group">
+              <div class="profile-settings-group-head">
+                <h4>{{ group.title }}</h4>
+              </div>
 
-      <div class="profile-settings-groups">
-        <section v-for="group in profileEntryGroups" :key="group.title" class="profile-settings-group">
-          <h4>{{ group.title }}</h4>
-          <button
-            v-for="entry in group.items"
-            :key="entry.key"
-            class="profile-settings-item"
-            type="button"
-            @click="openView(entry.key)"
-          >
-            <span>
-              <strong>{{ entry.title }}</strong>
-              <small>{{ entry.description }}</small>
-            </span>
-            <span class="profile-settings-arrow">›</span>
-          </button>
-        </section>
+              <div class="profile-settings-list">
+                <button
+                  v-for="entry in group.items"
+                  :key="entry.key"
+                  class="profile-settings-item"
+                  type="button"
+                  @click="openView(entry.key)"
+                >
+                  <span class="profile-settings-marker" aria-hidden="true"></span>
+                  <span class="profile-settings-copy">
+                    <strong>{{ entry.title }}</strong>
+                  </span>
+                  <span class="profile-settings-arrow">›</span>
+                </button>
+              </div>
+            </section>
+          </div>
+        </el-card>
       </div>
-    </el-card>
-
-    <el-card class="surface-card info-card profile-meta-card" shadow="never">
-      <div class="detail-grid">
-        <div class="detail-row">
-          <span>登录账号</span>
-          <strong>{{ session.user.username }}</strong>
-        </div>
-        <div class="detail-row">
-          <span>当前角色</span>
-          <strong>{{ session.user.role }}</strong>
-        </div>
-      </div>
-    </el-card>
+    </div>
 
     <el-dialog
       v-model="profilePanelVisible"
@@ -275,7 +288,34 @@ function backToMenu() {
       </template>
 
       <div class="profile-panel-content">
-        <div v-if="profileView === 'password'" class="profile-panel-section">
+        <div v-if="profileView === 'identity'" class="profile-panel-section profile-identity-panel">
+          <div class="profile-panel-identity">
+            <el-avatar :size="68">{{ displayName.slice(0, 1) || "Q" }}</el-avatar>
+            <div>
+              <p class="eyebrow">个人资料</p>
+              <h3>{{ displayName }}</h3>
+              <p class="muted">{{ session.user.username }} / {{ session.user.role }}</p>
+            </div>
+          </div>
+
+          <div class="profile-identity-tags">
+            <el-tag round effect="plain">{{ session.user.role }}</el-tag>
+            <el-tag round effect="plain">{{ authCodes.length }} 个授权设备</el-tag>
+          </div>
+
+          <div class="profile-meta-list">
+            <div v-for="row in profileMetaRows" :key="row.label" class="profile-meta-row">
+              <span>{{ row.label }}</span>
+              <strong>{{ row.value }}</strong>
+            </div>
+          </div>
+
+          <div class="hero-actions profile-panel-actions profile-logout-actions">
+            <el-button plain @click="emit('logout')">退出登录</el-button>
+          </div>
+        </div>
+
+        <div v-else-if="profileView === 'password'" class="profile-panel-section">
           <div class="card-head card-head-tight">
             <div>
               <p class="eyebrow">Password</p>

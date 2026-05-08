@@ -24,6 +24,8 @@ const liveStatusText = computed(() =>
   store.wsState.connected ? "实时同步已连接" : "实时同步重连中"
 );
 
+const showHeaderMeta = computed(() => currentTabKey.value !== "profile");
+
 function navigate(tabKey) {
   const target = store.resolvedTabs.find((item) => item.key === tabKey);
 
@@ -99,7 +101,7 @@ function navigate(tabKey) {
           <p>{{ currentTab?.description }}</p>
         </div>
 
-        <div class="console-header-meta">
+        <div v-if="showHeaderMeta" class="console-header-meta">
           <div class="console-chip">
             <span>当前设备</span>
             <strong>{{ activeAgentSummary }}</strong>
