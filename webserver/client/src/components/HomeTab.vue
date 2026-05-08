@@ -1,5 +1,14 @@
 <script setup>
-import { ElButton, ElCard, ElTag } from "element-plus";
+import {
+  Aim,
+  ArrowRight,
+  Monitor,
+  Refresh,
+  Tickets,
+  Warning
+} from "@element-plus/icons-vue";
+import { ElButton, ElCard, ElIcon, ElTag } from "element-plus";
+import { computed } from "vue";
 
 const props = defineProps({
   agents: {
@@ -34,6 +43,36 @@ const props = defineProps({
 
 const emit = defineEmits(["select-agent", "go-terminal"]);
 
+const latestCommand = computed(() => props.commands[0] || null);
+
+const currentAgentLabel = computed(() => props.activeAgent?.label || props.activeAgent?.agentId || "未选择设备");
+
+const connectionText = computed(() => (props.wsConnected ? "实时同步已连接" : "实时链路重连中"));
+
+const metrics = computed(() => [
+  {
+    key: "online",
+    label: "在线设备",
+    value: props.onlineAgentCount,
+    detail: `总计 ${props.agents.length} 台`,
+    icon: Monitor
+  },
+  {
+    key: "commands",
+    label: "命令记录",
+    value: props.commands.length,
+    detail: latestCommand.value ? `最近状态 ${latestCommand.value.status || "-"}` : "暂无命令记录",
+    icon: Tickets
+  },
+  {
+    key: "current",
+    label: "当前设备",
+    value: currentAgentLabel.value,
+    detail: props.activeAgent?.agentId || "未选择设备",
+    icon: Aim
+  }
+]);
+
 function statusType(status) {
   if (status === "online" || status === "completed") {
     return "success";
@@ -49,40 +88,44 @@ function statusType(status) {
 
 <template>
   <section class="page home-page">
-    <el-card class="surface-card hero-card" shadow="never">
-      <h2>{{ displayName || "控制台" }}</h2>
-      <p v-if="!wsConnected" class="hero-copy">
-        实时链路重连中，请稍候查看最新状态。
-      </p>
+    <el-card class="surface-card hero-card home-hero-card" shadow="never">
+      <div class="home-hero-main">
+        <div class="home-status-badge" :class="{ online: wsConnected }">
+          <span class="console-status-dot" :class="{ online: wsConnected }"></span>
+          <span>{{ connectionText }}</span>
+        </div>
+        <h2>{{ displayName || "控制台" }}</h2>
+        <p class="hero-copy">
+          {{ activeAgent ? `当前设备 ${currentAgentLabel}` : "选择在线设备后即可下发安全命令。" }}
+        </p>
+      </div>
 
-      <div class="hero-actions">
-        <el-button type="primary" round @click="emit('go-terminal')">发送命令</el-button>
-        <el-button round>{{ activeAgent?.label || "选择设备" }}</el-button>
+      <div class="home-hero-actions">
+        <el-button type="primary" @click="emit('go-terminal')">
+          发送命令
+          <el-icon class="el-icon--right"><ArrowRight /></el-icon>
+        </el-button>
+        <el-button plain @click="emit('go-terminal')">
+          {{ activeAgent?.label || "选择设备" }}
+        </el-button>
       </div>
     </el-card>
 
     <section class="metrics-grid">
-      <el-card class="surface-card metric-card" shadow="never">
-        <span>在线设备</span>
-        <strong>{{ onlineAgentCount }}</strong>
-        <small>总计 {{ agents.length }} 台</small>
-      </el-card>
-
-      <el-card class="surface-card metric-card" shadow="never">
-        <span>命令记录</span>
-        <strong>{{ commands.length }}</strong>
-        <small>最近任务同步中</small>
-      </el-card>
-
-      <el-card class="surface-card metric-card" shadow="never">
-        <span>当前设备</span>
-        <strong>{{ activeAgent?.label || "--" }}</strong>
-        <small>{{ activeAgent?.agentId || "未选择设备" }}</small>
+      <el-card v-for="metric in metrics" :key="metric.key" class="surface-card metric-card" shadow="never">
+        <div class="metric-card-top">
+          <span>{{ metric.label }}</span>
+          <span class="metric-icon">
+            <component :is="metric.icon" />
+          </span>
+        </div>
+        <strong>{{ metric.value }}</strong>
+        <small>{{ metric.detail }}</small>
       </el-card>
     </section>
 
-    <section class="stack-grid home-stack-grid">
-      <el-card class="surface-card info-card" shadow="never">
+    <el-card class="surface-card home-device-panel" shadow="never">
+      <section class="home-device-list">
         <div class="card-head">
           <div>
             <h3>可用设备</h3>
@@ -90,7 +133,7 @@ function statusType(status) {
           <el-tag round effect="plain">{{ agents.length }}</el-tag>
         </div>
 
-        <div class="list-grid">
+        <div v-if="agents.length" class="list-grid">
           <button v-for="agent in agents" :key="agent.agentId" class="settings-item"
             :class="{ active: selectedAgentId === agent.agentId }" type="button"
             @click="emit('select-agent', agent.agentId)">
@@ -101,13 +144,22 @@ function statusType(status) {
             <el-tag :type="statusType(agent.status)" effect="dark" round>{{ agent.status }}</el-tag>
           </button>
         </div>
-      </el-card>
+        <div v-else class="home-empty-state">
+          <el-icon><Warning /></el-icon>
+          <strong>暂无在线设备</strong>
+          <p>启动 localapp agent 后，设备会显示在这里。</p>
+          <el-button plain @click="emit('go-terminal')">查看终端配置</el-button>
+        </div>
+      </section>
 
-      <el-card class="surface-card info-card" shadow="never">
+      <section class="home-device-detail">
         <div class="card-head">
           <div>
             <h3>设备详情</h3>
           </div>
+          <el-tag v-if="activeAgent" :type="statusType(activeAgent.status)" round effect="plain">
+            {{ activeAgent.status }}
+          </el-tag>
         </div>
 
         <div v-if="activeAgent" class="detail-grid">
@@ -128,8 +180,12 @@ function statusType(status) {
           <h4>Common Working Directories</h4>
           <pre>{{ activeAgent.commonWorkingDirectories.join("\n") }}</pre>
         </div>
-        <p v-else class="muted">当前还没有选中的设备。</p>
-      </el-card>
-    </section>
+        <div v-else class="home-empty-state home-empty-state-compact">
+          <el-icon><Refresh /></el-icon>
+          <strong>未选择设备</strong>
+          <p>从左侧设备列表中选择一台在线设备。</p>
+        </div>
+      </section>
+    </el-card>
   </section>
 </template>

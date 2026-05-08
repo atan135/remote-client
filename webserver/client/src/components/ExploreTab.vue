@@ -153,7 +153,6 @@ const activeMode = ref("command");
 const sessionScreen = ref("main");
 const detailSessionId = ref("");
 const sessionMetaPanels = ref([]);
-const devicePanels = ref([]);
 const remoteFileDialogVisible = ref(false);
 
 const currentSession = computed(
@@ -207,6 +206,20 @@ const terminalProfileOptionGroups = computed(() => {
 });
 
 const activeDeviceLabel = computed(() => props.activeAgent?.agentId || "未选择设备");
+
+const activeDeviceOnline = computed(() => String(props.activeAgent?.status || "") === "online");
+
+const activeDeviceStatusText = computed(() => {
+  if (!props.selectedAgentId) {
+    return "未选择";
+  }
+
+  if (!props.activeAgent) {
+    return "未上报";
+  }
+
+  return activeDeviceOnline.value ? "在线" : String(props.activeAgent.status || "离线");
+});
 
 const activeDeviceBindText = computed(() =>
   props.activeAuthCodeBinding ? "已绑定公钥" : "缺少公钥"
@@ -511,51 +524,82 @@ watch(
 
 <template>
   <section class="page explore-page" :class="{ 'is-focus-mode': sessionScreen !== 'main' }">
-    <el-card class="surface-card section-banner tab-banner" shadow="never">
-      <h2>终端控制台</h2>
+    <el-card v-if="sessionScreen === 'main'" class="surface-card explore-target-card" shadow="never">
+      <div class="explore-target-identity">
+        <span class="explore-target-dot" :class="{ online: activeDeviceOnline }"></span>
+        <div class="explore-target-copy">
+          <span>目标设备</span>
+          <strong>{{ activeDeviceLabel }}</strong>
+        </div>
+        <div class="explore-target-tags">
+          <el-tag :type="activeDeviceOnline ? 'success' : 'info'" effect="plain" round>
+            {{ activeDeviceStatusText }}
+          </el-tag>
+          <el-tag :type="activeAuthCodeBinding ? 'success' : 'danger'" effect="plain" round>
+            {{ activeDeviceBindText }}
+          </el-tag>
+        </div>
+      </div>
+
+      <label class="field-block field-block-tight explore-target-select-field">
+        <span>切换设备</span>
+        <el-select
+          class="explore-target-select"
+          :model-value="selectedAgentId"
+          placeholder="请选择设备"
+          @update:model-value="emit('update:selectedAgentId', $event)"
+        >
+          <el-option
+            v-for="agent in agents"
+            :key="agent.agentId"
+            :label="`${agent.label} / ${agent.agentId}`"
+            :value="agent.agentId"
+          />
+        </el-select>
+      </label>
     </el-card>
 
     <el-card v-if="sessionScreen === 'main'" class="surface-card info-card explore-main-card" shadow="never">
       <el-tabs v-model="activeMode" stretch class="explore-mode-tabs">
         <el-tab-pane label="一次性命令" name="command">
-          <div class="explore-pane">
-            <div class="card-head card-head-tight">
-              <div>
-                <p class="eyebrow">Quick Command</p>
-                <h3>一次性命令</h3>
-                <p>适合快速返回结果的系统命令。</p>
-              </div>
+          <div class="explore-pane explore-command-pane">
+            <div class="explore-section-head">
+              <h3>命令参数</h3>
+              <el-tag effect="plain" round>安全封装</el-tag>
             </div>
 
-            <label v-if="presetCommands.length" class="field-block field-block-tight">
-              <span>预设命令</span>
-              <el-select :model-value="selectedPresetCommandKey" clearable placeholder="选择当前设备 localapp/.env 中的预设命令"
-                @update:model-value="handlePresetCommandChange">
-                <el-option v-for="preset in presetCommands" :key="preset.key" :label="preset.label"
-                  :value="preset.key" />
-              </el-select>
-              <p v-if="selectedPresetCommand" class="muted explore-preset-command-preview">
+            <div class="explore-command-grid">
+              <label v-if="presetCommands.length" class="field-block field-block-tight">
+                <span>预设命令</span>
+                <el-select :model-value="selectedPresetCommandKey" clearable placeholder="选择当前设备 localapp/.env 中的预设命令"
+                  @update:model-value="handlePresetCommandChange">
+                  <el-option v-for="preset in presetCommands" :key="preset.key" :label="preset.label"
+                    :value="preset.key" />
+                </el-select>
+              </label>
+              <p v-else-if="selectedAgentId" class="muted explore-preset-command-empty">
+                当前设备未配置 PRESET_COMMANDS，仍可直接手动输入命令。
+              </p>
+
+              <label class="field-block field-block-tight">
+                <span>执行 Shell</span>
+                <el-select :model-value="commandShell" placeholder="请选择执行 Shell"
+                  @update:model-value="emit('update:commandShell', $event)">
+                  <el-option v-for="shell in commandShellOptions" :key="shell.value" :label="shell.label"
+                    :value="shell.value" />
+                </el-select>
+              </label>
+
+              <p v-if="selectedPresetCommand" class="muted explore-preset-command-preview explore-command-grid-preview">
                 {{ selectedPresetCommand.command }}
               </p>
-            </label>
-            <p v-else-if="selectedAgentId" class="muted explore-preset-command-empty">
-              当前设备未配置 PRESET_COMMANDS，仍可直接手动输入命令。
-            </p>
 
-            <label class="field-block field-block-tight">
-              <span>执行 Shell</span>
-              <el-select :model-value="commandShell" placeholder="请选择执行 Shell"
-                @update:model-value="emit('update:commandShell', $event)">
-                <el-option v-for="shell in commandShellOptions" :key="shell.value" :label="shell.label"
-                  :value="shell.value" />
-              </el-select>
-            </label>
-
-            <label class="field-block field-block-tight">
-              <span>命令内容</span>
-              <el-input :model-value="commandInput" type="textarea" :autosize="{ minRows: 3, maxRows: 5 }"
-                placeholder="例如：ipconfig /all 或 hostname" @update:model-value="emit('update:commandInput', $event)" />
-            </label>
+              <label class="field-block field-block-tight explore-command-input-field">
+                <span>命令内容</span>
+                <el-input :model-value="commandInput" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }"
+                  placeholder="例如：ipconfig /all 或 hostname" @update:model-value="emit('update:commandInput', $event)" />
+              </label>
+            </div>
 
             <div class="hero-actions explore-actions">
               <el-button v-if="presetCommands.length" round plain :disabled="!canSubmitPresetCommand"
@@ -571,10 +615,8 @@ watch(
 
         <el-tab-pane label="交互式会话" name="session">
           <div class="explore-pane explore-session-pane">
-            <div class="card-head card-head-tight">
-              <div>
-                <h3>交互式终端会话</h3>
-              </div>
+            <div class="explore-section-head">
+              <h3>会话参数</h3>
               <el-tag :type="currentSession ? statusType(currentSession.status) : 'info'" effect="dark" round>
                 {{ currentSession?.status || "未选择会话" }}
               </el-tag>
@@ -618,7 +660,6 @@ watch(
             <div class="card-head card-head-tight compact-stack">
               <div>
                 <h3>会话列表</h3>
-                <p v-if="terminalSessions.length == 0">当前设备还没有终端会话</p>
               </div>
               <el-tag effect="plain" round>
                 {{ terminalSessions.length }} 个
@@ -795,32 +836,6 @@ watch(
           <pre>{{ currentSession.error }}</pre>
         </div>
       </div>
-    </el-card>
-
-    <el-card class="surface-card info-card explore-device-card" shadow="never">
-      <el-collapse v-model="devicePanels" class="explore-device-collapse">
-        <el-collapse-item name="device">
-          <template #title>
-            <div class="explore-device-summary">
-              <span class="explore-device-caption">目标设备</span>
-              <strong class="explore-device-name">{{ activeDeviceLabel }}</strong>
-              <span class="explore-device-divider">·</span>
-              <span class="explore-device-binding" :class="activeAuthCodeBinding ? 'bound' : 'missing'">
-                {{ activeDeviceBindText }}
-              </span>
-            </div>
-          </template>
-
-          <label class="field-block field-block-tight explore-device-field">
-            <span>设备列表</span>
-            <el-select :model-value="selectedAgentId" placeholder="请选择设备"
-              @update:model-value="emit('update:selectedAgentId', $event)">
-              <el-option v-for="agent in agents" :key="agent.agentId" :label="`${agent.label} / ${agent.agentId}`"
-                :value="agent.agentId" />
-            </el-select>
-          </label>
-        </el-collapse-item>
-      </el-collapse>
     </el-card>
 
     <RemoteFilePreviewDialog

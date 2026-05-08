@@ -1,4 +1,5 @@
 <script setup>
+import { ChatDotRound, DataBoard, House, Monitor, Tickets, User } from "@element-plus/icons-vue";
 import { computed } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 
@@ -26,6 +27,14 @@ const liveStatusText = computed(() =>
 
 const showHeaderMeta = computed(() => currentTabKey.value !== "profile");
 
+const navIcons = {
+  home: House,
+  explore: Monitor,
+  chat: ChatDotRound,
+  tasks: Tickets,
+  profile: User
+};
+
 function navigate(tabKey) {
   const target = store.resolvedTabs.find((item) => item.key === tabKey);
 
@@ -42,9 +51,11 @@ function navigate(tabKey) {
     <aside class="console-sidebar">
       <div class="console-sidebar-panel">
         <div class="console-brand">
-          <p class="eyebrow">Remote Control Console</p>
-          <h1>Remote Client</h1>
-          <p>{{ currentTab?.description || "统一控制设备、命令与账户安全。" }}</p>
+          <div class="console-brand-mark">RC</div>
+          <div class="console-brand-copy">
+            <h1>Remote Client</h1>
+            <span>Remote Console</span>
+          </div>
         </div>
 
         <nav class="console-nav" aria-label="主导航">
@@ -56,38 +67,18 @@ function navigate(tabKey) {
             type="button"
             @click="navigate(tab.key)"
           >
+            <span class="console-nav-icon">
+              <component :is="navIcons[tab.key] || DataBoard" />
+            </span>
             <span class="console-nav-copy">
               <strong>{{ tab.label }}</strong>
-              <small>{{ tab.description }}</small>
             </span>
           </button>
         </nav>
 
-        <section class="console-sidebar-stats">
-          <button class="console-kpi console-kpi-action" type="button" @click="navigate('home')">
-            <span>在线设备</span>
-            <strong>{{ store.onlineAgentCount }}</strong>
-          </button>
-          <button class="console-kpi console-kpi-action" type="button" @click="navigate('tasks')">
-            <span>命令记录</span>
-            <strong>{{ store.commands.length }}</strong>
-          </button>
-          <article class="console-kpi">
-            <span>当前设备</span>
-            <strong>{{ store.selectedAgentId || "--" }}</strong>
-          </article>
-          <article class="console-kpi">
-            <span>待处理任务</span>
-            <strong>{{ store.pendingTaskCount || 0 }}</strong>
-          </article>
-        </section>
-
         <div class="console-sidebar-footer">
           <span class="console-status-dot" :class="{ online: store.wsState.connected }"></span>
-          <div class="console-sidebar-footer-copy">
-            <strong>{{ store.displayName || "控制台" }}</strong>
-            <small>{{ liveStatusText }}</small>
-          </div>
+          <span class="console-sidebar-status-text">{{ liveStatusText }}</span>
         </div>
       </div>
     </aside>
