@@ -6,13 +6,13 @@ import {
   ElCard,
   ElCollapse,
   ElCollapseItem,
-  ElDialog,
   ElInput,
   ElMessageBox,
   ElOption,
   ElSelect,
   ElTag
 } from "element-plus";
+import CommandDetailDialog from "./CommandDetailDialog.vue";
 import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
 
 const CHAT_OUTPUT_PREVIEW_LIMIT = 1200;
@@ -112,7 +112,6 @@ const chatAiCwd = ref("");
 const chatAiSessionId = ref("");
 const chatAiPendingMessageId = ref("");
 const chatAiLastFinalText = ref("");
-const expandedResultIds = ref([]);
 const aiFileDialogVisible = ref(false);
 const activeAiFileViewer = ref(null);
 const activeCommandDetailMessageId = ref("");
@@ -157,6 +156,46 @@ const commandDetailDialogVisible = computed({
 const activeCommandDetailTitle = computed(
   () => activeCommandDetailMessage.value?.text || activeCommandDetailMessage.value?.command || "命令详情"
 );
+
+const activeCommandDetailSubtitle = computed(() =>
+  resolveAgentLabel(activeCommandDetailMessage.value?.agentId || props.selectedAgentId)
+);
+
+const activeCommandDetailMetaItems = computed(() => {
+  const message = activeCommandDetailMessage.value;
+  const record = activeCommandDetailRecord.value;
+
+  if (!message || !record) {
+    return [];
+  }
+
+  return [
+    {
+      label: "设备",
+      value: resolveAgentLabel(message.agentId || props.selectedAgentId)
+    },
+    {
+      label: "状态",
+      value: statusText(record.status)
+    },
+    {
+      label: "退出码",
+      value: record.exitCode ?? "-"
+    },
+    {
+      label: "Shell",
+      value: resolveShellLabel(record.commandShell || message.commandShell)
+    },
+    {
+      label: "安全",
+      value: record.secureStatus || "-"
+    },
+    {
+      label: "时间",
+      value: formatCreatedAt(record.updatedAt) || "-"
+    }
+  ];
+});
 
 const aiTerminalProfiles = computed(() => {
   const profiles = Array.isArray(props.availableTerminalProfiles) ? props.availableTerminalProfiles : [];
@@ -1644,7 +1683,7 @@ watch(
               </div>
             </div>
 
-            <div v-if="message.status === 'draft' || !message.requestId" class="console-block chat-command-block">
+            <div v-if="message.command" class="console-block chat-command-block">
               <h4>Command</h4>
               <pre>{{ message.command }}</pre>
             </div>
@@ -1688,36 +1727,6 @@ watch(
                 </div>
 
                 <p v-else class="muted chat-result-empty">当前还没有输出内容。</p>
-
-                <el-collapse
-                  v-model="expandedResultIds"
-                  class="chat-result-collapse chat-result-detail-inline"
-                >
-                  <el-collapse-item :name="message.id" title="命令详情">
-                    <div class="chat-result-meta">
-                      <span>{{ resolveAgentLabel(message.agentId || selectedAgentId) }}</span>
-                      <span>退出码 {{ resolveCommandRecord(message).exitCode ?? "-" }}</span>
-                      <span>{{ resolveShellLabel(resolveCommandRecord(message).commandShell || message.commandShell) }}</span>
-                      <span>安全 {{ resolveCommandRecord(message).secureStatus || "-" }}</span>
-                      <span>{{ formatCreatedAt(resolveCommandRecord(message).updatedAt) }}</span>
-                    </div>
-                    <div class="console-block chat-command-block">
-                      <h4>Command</h4>
-                      <pre>{{ message.command }}</pre>
-                    </div>
-                    <div v-if="resolveCommandRecord(message).stdout" class="console-block">
-                      <h4>STDOUT</h4>
-                      <pre>{{ resolveCommandRecord(message).stdout }}</pre>
-                    </div>
-                    <div
-                      v-if="resolveCommandRecord(message).stderr || resolveCommandRecord(message).error"
-                      class="console-block error"
-                    >
-                      <h4>STDERR / ERROR</h4>
-                      <pre>{{ resolveCommandRecord(message).stderr || resolveCommandRecord(message).error }}</pre>
-                    </div>
-                  </el-collapse-item>
-                </el-collapse>
               </template>
               <p v-else class="muted chat-result-empty">等待任务状态同步。</p>
             </div>
@@ -1767,88 +1776,16 @@ watch(
       :viewer="activeAiFileViewer"
     />
 
-    <el-dialog
+    <CommandDetailDialog
+      v-if="activeCommandDetailMessage && activeCommandDetailRecord"
       v-model="commandDetailDialogVisible"
-      append-to-body
-      class="remote-file-dialog command-detail-dialog"
-      destroy-on-close
-      top="5vh"
-      width="min(1120px, 92vw)"
-    >
-      <template #header>
-        <div class="remote-file-dialog-head">
-          <strong>命令详情</strong>
-          <small>{{ activeCommandDetailTitle }}</small>
-        </div>
-      </template>
-
-      <div
-        v-if="activeCommandDetailMessage && activeCommandDetailRecord"
-        class="remote-file-dialog-body command-detail-dialog-body"
-      >
-        <div class="command-detail-meta-card">
-          <div class="command-detail-meta-item">
-            <span>设备</span>
-            <strong>
-              {{ resolveAgentLabel(activeCommandDetailMessage.agentId || selectedAgentId) }}
-            </strong>
-          </div>
-          <div class="command-detail-meta-item">
-            <span>退出码</span>
-            <strong>{{ activeCommandDetailRecord.exitCode ?? "-" }}</strong>
-          </div>
-          <div class="command-detail-meta-item">
-            <span>Shell</span>
-            <strong>
-              {{
-                resolveShellLabel(
-                  activeCommandDetailRecord.commandShell || activeCommandDetailMessage.commandShell
-                )
-              }}
-            </strong>
-          </div>
-          <div class="command-detail-meta-item">
-            <span>安全</span>
-            <strong>{{ activeCommandDetailRecord.secureStatus || "-" }}</strong>
-          </div>
-          <div class="command-detail-meta-item">
-            <span>状态</span>
-            <strong>{{ statusText(activeCommandDetailRecord.status) }}</strong>
-          </div>
-          <div class="command-detail-meta-item">
-            <span>时间</span>
-            <strong>{{ formatCreatedAt(activeCommandDetailRecord.updatedAt) || "-" }}</strong>
-          </div>
-        </div>
-
-        <div class="command-detail-output-stack">
-          <section v-if="activeCommandDetailRecord.stdout" class="command-detail-output-panel">
-            <h4>STDOUT</h4>
-            <pre>{{ activeCommandDetailRecord.stdout }}</pre>
-          </section>
-          <section
-            v-if="activeCommandDetailRecord.stderr || activeCommandDetailRecord.error"
-            class="command-detail-output-panel error"
-          >
-            <h4>STDERR / ERROR</h4>
-            <pre>{{ activeCommandDetailRecord.stderr || activeCommandDetailRecord.error }}</pre>
-          </section>
-          <p
-            v-if="
-              !activeCommandDetailRecord.stdout &&
-              !activeCommandDetailRecord.stderr &&
-              !activeCommandDetailRecord.error
-            "
-            class="muted remote-file-empty"
-          >
-            当前还没有输出内容。
-          </p>
-          <section class="command-detail-output-panel command-detail-command-panel">
-            <h4>COMMAND</h4>
-            <pre>{{ activeCommandDetailMessage.command }}</pre>
-          </section>
-        </div>
-      </div>
-    </el-dialog>
+      :title="activeCommandDetailTitle"
+      :subtitle="activeCommandDetailSubtitle"
+      :command="activeCommandDetailMessage.command"
+      :stdout="activeCommandDetailRecord.stdout || ''"
+      :stderr="activeCommandDetailRecord.stderr || ''"
+      :error="activeCommandDetailRecord.error || ''"
+      :meta-items="activeCommandDetailMetaItems"
+    />
   </section>
 </template>

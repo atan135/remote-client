@@ -1,6 +1,8 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, ref } from "vue";
+import { Delete } from "@element-plus/icons-vue";
 import { ElButton, ElCard, ElOption, ElSelect, ElTag } from "element-plus";
+import CommandDetailDialog from "./CommandDetailDialog.vue";
 
 const props = defineProps({
   commands: {
@@ -38,9 +40,7 @@ const emit = defineEmits([
   "delete-command",
   "update:timelineFilterAgentId"
 ]);
-const expandedRequestIds = ref([]);
-let lastTimelineFilterAgentId = "";
-let lastCommandCount = 0;
+const activeCommandDetailRequestId = ref("");
 const createdAtFormatter = new Intl.DateTimeFormat("zh-CN", {
   year: "2-digit",
   month: "2-digit",
@@ -61,57 +61,63 @@ const agentById = computed(
 
 const clearButtonText = computed(() =>
   props.timelineFilterAgentId && props.timelineFilterAgentId !== "all"
-    ? "清空当前设备"
-    : "清空已结束记录"
+    ? "清空当前"
+    : "清空记录"
 );
 
-watch(
-  [
-    () => props.timelineFilterAgentId,
-    () => props.commands.length,
-    () => props.latestRequestId
-  ],
-  ([nextTimelineFilterAgentId, nextCommandCount, nextLatestRequestId]) => {
-    const filterChanged = nextTimelineFilterAgentId !== lastTimelineFilterAgentId;
-    const listShrank = nextCommandCount < lastCommandCount;
-    let nextExpandedIds = expandedRequestIds.value;
+const clearButtonTitle = computed(() =>
+  props.timelineFilterAgentId && props.timelineFilterAgentId !== "all"
+    ? "清空当前设备的已结束记录"
+    : "清空全部已结束记录"
+);
 
-    if (filterChanged || listShrank) {
-      const validRequestIds = new Set(
-        (Array.isArray(props.commands) ? props.commands : []).map((item) => item.requestId)
-      );
-      nextExpandedIds = nextExpandedIds.filter((id) => validRequestIds.has(id));
+const activeCommandDetailRecord = computed(
+  () => props.commands.find((item) => item.requestId === activeCommandDetailRequestId.value) || null
+);
+
+const commandDetailDialogVisible = computed({
+  get: () => Boolean(activeCommandDetailRecord.value),
+  set: (value) => {
+    if (!value) {
+      activeCommandDetailRequestId.value = "";
     }
-
-    if (nextLatestRequestId) {
-      const currentFirstExpandedId = nextExpandedIds[0] || "";
-
-      if (
-        !filterChanged &&
-        !listShrank &&
-        nextLatestRequestId === currentFirstExpandedId
-      ) {
-        lastTimelineFilterAgentId = nextTimelineFilterAgentId;
-        lastCommandCount = nextCommandCount;
-        return;
-      }
-
-      nextExpandedIds = [
-        nextLatestRequestId,
-        ...nextExpandedIds.filter((id) => id !== nextLatestRequestId)
-      ];
-    } else {
-      nextExpandedIds = [];
-    }
-
-    expandedRequestIds.value = nextExpandedIds;
-    lastTimelineFilterAgentId = nextTimelineFilterAgentId;
-    lastCommandCount = nextCommandCount;
-  },
-  {
-    immediate: true
   }
-);
+});
+
+const activeCommandDetailMetaItems = computed(() => {
+  const item = activeCommandDetailRecord.value;
+
+  if (!item) {
+    return [];
+  }
+
+  return [
+    {
+      label: "设备",
+      value: resolveAgentSummary(item)
+    },
+    {
+      label: "状态",
+      value: item.status || "-"
+    },
+    {
+      label: "退出码",
+      value: formatExitCode(item.exitCode)
+    },
+    {
+      label: "Shell",
+      value: resolveShellLabel(item.commandShell)
+    },
+    {
+      label: "安全",
+      value: item.secureStatus || "-"
+    },
+    {
+      label: "时间",
+      value: formatCreatedAt(item.updatedAt || item.createdAt)
+    }
+  ];
+});
 
 function statusType(status) {
   if (status === "completed") {
@@ -132,21 +138,8 @@ function canDeleteCommand(item) {
   );
 }
 
-function isExpanded(requestId) {
-  return expandedRequestIds.value.includes(requestId);
-}
-
-function toggleExpanded(requestId) {
-  if (!requestId) {
-    return;
-  }
-
-  if (isExpanded(requestId)) {
-    expandedRequestIds.value = expandedRequestIds.value.filter((id) => id !== requestId);
-    return;
-  }
-
-  expandedRequestIds.value = [...expandedRequestIds.value, requestId];
+function openCommandDetail(requestId) {
+  activeCommandDetailRequestId.value = requestId || "";
 }
 
 function resolveAgentSummary(item) {
@@ -194,6 +187,34 @@ function formatCreatedAt(value) {
 
   return createdAtFormatter.format(date).replaceAll("/", "-");
 }
+
+function hasCommandOutput(item) {
+  return Boolean(item?.stdout || item?.stderr || item?.error);
+}
+
+function isErrorOnlyOutput(item) {
+  return Boolean(!item?.stdout && (item?.stderr || item?.error));
+}
+
+function getCommandOutputPreviewTitle(item) {
+  return item?.stdout ? "输出预览" : "错误输出";
+}
+
+function getCommandOutputPreview(item) {
+  const stdout = String(item?.stdout || "").trimEnd();
+  const stderr = String(item?.stderr || item?.error || "").trimEnd();
+  const parts = [];
+
+  if (stdout) {
+    parts.push(stdout);
+  }
+
+  if (stderr) {
+    parts.push(stdout ? `STDERR / ERROR\n${stderr}` : stderr);
+  }
+
+  return parts.join("\n\n");
+}
 </script>
 
 <template>
@@ -220,19 +241,21 @@ function formatCreatedAt(value) {
             />
           </el-select>
         </label>
-        <div class="hero-actions tasks-toolbar-actions">
-          <el-button
-            round
-            plain
-            type="danger"
-            :disabled="!canClearCommands"
-            @click="emit('clear-commands')"
-          >
-            {{ clearingCommands ? "清空中..." : clearButtonText }}
-          </el-button>
-        </div>
       </div>
-      <p class="muted tasks-toolbar-hint">仅会清空已结束记录，执行中的任务会保留。</p>
+      <div class="tasks-toolbar-footer">
+        <p class="muted tasks-toolbar-hint">仅会清空已结束记录，执行中的任务会保留。</p>
+        <el-button
+          class="tasks-clear-button"
+          link
+          type="danger"
+          :icon="Delete"
+          :disabled="!canClearCommands"
+          :title="clearButtonTitle"
+          @click="emit('clear-commands')"
+        >
+          {{ clearingCommands ? "清空中..." : clearButtonText }}
+        </el-button>
+      </div>
     </el-card>
 
     <section class="stack-grid">
@@ -252,30 +275,24 @@ function formatCreatedAt(value) {
             </div>
           </div>
 
-          <div class="timeline-summary-meta">
-            <span
-              class="timeline-summary-item timeline-summary-device"
-              :title="resolveAgentSummary(item)"
+          <div class="timeline-command-preview-grid">
+            <div class="console-block timeline-command-preview">
+              <h4>输入</h4>
+              <pre>{{ item.command || "-" }}</pre>
+            </div>
+
+            <div
+              v-if="hasCommandOutput(item)"
+              class="console-block timeline-output-preview"
+              :class="{ error: isErrorOnlyOutput(item) }"
             >
-              <span class="timeline-summary-label">设备</span>
-              <strong>{{ resolveAgentSummary(item) }}</strong>
-            </span>
-            <span class="timeline-summary-item">
-              <span class="timeline-summary-label">创建</span>
-              <strong>{{ formatCreatedAt(item.createdAt) }}</strong>
-            </span>
-            <span class="timeline-summary-item">
-              <span class="timeline-summary-label">退出码</span>
-              <strong>{{ formatExitCode(item.exitCode) }}</strong>
-            </span>
-            <span class="timeline-summary-item">
-              <span class="timeline-summary-label">Shell</span>
-              <strong>{{ resolveShellLabel(item.commandShell) }}</strong>
-            </span>
-            <span class="timeline-summary-item">
-              <span class="timeline-summary-label">安全</span>
-              <strong>{{ item.secureStatus || "-" }}</strong>
-            </span>
+              <h4>{{ getCommandOutputPreviewTitle(item) }}</h4>
+              <pre>{{ getCommandOutputPreview(item) }}</pre>
+            </div>
+
+            <p v-else class="muted timeline-output-empty">
+              当前还没有输出内容。
+            </p>
           </div>
 
           <div class="timeline-summary-footer">
@@ -290,36 +307,15 @@ function formatCreatedAt(value) {
               删除
             </el-button>
             <span v-else></span>
-            <button
-              class="timeline-toggle"
-              type="button"
-              :aria-expanded="isExpanded(item.requestId)"
-              @click="toggleExpanded(item.requestId)"
+            <el-button
+              class="timeline-detail-button"
+              link
+              type="primary"
+              @click="openCommandDetail(item.requestId)"
             >
-              {{ isExpanded(item.requestId) ? "收起详情" : "展开详情" }}
-            </button>
+              查看详情
+            </el-button>
           </div>
-        </div>
-
-        <div v-if="isExpanded(item.requestId)" class="timeline-details">
-          <div class="detail-row">
-            <span>完整命令</span>
-            <strong>{{ item.command }}</strong>
-          </div>
-
-          <div v-if="item.stdout" class="console-block">
-            <h4>STDOUT</h4>
-            <pre>{{ item.stdout }}</pre>
-          </div>
-
-          <div v-if="item.stderr || item.error" class="console-block error">
-            <h4>STDERR / ERROR</h4>
-            <pre>{{ item.stderr || item.error }}</pre>
-          </div>
-
-          <p v-if="!item.stdout && !item.stderr && !item.error" class="muted">
-            当前没有输出内容。
-          </p>
         </div>
       </el-card>
 
@@ -327,5 +323,17 @@ function formatCreatedAt(value) {
         <p class="muted">当前筛选条件下还没有命令记录。</p>
       </el-card>
     </section>
+
+    <CommandDetailDialog
+      v-if="activeCommandDetailRecord"
+      v-model="commandDetailDialogVisible"
+      title="命令详情"
+      :subtitle="resolveAgentSummary(activeCommandDetailRecord)"
+      :command="activeCommandDetailRecord.command || ''"
+      :stdout="activeCommandDetailRecord.stdout || ''"
+      :stderr="activeCommandDetailRecord.stderr || ''"
+      :error="activeCommandDetailRecord.error || ''"
+      :meta-items="activeCommandDetailMetaItems"
+    />
   </section>
 </template>
