@@ -3,12 +3,11 @@ import {
   Aim,
   ArrowRight,
   Monitor,
-  Refresh,
-  Tickets,
-  Warning
+  Tickets
 } from "@element-plus/icons-vue";
 import { ElButton, ElCard, ElIcon, ElTag } from "element-plus";
 import { computed } from "vue";
+import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
   agents: {
@@ -38,6 +37,14 @@ const props = defineProps({
   wsConnected: {
     type: Boolean,
     required: true
+  },
+  loadingAgents: {
+    type: Boolean,
+    default: false
+  },
+  agentsError: {
+    type: String,
+    default: ""
   }
 });
 
@@ -133,7 +140,21 @@ function statusType(status) {
           <el-tag round effect="plain">{{ agents.length }}</el-tag>
         </div>
 
-        <div v-if="agents.length" class="list-grid">
+        <div v-if="loadingAgents && !agents.length" class="home-empty-state-wrap">
+          <EmptyState
+            variant="loading"
+            title="正在加载设备"
+            description="正在同步在线设备列表。"
+          />
+        </div>
+        <div v-else-if="agentsError && !agents.length" class="home-empty-state-wrap">
+          <EmptyState
+            variant="error"
+            title="设备列表加载失败"
+            :description="agentsError"
+          />
+        </div>
+        <div v-else-if="agents.length" class="list-grid">
           <button v-for="agent in agents" :key="agent.agentId" class="settings-item"
             :class="{ active: selectedAgentId === agent.agentId }" type="button"
             @click="emit('select-agent', agent.agentId)">
@@ -144,11 +165,10 @@ function statusType(status) {
             <el-tag :type="statusType(agent.status)" effect="dark" round>{{ agent.status }}</el-tag>
           </button>
         </div>
-        <div v-else class="home-empty-state">
-          <el-icon><Warning /></el-icon>
-          <strong>暂无在线设备</strong>
-          <p>启动 localapp agent 后，设备会显示在这里。</p>
-          <el-button plain @click="emit('go-terminal')">查看终端配置</el-button>
+        <div v-else class="home-empty-state-wrap">
+          <EmptyState title="暂无在线设备" description="启动 localapp agent 后，设备会显示在这里。">
+            <el-button plain @click="emit('go-terminal')">查看终端配置</el-button>
+          </EmptyState>
         </div>
       </section>
 
@@ -180,11 +200,7 @@ function statusType(status) {
           <h4>Common Working Directories</h4>
           <pre>{{ activeAgent.commonWorkingDirectories.join("\n") }}</pre>
         </div>
-        <div v-else class="home-empty-state home-empty-state-compact">
-          <el-icon><Refresh /></el-icon>
-          <strong>未选择设备</strong>
-          <p>从左侧设备列表中选择一台在线设备。</p>
-        </div>
+        <EmptyState v-else-if="!activeAgent" compact title="未选择设备" description="从左侧设备列表中选择一台在线设备。" />
       </section>
     </el-card>
   </section>

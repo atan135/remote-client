@@ -49,6 +49,8 @@ async function handleSubmitCommand(commandOverride) {
     :reading-remote-file="store.readingRemoteFile"
     :terminating-terminal-session-id="store.terminatingTerminalSessionId || ''"
     :deleting-terminal-session-id="store.deletingTerminalSessionId || ''"
+    :loading-terminal-sessions="store.loadingTerminalSessions"
+    :terminal-sessions-error="store.loadErrors.terminalSessions"
     @update:selected-agent-id="store.selectedAgentId = $event"
     @update:command-input="store.commandInput = $event"
     @update:command-shell="store.commandShell = $event"

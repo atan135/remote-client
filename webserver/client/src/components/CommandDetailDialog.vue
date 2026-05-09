@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from "vue";
 import { ElButton, ElDialog, ElMessage } from "element-plus";
+import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
   modelValue: {
@@ -122,9 +123,7 @@ async function copyText(text, label) {
           <pre>{{ errorText }}</pre>
         </section>
 
-        <p v-if="!hasAnyOutput" class="muted remote-file-empty">
-          当前还没有输出内容。
-        </p>
+        <EmptyState v-if="!hasAnyOutput" compact title="等待输出" description="当前还没有输出内容。" />
       </div>
     </div>
   </el-dialog>

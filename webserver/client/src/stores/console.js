@@ -71,6 +71,9 @@ export const useConsoleStore = defineStore("console", () => {
   const creatingTerminalSession = ref(false);
   const sendingTerminalInput = ref(false);
   const readingRemoteFile = ref(false);
+  const loadingAgents = ref(false);
+  const loadingCommands = ref(false);
+  const loadingTerminalSessions = ref(false);
   const loadingUsers = ref(false);
   const loadingManagedAgents = ref(false);
   const loadingAuthCodes = ref(false);
@@ -98,6 +101,16 @@ export const useConsoleStore = defineStore("console", () => {
   const remoteFileViewer = ref(createEmptyRemoteFileViewer());
   const pendingTaskCount = ref(0);
   const failedTaskCount = ref(0);
+
+  const loadErrors = reactive({
+    agents: "",
+    commands: "",
+    terminalSessions: "",
+    authCodes: "",
+    users: "",
+    managedAgents: "",
+    adminAuthCodes: ""
+  });
 
   const loginForm = reactive({
     username: "",
@@ -568,6 +581,9 @@ export const useConsoleStore = defineStore("console", () => {
       users.value = [];
       managedAgents.value = [];
       adminAuthCodes.value = [];
+      loadErrors.users = "";
+      loadErrors.managedAgents = "";
+      loadErrors.adminAuthCodes = "";
     }
 
     await Promise.all(jobs);
@@ -577,55 +593,86 @@ export const useConsoleStore = defineStore("console", () => {
   }
 
   async function loadAgents() {
-    const response = await fetch("/api/agents");
+    loadingAgents.value = true;
+    loadErrors.agents = "";
 
-    if (response.status === 401) {
-      await handleUnauthorized();
-      return;
+    try {
+      const response = await fetch("/api/agents");
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("加载设备列表失败");
+      }
+
+      const payload = await response.json();
+      replaceAgents(payload.items || []);
+    } catch (error) {
+      loadErrors.agents = error.message || "加载设备列表失败";
+      throw error;
+    } finally {
+      loadingAgents.value = false;
     }
-
-    if (!response.ok) {
-      throw new Error("加载设备列表失败");
-    }
-
-    const payload = await response.json();
-    replaceAgents(payload.items || []);
   }
 
   async function loadCommands() {
-    const response = await fetch("/api/commands");
+    loadingCommands.value = true;
+    loadErrors.commands = "";
 
-    if (response.status === 401) {
-      await handleUnauthorized();
-      return;
+    try {
+      const response = await fetch("/api/commands");
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("加载命令记录失败");
+      }
+
+      const payload = await response.json();
+      replaceCommands(payload.items || []);
+    } catch (error) {
+      loadErrors.commands = error.message || "加载命令记录失败";
+      throw error;
+    } finally {
+      loadingCommands.value = false;
     }
-
-    if (!response.ok) {
-      throw new Error("加载命令记录失败");
-    }
-
-    const payload = await response.json();
-    replaceCommands(payload.items || []);
   }
 
   async function loadTerminalSessions() {
-    const response = await fetch("/api/terminal-sessions");
+    loadingTerminalSessions.value = true;
+    loadErrors.terminalSessions = "";
 
-    if (response.status === 401) {
-      await handleUnauthorized();
-      return;
+    try {
+      const response = await fetch("/api/terminal-sessions");
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return;
+      }
+
+      if (!response.ok) {
+        throw new Error("加载终端会话失败");
+      }
+
+      const payload = await response.json();
+      replaceTerminalSessions(payload.items || []);
+    } catch (error) {
+      loadErrors.terminalSessions = error.message || "加载终端会话失败";
+      throw error;
+    } finally {
+      loadingTerminalSessions.value = false;
     }
-
-    if (!response.ok) {
-      throw new Error("加载终端会话失败");
-    }
-
-    const payload = await response.json();
-    replaceTerminalSessions(payload.items || []);
   }
 
   async function loadAuthCodes() {
     loadingAuthCodes.value = true;
+    loadErrors.authCodes = "";
 
     try {
       const response = await fetch("/api/auth-codes");
@@ -641,6 +688,9 @@ export const useConsoleStore = defineStore("console", () => {
 
       const payload = await response.json();
       authCodes.value = payload.items || [];
+    } catch (error) {
+      loadErrors.authCodes = error.message || "加载 auth_code 列表失败";
+      throw error;
     } finally {
       loadingAuthCodes.value = false;
     }
@@ -652,6 +702,7 @@ export const useConsoleStore = defineStore("console", () => {
     }
 
     loadingUsers.value = true;
+    loadErrors.users = "";
 
     try {
       const response = await fetch("/api/users");
@@ -671,6 +722,9 @@ export const useConsoleStore = defineStore("console", () => {
 
       const payload = await response.json();
       users.value = payload.items || [];
+    } catch (error) {
+      loadErrors.users = error.message || "加载用户列表失败";
+      throw error;
     } finally {
       loadingUsers.value = false;
     }
@@ -682,6 +736,7 @@ export const useConsoleStore = defineStore("console", () => {
     }
 
     loadingManagedAgents.value = true;
+    loadErrors.managedAgents = "";
 
     try {
       const response = await fetch("/api/managed-agents");
@@ -701,6 +756,9 @@ export const useConsoleStore = defineStore("console", () => {
 
       const payload = await response.json();
       managedAgents.value = payload.items || [];
+    } catch (error) {
+      loadErrors.managedAgents = error.message || "加载设备审核列表失败";
+      throw error;
     } finally {
       loadingManagedAgents.value = false;
     }
@@ -712,6 +770,7 @@ export const useConsoleStore = defineStore("console", () => {
     }
 
     loadingAdminAuthCodes.value = true;
+    loadErrors.adminAuthCodes = "";
 
     try {
       const response = await fetch("/api/admin/auth-codes");
@@ -731,6 +790,9 @@ export const useConsoleStore = defineStore("console", () => {
 
       const payload = await response.json();
       adminAuthCodes.value = payload.items || [];
+    } catch (error) {
+      loadErrors.adminAuthCodes = error.message || "加载全量 auth_code 绑定失败";
+      throw error;
     } finally {
       loadingAdminAuthCodes.value = false;
     }
@@ -2297,6 +2359,16 @@ export const useConsoleStore = defineStore("console", () => {
     authMode.value = "login";
     wsState.connected = false;
     wsState.error = "";
+    loadingAgents.value = false;
+    loadingCommands.value = false;
+    loadingTerminalSessions.value = false;
+    loadingUsers.value = false;
+    loadingManagedAgents.value = false;
+    loadingAuthCodes.value = false;
+    loadingAdminAuthCodes.value = false;
+    Object.keys(loadErrors).forEach((key) => {
+      loadErrors[key] = "";
+    });
     resetRemoteFileViewer();
     terminalSocketInputQueue.length = 0;
     pendingTerminalSocketInputs.length = 0;
@@ -2959,9 +3031,13 @@ export const useConsoleStore = defineStore("console", () => {
     failedTaskCount,
     latestVisibleCommandRequestId,
     loadDashboard,
+    loadErrors,
+    loadingAgents,
     loadingAdminAuthCodes,
     loadingAuthCodes,
+    loadingCommands,
     loadingManagedAgents,
+    loadingTerminalSessions,
     loadingUsers,
     login,
     loginForm,

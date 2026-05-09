@@ -2,6 +2,7 @@
 import { computed, ref, watch } from "vue";
 import { ElCollapse, ElCollapseItem, ElDialog, ElTag } from "element-plus";
 import MarkdownIt from "markdown-it";
+import EmptyState from "./EmptyState.vue";
 
 const markdownRenderer = new MarkdownIt({
   html: false,
@@ -173,7 +174,7 @@ function formatCompactDateTime(value) {
 
       <div v-if="isMarkdownFile && viewer.content" class="remote-file-markdown" v-html="renderedMarkdown" />
       <pre v-else-if="viewer.content">{{ viewer.content }}</pre>
-      <p v-else class="muted remote-file-empty">文件内容为空。</p>
+      <EmptyState v-else compact title="文件内容为空" description="当前文件没有可展示的文本内容。" />
     </div>
   </el-dialog>
 </template>

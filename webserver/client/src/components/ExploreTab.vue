@@ -16,6 +16,7 @@ import {
 } from "element-plus";
 import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
 import TerminalEmulator from "./TerminalEmulator.vue";
+import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
   agents: {
@@ -123,6 +124,14 @@ const props = defineProps({
     default: ""
   },
   deletingTerminalSessionId: {
+    type: String,
+    default: ""
+  },
+  loadingTerminalSessions: {
+    type: Boolean,
+    default: false
+  },
+  terminalSessionsError: {
     type: String,
     default: ""
   }
@@ -690,7 +699,29 @@ watch(
                 </div>
               </div>
             </div>
-            <p v-else class="muted compact-stack">先创建会话，再在这里选择和切换终端实例。</p>
+            <EmptyState
+              v-else-if="loadingTerminalSessions"
+              compact
+              variant="loading"
+              class="compact-stack"
+              title="正在加载终端会话"
+              description="正在同步会话列表。"
+            />
+            <EmptyState
+              v-else-if="terminalSessionsError"
+              compact
+              variant="error"
+              class="compact-stack"
+              title="终端会话加载失败"
+              :description="terminalSessionsError"
+            />
+            <EmptyState
+              v-else
+              compact
+              class="compact-stack"
+              title="暂无终端会话"
+              description="先创建会话，再在这里选择和切换终端实例。"
+            />
           </div>
         </el-tab-pane>
       </el-tabs>
@@ -829,7 +860,7 @@ watch(
             <pre>{{ remoteFileError }}</pre>
           </div>
         </div>
-        <p v-else class="muted">当前会话不可用，请返回会话列表重新选择。</p>
+        <EmptyState v-else variant="warning" title="会话不可用" description="请返回会话列表重新选择。" />
 
         <div v-if="currentSession?.error" class="console-block error">
           <h4>Session Error</h4>

@@ -13,6 +13,7 @@ import {
   ElTag
 } from "element-plus";
 import CommandDetailDialog from "./CommandDetailDialog.vue";
+import EmptyState from "./EmptyState.vue";
 import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
 
 const CHAT_OUTPUT_PREVIEW_LIMIT = 1200;
@@ -1726,9 +1727,9 @@ watch(
                   <pre>{{ getCommandOutputPreview(resolveCommandRecord(message)) }}</pre>
                 </div>
 
-                <p v-else class="muted chat-result-empty">当前还没有输出内容。</p>
+                <EmptyState v-else compact title="等待输出" description="当前还没有输出内容。" />
               </template>
-              <p v-else class="muted chat-result-empty">等待任务状态同步。</p>
+              <EmptyState v-else compact variant="loading" title="同步中" description="等待任务状态同步。" />
             </div>
           </div>
 

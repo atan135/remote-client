@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { Delete } from "@element-plus/icons-vue";
 import { ElButton, ElCard, ElOption, ElSelect, ElTag } from "element-plus";
 import CommandDetailDialog from "./CommandDetailDialog.vue";
+import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
   commands: {
@@ -30,6 +31,14 @@ const props = defineProps({
     required: true
   },
   latestRequestId: {
+    type: String,
+    default: ""
+  },
+  loadingCommands: {
+    type: Boolean,
+    default: false
+  },
+  commandsError: {
     type: String,
     default: ""
   }
@@ -259,68 +268,84 @@ function getCommandOutputPreview(item) {
     </el-card>
 
     <section class="stack-grid">
-      <el-card
-        v-for="item in commands"
-        :key="item.requestId"
-        class="surface-card timeline-card"
-        shadow="never"
-      >
-        <div class="timeline-summary">
-          <div class="timeline-summary-top">
-            <h3 :title="item.command">{{ item.command }}</h3>
-            <div class="timeline-summary-top-actions">
-              <el-tag class="timeline-status-tag" :type="statusType(item.status)" effect="dark" round>
-                {{ item.status }}
-              </el-tag>
-            </div>
-          </div>
-
-          <div class="timeline-command-preview-grid">
-            <div class="console-block timeline-command-preview">
-              <h4>输入</h4>
-              <pre>{{ item.command || "-" }}</pre>
-            </div>
-
-            <div
-              v-if="hasCommandOutput(item)"
-              class="console-block timeline-output-preview"
-              :class="{ error: isErrorOnlyOutput(item) }"
-            >
-              <h4>{{ getCommandOutputPreviewTitle(item) }}</h4>
-              <pre>{{ getCommandOutputPreview(item) }}</pre>
-            </div>
-
-            <p v-else class="muted timeline-output-empty">
-              当前还没有输出内容。
-            </p>
-          </div>
-
-          <div class="timeline-summary-footer">
-            <el-button
-              v-if="canDeleteCommand(item)"
-              class="timeline-delete-button"
-              link
-              type="danger"
-              :loading="deletingCommandRequestId === item.requestId"
-              @click="emit('delete-command', item.requestId)"
-            >
-              删除
-            </el-button>
-            <span v-else></span>
-            <el-button
-              class="timeline-detail-button"
-              link
-              type="primary"
-              @click="openCommandDetail(item.requestId)"
-            >
-              查看详情
-            </el-button>
-          </div>
-        </div>
+      <el-card v-if="loadingCommands && !commands.length" class="surface-card info-card" shadow="never">
+        <EmptyState
+          variant="loading"
+          title="正在加载命令记录"
+          description="正在同步任务历史。"
+        />
       </el-card>
 
-      <el-card v-if="!commands.length" class="surface-card info-card" shadow="never">
-        <p class="muted">当前筛选条件下还没有命令记录。</p>
+      <el-card v-else-if="commandsError && !commands.length" class="surface-card info-card" shadow="never">
+        <EmptyState
+          variant="error"
+          title="命令记录加载失败"
+          :description="commandsError"
+        />
+      </el-card>
+
+      <template v-else>
+        <el-card
+          v-for="item in commands"
+          :key="item.requestId"
+          class="surface-card timeline-card"
+          shadow="never"
+        >
+          <div class="timeline-summary">
+            <div class="timeline-summary-top">
+              <h3 :title="item.command">{{ item.command }}</h3>
+              <div class="timeline-summary-top-actions">
+                <el-tag class="timeline-status-tag" :type="statusType(item.status)" effect="dark" round>
+                  {{ item.status }}
+                </el-tag>
+              </div>
+            </div>
+
+            <div class="timeline-command-preview-grid">
+              <div class="console-block timeline-command-preview">
+                <h4>输入</h4>
+                <pre>{{ item.command || "-" }}</pre>
+              </div>
+
+              <div
+                v-if="hasCommandOutput(item)"
+                class="console-block timeline-output-preview"
+                :class="{ error: isErrorOnlyOutput(item) }"
+              >
+                <h4>{{ getCommandOutputPreviewTitle(item) }}</h4>
+                <pre>{{ getCommandOutputPreview(item) }}</pre>
+              </div>
+
+              <EmptyState v-else compact title="等待输出" description="当前还没有输出内容。" />
+            </div>
+
+            <div class="timeline-summary-footer">
+              <el-button
+                v-if="canDeleteCommand(item)"
+                class="timeline-delete-button"
+                link
+                type="danger"
+                :loading="deletingCommandRequestId === item.requestId"
+                @click="emit('delete-command', item.requestId)"
+              >
+                删除
+              </el-button>
+              <span v-else></span>
+              <el-button
+                class="timeline-detail-button"
+                link
+                type="primary"
+                @click="openCommandDetail(item.requestId)"
+              >
+                查看详情
+              </el-button>
+            </div>
+          </div>
+        </el-card>
+      </template>
+
+      <el-card v-if="!loadingCommands && !commandsError && !commands.length" class="surface-card info-card" shadow="never">
+        <EmptyState title="暂无命令记录" description="当前筛选条件下还没有命令记录。" />
       </el-card>
     </section>
 

@@ -1,6 +1,7 @@
 <script setup>
 import { ElAvatar, ElButton, ElCard, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTag } from "element-plus";
 import { computed, ref } from "vue";
+import EmptyState from "./EmptyState.vue";
 
 const props = defineProps({
   session: {
@@ -70,6 +71,22 @@ const props = defineProps({
   loadingAuthCodes: {
     type: Boolean,
     required: true
+  },
+  authCodesError: {
+    type: String,
+    default: ""
+  },
+  usersError: {
+    type: String,
+    default: ""
+  },
+  managedAgentsError: {
+    type: String,
+    default: ""
+  },
+  adminAuthCodesError: {
+    type: String,
+    default: ""
   },
   creatingAuthCode: {
     type: Boolean,
@@ -423,7 +440,26 @@ function backToMenu() {
               </div>
             </el-card>
 
-            <p v-if="loadingAuthCodes" class="muted">正在加载 auth_code 列表...</p>
+            <EmptyState
+              v-if="loadingAuthCodes && !authCodes.length"
+              compact
+              variant="loading"
+              title="正在加载授权绑定"
+              description="正在同步 auth_code 列表。"
+            />
+            <EmptyState
+              v-else-if="authCodesError && !authCodes.length"
+              compact
+              variant="error"
+              title="授权绑定加载失败"
+              :description="authCodesError"
+            />
+            <EmptyState
+              v-else-if="!authCodes.length"
+              compact
+              title="暂无授权绑定"
+              description="新增 auth_code 后，设备公钥绑定会显示在这里。"
+            />
           </div>
 
           <el-card v-if="isAdmin" class="surface-card info-card profile-admin-card" shadow="never">
@@ -550,7 +586,26 @@ function backToMenu() {
                 </div>
               </el-card>
 
-              <p v-if="loadingUsers" class="muted">正在加载用户列表...</p>
+              <EmptyState
+                v-if="loadingUsers && !users.length"
+                compact
+                variant="loading"
+                title="正在加载用户"
+                description="正在同步用户列表。"
+              />
+              <EmptyState
+                v-else-if="usersError && !users.length"
+                compact
+                variant="error"
+                title="用户列表加载失败"
+                :description="usersError"
+              />
+              <EmptyState
+                v-else-if="!users.length"
+                compact
+                title="暂无用户"
+                description="创建用户后，账号会显示在这里。"
+              />
             </div>
           </el-card>
 
@@ -644,7 +699,26 @@ function backToMenu() {
                 </div>
               </el-card>
 
-              <p v-if="loadingManagedAgents" class="muted">正在加载设备审核列表...</p>
+              <EmptyState
+                v-if="loadingManagedAgents && !managedAgents.length"
+                compact
+                variant="loading"
+                title="正在加载设备审核"
+                description="正在同步设备审核列表。"
+              />
+              <EmptyState
+                v-else-if="managedAgentsError && !managedAgents.length"
+                compact
+                variant="error"
+                title="设备审核加载失败"
+                :description="managedAgentsError"
+              />
+              <EmptyState
+                v-else-if="!managedAgents.length"
+                compact
+                title="暂无待管理设备"
+                description="新设备接入后，审核信息会显示在这里。"
+              />
             </div>
           </el-card>
 
@@ -690,7 +764,26 @@ function backToMenu() {
                 </div>
               </el-card>
 
-              <p v-if="loadingAdminAuthCodes" class="muted">正在加载绑定归属列表...</p>
+              <EmptyState
+                v-if="loadingAdminAuthCodes && !adminAuthCodes.length"
+                compact
+                variant="loading"
+                title="正在加载绑定归属"
+                description="正在同步所有设备绑定。"
+              />
+              <EmptyState
+                v-else-if="adminAuthCodesError && !adminAuthCodes.length"
+                compact
+                variant="error"
+                title="绑定归属加载失败"
+                :description="adminAuthCodesError"
+              />
+              <EmptyState
+                v-else-if="!adminAuthCodes.length"
+                compact
+                title="暂无绑定归属"
+                description="用户绑定设备公钥后，归属信息会显示在这里。"
+              />
             </div>
           </el-card>
         </div>
