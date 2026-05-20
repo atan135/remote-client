@@ -25,6 +25,7 @@ function openTerminal() {
     :ws-connected="store.wsState.connected"
     :loading-agents="store.loadingAgents"
     :agents-error="store.loadErrors.agents"
+    :diagnostics-loader="store.loadAgentDiagnostics"
     @select-agent="store.selectedAgentId = $event"
     @go-terminal="openTerminal"
   />

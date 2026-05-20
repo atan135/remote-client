@@ -1017,6 +1017,23 @@ textarea {
   color: var(--text-dim);
 }
 
+.home-agent-item {
+  cursor: pointer;
+}
+
+.home-agent-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.home-agent-actions .el-button {
+  min-width: 64px;
+}
+
 .detail-row {
   display: flex;
   align-items: center;
@@ -1875,6 +1892,98 @@ textarea {
 .settings-item.active {
   border-color: rgba(242, 166, 90, 0.36);
   background: rgba(242, 166, 90, 0.08);
+}
+
+.agent-diagnostic-dialog.el-dialog {
+  max-width: calc(100vw - 28px);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(13, 20, 31, 0.98);
+  color: var(--text);
+}
+
+.agent-diagnostic-dialog .el-dialog__header {
+  padding: 16px 18px 10px;
+}
+
+.agent-diagnostic-dialog .el-dialog__body {
+  padding: 12px 18px 18px;
+}
+
+.agent-diagnostic-loading {
+  display: grid;
+  min-height: 260px;
+}
+
+.agent-diagnostic-body {
+  display: grid;
+  gap: 14px;
+}
+
+.agent-diagnostic-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.agent-diagnostic-head > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.agent-diagnostic-head strong,
+.agent-diagnostic-head small {
+  overflow-wrap: anywhere;
+}
+
+.agent-diagnostic-head small {
+  color: var(--text-dim);
+}
+
+.agent-diagnostic-section {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-diagnostic-section h4 {
+  margin: 0;
+  color: #d8e2ec;
+  font-size: 0.95rem;
+}
+
+.agent-diagnostic-section .detail-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.agent-diagnostic-section .detail-row {
+  align-items: flex-start;
+}
+
+.agent-diagnostic-section .detail-row strong {
+  max-width: 62%;
+  text-align: right;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.agent-diagnostic-hints {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px 12px 30px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.agent-diagnostic-command {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .settings-arrow {
@@ -3257,8 +3366,27 @@ textarea {
   }
 
   .home-page .settings-item {
+    align-items: flex-start;
+    flex-direction: column;
     padding: 10px 12px;
     border-radius: 12px;
+  }
+
+  .home-agent-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .agent-diagnostic-section .detail-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-diagnostic-head {
+    flex-direction: column;
+  }
+
+  .agent-diagnostic-section .detail-row strong {
+    max-width: 100%;
   }
 
   .home-page .detail-grid {

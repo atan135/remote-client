@@ -735,6 +735,28 @@ app.get("/api/agents", requireAuth, (req, res) => {
   res.json({ items: agentRegistry.list() });
 });
 
+app.get("/api/agents/:agentId/diagnostics", requireAuth, async (req, res) => {
+  try {
+    const agentId = String(req.params.agentId || "").trim();
+
+    if (!agentId) {
+      res.status(400).json({ message: "agentId is required" });
+      return;
+    }
+
+    const item = await buildAgentDiagnostics(agentId, req.auth.user);
+    res.json({ item });
+  } catch (error) {
+    logEvent(serverLogger, "error", "agent.diagnostics_failed", {
+      agentId: String(req.params.agentId || ""),
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(500).json({ message: error.message || "加载设备诊断失败" });
+  }
+});
+
 app.get("/api/commands", requireAuth, (req, res) => {
   void handleCommandHistoryRequest(req, res);
 });
@@ -1297,9 +1319,13 @@ agentSocketServer.on("connection", (socket, request, url) => {
   });
 
   socket.on("close", (code, reasonBuffer) => {
-    const disconnectResult = agentRegistry.disconnect(agentId, socket);
-    const agent = disconnectResult.agent;
     const reason = normalizeSocketCloseReason(reasonBuffer);
+    const disconnectResult = agentRegistry.disconnect(agentId, socket, {
+      closeCode: code,
+      closeReason: reason,
+      disconnectGraceMs: config.agentDisconnectGraceMs
+    });
+    const agent = disconnectResult.agent;
 
     if (disconnectResult.stale) {
       logEvent(serverLogger, "warn", "agent.websocket_stale_close_ignored", {
@@ -3106,6 +3132,158 @@ function serializeManagedAgent(record) {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt
   };
+}
+
+async function buildAgentDiagnostics(agentId, user) {
+  const normalizedAgentId = String(agentId || "").trim();
+  const isAdmin = String(user?.role || "") === "admin";
+  const agent = agentRegistry.get(normalizedAgentId);
+  const socket = agentRegistry.getSocket(normalizedAgentId);
+  const managedAgent = await managedAgentService.findCurrentByAgentId(normalizedAgentId);
+  const owner = await authCodeService.findOwnerByAgentId(normalizedAgentId);
+  const currentUserBinding = await authCodeService.findByUserIdAndAgentId(
+    user.id,
+    normalizedAgentId
+  );
+  const activeCommands = commandStore
+    .list({ agentId: normalizedAgentId, limit: config.commandHistoryLimit })
+    .filter((item) => ["queued", "running", "dispatched"].includes(String(item?.status || "")));
+  const activeTerminalSessions = terminalSessionStore
+    .list(config.terminalSessionHistoryLimit)
+    .filter(
+      (item) =>
+        item.agentId === normalizedAgentId && !isTerminalSessionClosedStatus(item.status)
+    );
+  const ownerVisible = Boolean(owner && (isAdmin || Number(owner.userId) === Number(user.id)));
+  const websocket = {
+    serverHasAgentRecord: Boolean(agent),
+    socketOpen: Boolean(socket && socket.readyState === WebSocket.OPEN),
+    status: agent?.status || "unknown",
+    connectedAt: agent?.connectedAt || null,
+    lastConnectedAt: agent?.lastConnectedAt || null,
+    lastSeenAt: agent?.lastSeenAt || null,
+    lastDisconnectAt: agent?.lastDisconnectAt || null,
+    lastCloseCode: agent?.lastCloseCode ?? null,
+    lastCloseReason: agent?.lastCloseReason || "",
+    disconnectGraceMs: agent?.lastDisconnectGraceMs ?? config.agentDisconnectGraceMs
+  };
+  const authCode = {
+    exists: Boolean(owner),
+    currentUserHasBinding: Boolean(currentUserBinding),
+    ownedByOtherUser: Boolean(owner && Number(owner.userId) !== Number(user.id)),
+    ownerVisible,
+    ownerUsername: ownerVisible ? owner.ownerUsername : "",
+    ownerDisplayName: ownerVisible ? owner.ownerDisplayName : "",
+    authCodeId: ownerVisible ? owner.id : null,
+    fingerprint: ownerVisible ? owner.fingerprint : "",
+    remark: ownerVisible ? owner.remark : "",
+    updatedAt: ownerVisible ? owner.updatedAt : null
+  };
+  const managed = managedAgent
+    ? {
+        id: managedAgent.id,
+        recordStatus: managedAgent.recordStatus,
+        approvalStatus: managedAgent.approvalStatus,
+        isEnabled: managedAgent.isEnabled,
+        label: managedAgent.label,
+        hostname: managedAgent.hostname,
+        platform: managedAgent.platform,
+        arch: managedAgent.arch,
+        authPublicKeyFingerprint: managedAgent.authPublicKeyFingerprint,
+        applicationNote: managedAgent.applicationNote,
+        reviewComment: isAdmin ? managedAgent.reviewComment : "",
+        firstSeenAt: managedAgent.firstSeenAt,
+        lastSeenAt: managedAgent.lastSeenAt,
+        lastSeenIp: isAdmin ? managedAgent.lastSeenIp : "",
+        updatedAt: managedAgent.updatedAt
+      }
+    : null;
+  const diagnostics = {
+    agentId: normalizedAgentId,
+    checkedAt: new Date().toISOString(),
+    websocket,
+    registryAgent: agent
+      ? {
+          label: agent.label,
+          hostname: agent.hostname,
+          platform: agent.platform,
+          arch: agent.arch,
+          pid: agent.pid ?? null,
+          authPublicKeyFingerprint: agent.authPublicKeyFingerprint || "",
+          presetCommandCount: Array.isArray(agent.presetCommands) ? agent.presetCommands.length : 0,
+          commonWorkingDirectoryCount: Array.isArray(agent.commonWorkingDirectories)
+            ? agent.commonWorkingDirectories.length
+            : 0,
+          terminalProfileCount: Array.isArray(agent.terminalProfiles)
+            ? agent.terminalProfiles.length
+            : 0
+        }
+      : null,
+    managedAgent: managed,
+    authCode,
+    runtime: {
+      activeCommandCount: activeCommands.length,
+      activeTerminalSessionCount: activeTerminalSessions.length,
+      pendingCommandStatuses: activeCommands.map((item) => ({
+        requestId: item.requestId,
+        status: item.status,
+        updatedAt: item.updatedAt || null
+      })),
+      activeTerminalSessionStatuses: activeTerminalSessions.map((item) => ({
+        sessionId: item.sessionId,
+        status: item.status,
+        updatedAt: item.updatedAt || null
+      }))
+    }
+  };
+
+  diagnostics.hints = buildAgentDiagnosticHints(diagnostics);
+  return diagnostics;
+}
+
+function buildAgentDiagnosticHints(diagnostics) {
+  const hints = [];
+  const websocket = diagnostics.websocket || {};
+  const managedAgent = diagnostics.managedAgent || null;
+  const authCode = diagnostics.authCode || {};
+
+  if (!websocket.serverHasAgentRecord && !managedAgent) {
+    hints.push("服务端没有该设备的在线记录或审核记录，可能 localapp 从未成功连到 server，或 server 刚重启。");
+  }
+
+  if (websocket.socketOpen) {
+    hints.push("服务端当前持有打开的 agent WebSocket，server 到 localapp 的链路在线。");
+  } else if (websocket.status === "offline") {
+    hints.push("服务端已记录 agent WebSocket 断开，localapp 应按 RECONNECT_INTERVAL_MS 周期重连。");
+  } else if (websocket.status === "unknown") {
+    hints.push("服务端当前没有内存态 agent 记录，只能通过设备审核记录和 localapp 日志继续定位。");
+  }
+
+  if (managedAgent) {
+    if (managedAgent.approvalStatus === "pending") {
+      hints.push("设备审核状态为 pending，localapp 会被 server 断开并等待管理员审核。");
+    } else if (managedAgent.approvalStatus === "rejected") {
+      hints.push("设备审核状态为 rejected，localapp 会被拒绝接入。");
+    } else if (managedAgent.isEnabled === false) {
+      hints.push("设备已停用，localapp 会被 server 断开。");
+    }
+  }
+
+  if (!authCode.exists) {
+    hints.push("该 agentId 当前没有 auth_code 绑定，即使设备在线也不能下发安全命令或终端会话。");
+  } else if (!authCode.currentUserHasBinding) {
+    hints.push("该设备已被其他用户绑定 auth_code，当前用户不能直接控制该设备。");
+  }
+
+  if (websocket.lastCloseCode || websocket.lastCloseReason) {
+    hints.push("最近一次断开详情请结合 server.log 的 agent.websocket_disconnected 和 localapp 的 agent.disconnected / agent.websocket_error 查看。");
+  }
+
+  if (hints.length === 0) {
+    hints.push("未发现明显阻断项；若 Web 仍显示 offline，请继续对照 localapp/logs/agent.log 和 webserver/server/logs/server.log。");
+  }
+
+  return hints;
 }
 
 function getRequestContext(req) {

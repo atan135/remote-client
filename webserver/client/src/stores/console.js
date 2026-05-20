@@ -618,6 +618,29 @@ export const useConsoleStore = defineStore("console", () => {
     }
   }
 
+  async function loadAgentDiagnostics(agentId) {
+    const normalizedAgentId = String(agentId || "").trim();
+
+    if (!normalizedAgentId) {
+      throw new Error("缺少设备 ID");
+    }
+
+    const response = await fetch(`/api/agents/${encodeURIComponent(normalizedAgentId)}/diagnostics`);
+
+    if (response.status === 401) {
+      await handleUnauthorized();
+      throw new Error("请先登录");
+    }
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(payload.message || "加载设备诊断失败");
+    }
+
+    return payload.item || null;
+  }
+
   async function loadCommands() {
     loadingCommands.value = true;
     loadErrors.commands = "";
@@ -3030,6 +3053,7 @@ export const useConsoleStore = defineStore("console", () => {
     dispose,
     failedTaskCount,
     latestVisibleCommandRequestId,
+    loadAgentDiagnostics,
     loadDashboard,
     loadErrors,
     loadingAgents,

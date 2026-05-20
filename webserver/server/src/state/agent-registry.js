@@ -31,7 +31,11 @@ export class AgentRegistry {
         terminalProfiles.length > 0 ? terminalProfiles : previous?.terminalProfiles || [],
       status: "online",
       connectedAt: previous?.connectedAt || now,
+      lastConnectedAt: now,
       lastDisconnectAt: previous?.lastDisconnectAt || null,
+      lastCloseCode: previous?.lastCloseCode ?? null,
+      lastCloseReason: previous?.lastCloseReason || "",
+      lastDisconnectGraceMs: previous?.lastDisconnectGraceMs ?? null,
       lastSeenAt: now
     };
 
@@ -63,7 +67,7 @@ export class AgentRegistry {
     return agent;
   }
 
-  disconnect(agentId, socket = null) {
+  disconnect(agentId, socket = null, meta = {}) {
     if (!agentId) {
       return {
         agent: null,
@@ -95,6 +99,15 @@ export class AgentRegistry {
 
     agent.status = "offline";
     agent.lastDisconnectAt = new Date().toISOString();
+    agent.lastCloseCode =
+      typeof meta.closeCode === "number" && Number.isFinite(meta.closeCode)
+        ? meta.closeCode
+        : null;
+    agent.lastCloseReason = String(meta.closeReason || "");
+    agent.lastDisconnectGraceMs =
+      typeof meta.disconnectGraceMs === "number" && Number.isFinite(meta.disconnectGraceMs)
+        ? meta.disconnectGraceMs
+        : null;
     return {
       agent,
       disconnected: true,
