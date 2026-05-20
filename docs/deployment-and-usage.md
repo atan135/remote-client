@@ -21,10 +21,11 @@
 1. 浏览器访问 `webserver`
 2. 用户登录 Web 控制台
 3. `localapp` 主动连接 `webserver`
-4. 用户为指定 `agentId` 录入对应的 `auth_code` 公钥
-5. 用户在控制台下发命令或创建终端会话
-6. `webserver` 加密并签名后下发给 `localapp`
-7. `localapp` 验签、解密、执行并回传结果
+4. 如开启设备审核，管理员先审核通过该设备
+5. 用户为指定 `agentId` 录入对应的 `auth_code` 公钥
+6. 用户在控制台下发命令或创建终端会话
+7. `webserver` 加密并签名后下发给 `localapp`
+8. `localapp` 验签、解密、执行并回传结果
 
 当前登录机制补充说明：
 
@@ -32,6 +33,8 @@
 - 当前默认允许同一账号多端同时在线，不做“后登录踢前登录”
 - 某个浏览器执行退出登录时，只会删除当前浏览器对应的 session
 - 用户修改自己的密码、管理员重置密码、管理员禁用用户时，会清理该用户全部 session
+- 公开注册可通过 `REGISTRATION_APPROVAL_REQUIRED=true` 配置为管理员审核后才能登录
+- 设备接入可通过 `AGENT_APPROVAL_REQUIRED=true` 配置为管理员审核后才能上线
 
 ## 2. 环境准备
 
@@ -101,6 +104,8 @@ Copy-Item webserver/server/.env.example webserver/server/.env
 - `AGENT_SHARED_TOKEN`
 - `SESSION_SECURE`
 - `ALLOW_PUBLIC_REGISTRATION`
+- `REGISTRATION_APPROVAL_REQUIRED`
+- `AGENT_APPROVAL_REQUIRED`
 - `WEBSERVER_SIGN_PRIVATE_KEY_PATH`
 - `WEBSERVER_SIGN_PUBLIC_KEY_PATH`
 
@@ -112,6 +117,8 @@ MYSQL_URL=mysql://root:yourpassword@127.0.0.1:3306/remote_client
 AGENT_SHARED_TOKEN=test-shared-token
 SESSION_SECURE=false
 ALLOW_PUBLIC_REGISTRATION=true
+REGISTRATION_APPROVAL_REQUIRED=false
+AGENT_APPROVAL_REQUIRED=true
 WEBSERVER_SIGN_PRIVATE_KEY_PATH=./keys/webserver_sign_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 ```
@@ -135,6 +142,7 @@ Copy-Item localapp/.env.example localapp/.env
 - `SERVER_WS_URL`
 - `AGENT_ID`
 - `AGENT_LABEL`
+- `AGENT_APPLICATION_NOTE`
 - `AGENT_SHARED_TOKEN`
 - `AUTH_PRIVATE_KEY_PATH`
 - `WEBSERVER_SIGN_PUBLIC_KEY_PATH`
@@ -147,6 +155,7 @@ Copy-Item localapp/.env.example localapp/.env
 SERVER_WS_URL=ws://127.0.0.1:3100/ws/agent
 AGENT_ID=test-agent-01
 AGENT_LABEL=Test Agent 01
+AGENT_APPLICATION_NOTE=测试环境接入
 AGENT_SHARED_TOKEN=test-shared-token
 AUTH_PRIVATE_KEY_PATH=./keys/auth_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
@@ -162,6 +171,7 @@ Linux 示例：
 SERVER_WS_URL=ws://127.0.0.1:3100/ws/agent
 AGENT_ID=test-agent-01
 AGENT_LABEL=Test Agent 01
+AGENT_APPLICATION_NOTE=测试环境接入
 AGENT_SHARED_TOKEN=test-shared-token
 AUTH_PRIVATE_KEY_PATH=./keys/auth_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
@@ -209,13 +219,16 @@ http://127.0.0.1:5173
 
 1. 打开浏览器访问 `http://127.0.0.1:5173`
 2. 使用默认管理员账号登录
-3. 进入“我的”页面中的公钥绑定区域
-4. 选择当前在线设备，或填写 `agentId`
-5. 打开 `localapp/keys/auth_public.pem`
-6. 将完整公钥 PEM 内容粘贴到 `auth_code` 输入框
-7. 保存绑定
+3. 如果启用了 `AGENT_APPROVAL_REQUIRED=true`，先在“我的 -> 设备审核”中通过目标设备
+4. 进入“我的”页面中的公钥绑定区域
+5. 选择当前在线设备，或填写 `agentId`
+6. 打开 `localapp/keys/auth_public.pem`
+7. 将完整公钥 PEM 内容粘贴到 `auth_code` 输入框
+8. 保存绑定
 
 如果没有为当前设备绑定 `auth_code`，前端无法发送安全命令，也无法创建远程终端会话。
+
+当前服务端创建 / 更新 `auth_code` 时还会要求目标设备在 `managed_agents` 中处于已审核且启用状态。实际联调时建议开启设备审核并完成审批，避免出现“设备未通过审核，暂不允许绑定 auth_code”。
 
 补充：
 
@@ -228,9 +241,10 @@ http://127.0.0.1:5173
 
 1. 在服务端确认 `/api/health` 可访问
 2. 在前端确认可以登录
-3. 确认设备列表里能看到目标 `agentId`
-4. 录入该设备的 `auth_code`
-5. 在“发现”页发送一次性命令，例如：
+3. 如开启设备审核，在管理员页面通过目标设备
+4. 确认设备列表里能看到目标 `agentId`
+5. 录入该设备的 `auth_code`
+6. 在“终端”页或“对话”页发送一次性命令，例如：
 
 ```text
 hostname
@@ -251,8 +265,8 @@ uname -a
 pwd
 ```
 
-6. 创建一个交互式终端会话
-7. 在终端中执行简单命令，确认输出能实时回传
+7. 创建一个交互式终端会话
+8. 在终端中执行简单命令，确认输出能实时回传
 
 ### 3.6 可选：使用本地调试接口和 mock-client
 
@@ -351,6 +365,8 @@ SESSION_COOKIE_NAME=remote_client_session
 SESSION_TTL_HOURS=24
 SESSION_SECURE=true
 ALLOW_PUBLIC_REGISTRATION=false
+REGISTRATION_APPROVAL_REQUIRED=true
+AGENT_APPROVAL_REQUIRED=true
 WEBSERVER_SIGN_PRIVATE_KEY_PATH=./keys/webserver_sign_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 LOG_LEVEL=info
@@ -362,6 +378,8 @@ LOG_DIR=logs
 - `AGENT_SHARED_TOKEN` 使用高强度随机值
 - `SESSION_SECURE=true`
 - `ALLOW_PUBLIC_REGISTRATION=false`
+- 如果开放公开注册，建议 `REGISTRATION_APPROVAL_REQUIRED=true`
+- 生产环境建议 `AGENT_APPROVAL_REQUIRED=true`
 - MySQL 使用独立账号，不使用 `root`
 - 私钥文件仅允许服务账户读取
 
@@ -526,6 +544,7 @@ Copy-Item localapp\.env.example localapp\.env
 SERVER_WS_URL=wss://remote.example.com/ws/agent
 AGENT_ID=office-win-01
 AGENT_LABEL=Office Windows 01
+AGENT_APPLICATION_NOTE=办公室 Windows 终端
 AGENT_SHARED_TOKEN=replace-with-strong-random-token
 AUTH_PRIVATE_KEY_PATH=./keys/auth_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
@@ -542,6 +561,7 @@ LOCAL_DEBUG_SERVER_ENABLED=false
 - 如果服务端通过 HTTPS 暴露，`SERVER_WS_URL` 应使用 `wss://`
 - 如果域名通过 Nginx/Caddy 等反向代理强制跳转 HTTPS，而 `SERVER_WS_URL` 仍写成 `ws://...`，`localapp` 会反复重连，并在日志中看到 `Unexpected server response: 301`
 - `AGENT_ID` 必须稳定且唯一
+- `AGENT_APPLICATION_NOTE` 会随设备注册上报，便于管理员审核时识别用途
 - `AGENT_SHARED_TOKEN` 必须与服务端一致
 
 ### 5.4 生成或分发密钥
@@ -605,10 +625,11 @@ pm2 logs remote-localapp
 ### 5.7 首次接入步骤
 
 1. 启动 `localapp`
-2. 在 Web 控制台确认设备上线
-3. 打开 `localapp/keys/auth_public.pem`
-4. 在“我的 -> 公钥绑定”中为该 `agentId` 录入公钥
-5. 发送一次简单命令验证
+2. 如果生产环境开启了 `AGENT_APPROVAL_REQUIRED=true`，先由管理员在“我的 -> 设备审核”中通过该设备
+3. 在 Web 控制台确认设备上线
+4. 打开 `localapp/keys/auth_public.pem`
+5. 在“我的 -> 公钥绑定”中为该 `agentId` 录入公钥
+6. 发送一次简单命令验证
 
 ## 6. `localapp` 在 Linux 下部署
 
@@ -681,6 +702,7 @@ cp localapp/.env.example localapp/.env
 SERVER_WS_URL=wss://remote.example.com/ws/agent
 AGENT_ID=prod-linux-01
 AGENT_LABEL=Prod Linux 01
+AGENT_APPLICATION_NOTE=生产 Linux 节点
 AGENT_SHARED_TOKEN=replace-with-strong-random-token
 AUTH_PRIVATE_KEY_PATH=./keys/auth_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
@@ -763,10 +785,11 @@ journalctl -u remote-localapp -f
 ### 6.8 首次接入步骤
 
 1. 启动 `localapp`
-2. 在 Web 控制台确认设备上线
-3. 读取 `localapp/keys/auth_public.pem`
-4. 在控制台中为该 `agentId` 建立 `auth_code` 绑定
-5. 发送一次命令验证
+2. 如果生产环境开启了 `AGENT_APPROVAL_REQUIRED=true`，先由管理员在“我的 -> 设备审核”中通过该设备
+3. 在 Web 控制台确认设备上线
+4. 读取 `localapp/keys/auth_public.pem`
+5. 在控制台中为该 `agentId` 建立 `auth_code` 绑定
+6. 发送一次命令验证
 
 ## 7. 常见运维建议
 
@@ -775,6 +798,8 @@ journalctl -u remote-localapp -f
 - 强制使用 HTTPS
 - `AGENT_SHARED_TOKEN` 使用高强度随机值
 - 关闭公开注册：`ALLOW_PUBLIC_REGISTRATION=false`
+- 如需开放公开注册，开启 `REGISTRATION_APPROVAL_REQUIRED=true`
+- 开启设备审核：`AGENT_APPROVAL_REQUIRED=true`
 - 定期备份 MySQL
 - 私钥文件不要进入代码仓库
 
@@ -811,11 +836,14 @@ journalctl -u remote-localapp -f
 - 如果 `localapp/logs/agent.log` 出现 `Unexpected server response: 301`，通常表示当前用了 `ws://` 连接一个会强制跳转 HTTPS 的域名，应改成 `wss://`
 - `AGENT_SHARED_TOKEN` 是否和服务端一致
 - 服务器的 `/ws/agent` 是否可达
+- 如果开启了 `AGENT_APPROVAL_REQUIRED=true`，检查“我的 -> 设备审核”中该设备是否仍为待审核、已拒绝或已停用
+- 如果 agent 日志出现 `agent.access.reverify_required`，表示设备公钥指纹变化，需要重新审核
 
 ### 8.3 能看到设备，但不能发命令
 
 检查：
 
+- 设备是否已通过审核且启用
 - 当前用户是否为该 `agentId` 录入了 `auth_code`
 - 录入的是否是 `localapp/keys/auth_public.pem`
 - `localapp` 是否加载了正确的 `auth_private.pem`
@@ -837,6 +865,7 @@ journalctl -u remote-localapp -f
 - 用户
 - 会话
 - `auth_code`
+- 设备审核记录
 - 一次性命令摘要
 - 终端会话摘要
 - AI 终端会话的多轮输入与提取结果

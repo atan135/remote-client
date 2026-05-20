@@ -1,6 +1,6 @@
 # 功能架构说明
 
-更新时间：2026-04-21
+更新时间：2026-05-20
 
 ## 目标
 
@@ -25,6 +25,7 @@
 Node.js + Express + ws 服务端，负责：
 
 - 登录鉴权与浏览器会话
+- 用户审核与设备审核
 - `auth_code` 绑定管理
 - 安全消息封装与派发
 - agent/browser WebSocket
@@ -38,15 +39,18 @@ Vue 3 控制台，负责：
 - 设备选择与状态展示
 - 一次性命令下发
 - 交互式终端会话创建、输入、终止、删除
+- 对话式命令与 Codex / AI Agent 会话入口
 - 远程文本文件预览
 - `auth_code` 管理
+- 用户审核、设备审核和设备绑定归属管理
 
 ### 4. `localapp2`
 
 当前仓库中还存在一个 Electron Windows 客户端骨架：
 
-- 已落地托盘、`userData` 配置、密钥管理入口、打包脚本和同步机制
-- 目前仍是实验性桌面壳，不是主文档中的默认生产 agent 形态
+- 已落地托盘、`userData` 配置、密钥管理入口、运行时接线、打包脚本和同步机制
+- 当前已接入 `AgentClient`、`ExecutionGateway`、`PtySessionManager`、`ToolProfileRegistry`、`LocalDebugServer`
+- 仍是实验性 Electron 客户端，不是默认生产 agent 形态
 
 ## 默认端口与地址
 
@@ -73,7 +77,8 @@ Vue 3 控制台，负责：
 
 - 支持公开注册：`/api/auth/register`
 - 支持修改自己的密码：`/api/auth/change-password`
-- 管理员支持用户列表、创建用户、修改角色/启停、重置密码
+- 公开注册可按配置进入待审核状态
+- 管理员支持用户列表、创建用户、修改角色/启停、审核通过/拒绝、重置密码
 
 ### 角色模型
 
@@ -85,14 +90,53 @@ Vue 3 控制台，负责：
 
 尚未实现更细粒度的 RBAC。
 
+## 用户与设备准入
+
+当前系统已经有一层平台准入控制，详细见 `docs/review-approval-design.md`。
+
+### 用户审核
+
+当前 `users` 表包含：
+
+- `approval_status`
+- `registration_source`
+- `application_note`
+- `approved_at`
+- `approved_by_user_id`
+- `rejected_at`
+- `rejected_by_user_id`
+- `review_comment`
+
+公开注册行为由配置决定：
+
+- `ALLOW_PUBLIC_REGISTRATION`
+- `REGISTRATION_APPROVAL_REQUIRED`
+
+当 `REGISTRATION_APPROVAL_REQUIRED=true` 时，公开注册用户为 `pending`，管理员审核通过后才能登录。
+
+### 设备审核
+
+当前 `managed_agents` 表保存设备审核状态与公钥指纹。
+
+当 `AGENT_APPROVAL_REQUIRED=true` 时：
+
+- 首次接入设备会创建 `pending` 记录，并收到 `agent.access.pending` 后断开。
+- 管理员审核通过后，相同 `agentId + auth_public_key_fingerprint` 才能进入正式在线设备列表。
+- 已拒绝、已停用设备会被拒绝连接。
+- 已批准设备换钥会创建新的待审核记录，并把旧记录标记为 `superseded`。
+
+agent 注册时会上报本机 RSA 公钥和指纹，服务端会规范化公钥并重新计算指纹。
+
 ## `auth_code` 与安全链路
 
 ### `auth_code` 绑定
 
-- 每个用户可按 `agentId` 维护自己的 RSA 公钥绑定
+- `auth_code` 当前按 `agentId` 全局唯一绑定，同一设备只能归属一个绑定用户
 - 数据表为 `user_auth_codes`
 - 服务端会对 PEM 做规范化，并计算 SHA-256 指纹
+- 创建 / 更新绑定时会要求目标设备是已审核且启用的 managed agent
 - 前端已支持列表、创建、更新、删除
+- 管理员可查看全部绑定归属并强制解绑
 
 ### 密钥职责
 
@@ -285,6 +329,7 @@ profile 当前可约束：
 - 用户
 - 浏览器会话
 - `auth_code`
+- 设备审核记录
 - 一次性命令摘要
 - 终端会话摘要
 - 终端会话 turn 摘要
@@ -304,12 +349,16 @@ profile 当前可约束：
 - 首页设备概览
 - 一次性命令面板
 - 交互式会话面板
+- 对话页普通命令模式
+- 对话页 Codex / AI Agent 会话模式
 - 终端输出查看
 - `final_text` 查看
 - 远程文件预览
 - `auth_code` 管理
 - 账号安全
 - 用户管理
+- 设备审核
+- 设备绑定归属管理
 
 ## 通信协议
 
@@ -329,6 +378,10 @@ profile 当前可约束：
 
 ### server -> agent
 
+- `agent.access.pending`
+- `agent.access.rejected`
+- `agent.access.disabled`
+- `agent.access.reverify_required`
 - `command.execute.secure`
 - `terminal.session.create.secure`
 - `terminal.session.input.secure`
@@ -352,11 +405,13 @@ profile 当前可约束：
 
 1. agent 启动后连接 `/ws/agent`
 2. agent 发送 `agent.register`
-3. 浏览器登录并提交 `/api/commands`
-4. 服务端生成 `command.execute.secure`
-5. agent 验签、解密、执行
-6. agent 回传 `command.started` / `command.finished`
-7. 服务端更新状态并广播给浏览器
+3. 如果开启设备审核，服务端确认该设备已审核且启用
+4. 浏览器登录并提交 `/api/commands`
+5. 服务端确认当前用户持有目标设备的唯一 `auth_code`
+6. 服务端生成 `command.execute.secure`
+7. agent 验签、解密、执行
+8. agent 回传 `command.started` / `command.finished`
+9. 服务端更新状态并广播给浏览器
 
 ### 交互式终端
 
@@ -400,4 +455,5 @@ profile 当前可约束：
 - 在线状态与活动输出仍以内存为主，服务端重启后需要重新等待 agent 上线
 - 一次性命令仅保存摘要，不默认保存完整输出
 - 终端会话主要保存摘要、尾部 transcript 和 `final_text`
-- `localapp2` 仍是实验性桌面壳，不能替代 `localapp` 作为默认生产 agent
+- 对话页聊天消息本身仍是前端内存态，刷新后丢失
+- `localapp2` 已接入主要运行时，但仍是实验性 Electron 客户端，不能替代 `localapp` 作为默认生产 agent

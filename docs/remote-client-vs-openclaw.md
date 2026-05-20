@@ -1,6 +1,6 @@
 # remote-client 与 OpenClaw 对比分析
 
-更新时间：2026-04-21
+更新时间：2026-05-20
 
 ## 1. 对比口径
 
@@ -230,6 +230,7 @@ OpenClaw 虽然也能：
 - `terminal_session_turns`
 - 用户会话
 - `auth_code`
+- 用户审核与设备审核记录
 
 落到 MySQL。
 
@@ -269,7 +270,9 @@ OpenClaw 虽然也能：
 - 专注远程命令
 - 专注终端
 - 专注远程文件查看
+- 专注设备准入审核和设备级 `auth_code` 归属
 - 可直接跑 `claude`/`codex` profile
+- 已有 Web 对话页承载普通命令确认卡和 Codex 会话
 
 但它的扩展方式主要还是你自己继续开发。
 
