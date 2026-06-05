@@ -50,8 +50,17 @@ export function createDefaultSnapshot() {
     agent: {
       agentId: "",
       agentLabel: "",
+      agentApplicationNote: "",
       hostname: "",
       pid: null
+    },
+    agentAccess: {
+      type: "",
+      status: "",
+      reason: "",
+      managedAgentId: null,
+      authPublicKeyFingerprint: "",
+      updatedAt: null
     },
     security: {
       keysReady: false,

@@ -46,6 +46,7 @@ export class ConfigStore {
       serverWsUrl: this.env.SERVER_WS_URL || "ws://localhost:3100/ws/agent",
       agentId: this.env.AGENT_ID || `${hostname}-desktop`,
       agentLabel: this.env.AGENT_LABEL || `${hostname} Desktop`,
+      agentApplicationNote: this.env.AGENT_APPLICATION_NOTE || "",
       agentSharedToken: this.env.AGENT_SHARED_TOKEN || "",
       heartbeatIntervalMs: this.env.HEARTBEAT_INTERVAL_MS,
       reconnectIntervalMs: this.env.RECONNECT_INTERVAL_MS,
@@ -132,6 +133,7 @@ export class ConfigStore {
       serverWsUrl: "ws://localhost:3100/ws/agent",
       agentId: `${os.hostname()}-desktop`,
       agentLabel: `${os.hostname()} Desktop`,
+      agentApplicationNote: "",
       agentSharedToken: "",
       heartbeatIntervalMs: 15000,
       reconnectIntervalMs: 5000,
@@ -175,6 +177,10 @@ export class ConfigStore {
       serverWsUrl: toText(input.serverWsUrl, defaults.serverWsUrl),
       agentId: toText(input.agentId, defaults.agentId),
       agentLabel: toText(input.agentLabel, defaults.agentLabel),
+      agentApplicationNote: toLimitedText(
+        input.agentApplicationNote ?? input.applicationNote,
+        255
+      ),
       agentSharedToken: String(input.agentSharedToken || ""),
       heartbeatIntervalMs: toNumber(input.heartbeatIntervalMs, defaults.heartbeatIntervalMs),
       reconnectIntervalMs: toNumber(input.reconnectIntervalMs, defaults.reconnectIntervalMs),
@@ -286,6 +292,10 @@ function toOptionalBoolean(value) {
 function toText(value, fallback) {
   const text = String(value ?? "").trim();
   return text || fallback;
+}
+
+function toLimitedText(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
 }
 
 function toAbsolutePath(value, fallback, baseDir) {

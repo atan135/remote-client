@@ -82,6 +82,7 @@ async function saveConfig() {
       serverWsUrl: configForm.serverWsUrl,
       agentId: configForm.agentId,
       agentLabel: configForm.agentLabel,
+      agentApplicationNote: configForm.agentApplicationNote,
       agentSharedToken: configForm.agentSharedToken,
       heartbeatIntervalMs: Number(configForm.heartbeatIntervalMs),
       reconnectIntervalMs: Number(configForm.reconnectIntervalMs),
@@ -211,6 +212,7 @@ function applyConfigToForm(config) {
     serverWsUrl: config.serverWsUrl || "",
     agentId: config.agentId || "",
     agentLabel: config.agentLabel || "",
+    agentApplicationNote: config.agentApplicationNote || "",
     agentSharedToken: config.agentSharedToken || "",
     heartbeatIntervalMs: config.heartbeatIntervalMs ?? 15000,
     reconnectIntervalMs: config.reconnectIntervalMs ?? 5000,
@@ -254,8 +256,17 @@ function createEmptySnapshot() {
     agent: {
       agentId: "",
       agentLabel: "",
+      agentApplicationNote: "",
       hostname: "",
       pid: null
+    },
+    agentAccess: {
+      type: "",
+      status: "",
+      reason: "",
+      managedAgentId: null,
+      authPublicKeyFingerprint: "",
+      updatedAt: null
     },
     security: {
       keysReady: false,
@@ -299,6 +310,7 @@ function createEmptyConfig() {
     serverWsUrl: "",
     agentId: "",
     agentLabel: "",
+    agentApplicationNote: "",
     agentSharedToken: "",
     heartbeatIntervalMs: 15000,
     reconnectIntervalMs: 5000,
@@ -474,6 +486,14 @@ function getErrorMessage(error) {
             <dd>{{ runtimeSnapshot.connection.lastError || "-" }}</dd>
           </div>
           <div>
+            <dt>设备准入</dt>
+            <dd>{{ runtimeSnapshot.agentAccess.status || "approved/未限制" }}</dd>
+          </div>
+          <div>
+            <dt>准入原因</dt>
+            <dd>{{ runtimeSnapshot.agentAccess.reason || "-" }}</dd>
+          </div>
+          <div>
             <dt>命令队列</dt>
             <dd>{{ runtimeSnapshot.commands.queueLength }}</dd>
           </div>
@@ -520,6 +540,10 @@ function getErrorMessage(error) {
           <label>
             <span>Agent Label</span>
             <input v-model="configForm.agentLabel" type="text" />
+          </label>
+          <label>
+            <span>申请备注</span>
+            <input v-model="configForm.agentApplicationNote" type="text" maxlength="255" />
           </label>
           <label>
             <span>共享 Token</span>

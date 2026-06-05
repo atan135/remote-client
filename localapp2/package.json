@@ -8,7 +8,7 @@
   "main": "electron/main.cjs",
   "scripts": {
     "sync:localapp": "node tools/sync-localapp-files.mjs --write",
-    "check:localapp-sync": "node tools/sync-localapp-files.mjs --check",
+    "check:localapp-sync": "node tools/sync-localapp-files.mjs --check && node tools/check-runtime-config-surface.mjs",
     "verify:chain": "node tools/verify-secure-chain.mjs",
     "dev:renderer": "vite --config vite.config.js",
     "dev:electron": "wait-on tcp:5174 && cross-env LOCALAPP2_RENDERER_URL=http://127.0.0.1:5174 electron .",

@@ -67,6 +67,7 @@ export class Localapp2Runtime {
       serverWsUrl: this.config.serverWsUrl,
       envFilePath: this.config.envFilePath,
       logDir: this.loggers.logDir,
+      hasApplicationNote: Boolean(String(this.config.agentApplicationNote || "").trim()),
       presetCommandCount: Array.isArray(this.config.presetCommands)
         ? this.config.presetCommands.length
         : 0,
@@ -120,7 +121,7 @@ export class Localapp2Runtime {
     if (this.client) {
       this.client.scheduleReconnect = () => {};
       this.client.flushReconnectTimer?.();
-      this.client.stopHeartbeat?.();
+      this.client.stopIdlePing?.();
 
       if (this.client.socket) {
         this.client.socket.removeAllListeners();
@@ -194,6 +195,8 @@ export class Localapp2Runtime {
   }
 
   instrumentClient() {
+    this.instrumentAgentAccess();
+
     const originalConnect = this.client.connect.bind(this.client);
 
     this.client.connect = () => {
@@ -206,6 +209,42 @@ export class Localapp2Runtime {
 
       originalConnect();
       this.attachSocketListeners(this.client.socket);
+    };
+  }
+
+  instrumentAgentAccess() {
+    if (this.client.__localapp2AccessInstrumented) {
+      return;
+    }
+
+    const originalHandleAgentAccessMessage =
+      this.client.handleAgentAccessMessage?.bind(this.client);
+
+    if (typeof originalHandleAgentAccessMessage !== "function") {
+      return;
+    }
+
+    this.client.__localapp2AccessInstrumented = true;
+    this.client.handleAgentAccessMessage = (message) => {
+      const payload = isPlainObject(message?.payload) ? message.payload : {};
+      const type = String(message?.type || "").trim();
+      const reason = String(payload.reason || "").trim();
+
+      this.stateStore.patch({
+        agentAccess: {
+          type,
+          status: normalizeAgentAccessStatus(type),
+          reason,
+          managedAgentId: payload.managedAgentId ?? null,
+          authPublicKeyFingerprint: String(payload.authPublicKeyFingerprint || "").trim(),
+          updatedAt: new Date().toISOString()
+        },
+        connection: {
+          lastError: reason || type
+        }
+      });
+
+      return originalHandleAgentAccessMessage(message);
     };
   }
 
@@ -276,6 +315,7 @@ export class Localapp2Runtime {
       agent: {
         agentId: this.config.agentId,
         agentLabel: this.config.agentLabel,
+        agentApplicationNote: this.config.agentApplicationNote,
         hostname: os.hostname(),
         pid: process.pid
       },
@@ -336,8 +376,17 @@ function createBaseSnapshot(config, logDir) {
     agent: {
       agentId: config.agentId,
       agentLabel: config.agentLabel,
+      agentApplicationNote: config.agentApplicationNote,
       hostname: os.hostname(),
       pid: process.pid
+    },
+    agentAccess: {
+      type: "",
+      status: "",
+      reason: "",
+      managedAgentId: null,
+      authPublicKeyFingerprint: "",
+      updatedAt: null
     },
     security: {
       keysReady: false,
@@ -432,6 +481,32 @@ function summarizeTerminalSessions(sessions) {
 
 function isClosedSessionStatus(status) {
   return ["completed", "failed", "terminated"].includes(String(status || ""));
+}
+
+function normalizeAgentAccessStatus(type) {
+  const normalizedType = String(type || "").trim();
+
+  if (normalizedType === "agent.access.pending") {
+    return "pending";
+  }
+
+  if (normalizedType === "agent.access.rejected") {
+    return "rejected";
+  }
+
+  if (normalizedType === "agent.access.disabled") {
+    return "disabled";
+  }
+
+  if (normalizedType === "agent.access.reverify_required") {
+    return "reverify_required";
+  }
+
+  return "";
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function closeServer(server) {

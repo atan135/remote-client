@@ -78,7 +78,7 @@
 `ConfigStore` 当前支持：
 
 - 服务端 WebSocket 地址
-- `agentId` / `agentLabel` / shared token
+- `agentId` / `agentLabel` / 设备申请备注 / shared token
 - 心跳、重连、命令超时和缓冲配置
 - 日志目录与日志级别
 - Windows 输出编码、ConPTY 配置
@@ -138,6 +138,7 @@ Renderer 当前能展示：
 
 - runtime 启停状态
 - 服务端连接状态
+- 设备审核准入状态与原因
 - `agentId` / `serverWsUrl`
 - 最近错误
 - 命令队列长度
