@@ -64,6 +64,7 @@ const browserHub = new BrowserHub();
 const commandDispatchContextSymbol = Symbol("commandDispatchContext");
 const pendingAgentDisconnects = new Map();
 const pendingRemoteFileReads = new Map();
+const pendingBrowserScreenshotRequests = new Map();
 const pendingTerminalSessionPersists = new Map();
 const pendingTerminalSessionTurnSyncs = new Map();
 const agentHeartbeatBroadcastState = new Map();
@@ -75,7 +76,7 @@ const agentHeartbeatBroadcastIntervalMs = Math.max(0, config.agentHeartbeatBroad
 const agentSocketServer = new WebSocketServer({ noServer: true });
 const browserSocketServer = new WebSocketServer({ noServer: true });
 
-app.use(express.json({ limit: "64kb" }));
+app.use(express.json({ limit: config.jietuJsonLimit || "64kb" }));
 
 app.get("/api/health", (_req, res) => {
   res.json({ ok: true, now: new Date().toISOString() });
@@ -86,16 +87,21 @@ app.get("/api/config", async (_req, res) => {
     authEnabled: true,
     allowPublicRegistration: config.allowPublicRegistration,
     registrationApprovalRequired: config.registrationApprovalRequired,
-    agentApprovalRequired: config.agentApprovalRequired
+    agentApprovalRequired: config.agentApprovalRequired,
+    canJietu: config.canJietu
   });
 });
 
 app.get("/api/jietu", (req, res) => {
-  void handleScreenshotRequest(req, res);
+  handleScreenshotInfoRequest(req, res);
 });
 
 app.post("/api/jietu", (req, res) => {
   void handleScreenshotRequest(req, res);
+});
+
+app.post("/api/jietu/request", (req, res) => {
+  void handleBrowserScreenshotRequest(req, res);
 });
 
 app.get("/api/auth/session", requireAuth, (req, res) => {
@@ -811,37 +817,96 @@ app.post("/api/remote-files/read", requireAuth, (req, res) => {
   void handleRemoteFileReadRequest(req, res);
 });
 
+function handleScreenshotInfoRequest(_req, res) {
+  res.json({
+    enabled: screenshotService.isEnabled(),
+    mode: "browser_upload",
+    endpoint: "/api/jietu",
+    method: "POST",
+    requestEndpoint: "/api/jietu/request",
+    outputDir: config.jietuOutputDir,
+    maxUploadBytes: config.jietuMaxUploadBytes,
+    helper: "window.remoteClientJietu?.()",
+    defaultEngine: "real",
+    realCaptureHelper: "点击 Web 控制台顶部真实截图授权按钮"
+  });
+}
+
 async function handleScreenshotRequest(req, res) {
   try {
     const body = isPlainObject(req.body) ? req.body : {};
-    const query = isPlainObject(req.query) ? req.query : {};
-    const item = await screenshotService.capture({
-      path: body.path || query.path || body.route || query.route || "/",
-      name: body.name || query.name || "",
-      width: body.width || query.width,
-      height: body.height || query.height,
-      deviceScaleFactor: body.deviceScaleFactor || query.deviceScaleFactor,
-      fullPage: normalizeBoolean(body.fullPage ?? query.fullPage, false),
-      cookieHeader: req.headers?.cookie || "",
-      requestOrigin: getScreenshotRequestOrigin()
+    const item = await screenshotService.saveUpload({
+      image: body.image,
+      name: body.name,
+      metadata: body.metadata
     });
 
     logEvent(serverLogger, "info", "jietu.captured", {
       path: item.relativePath,
-      url: item.url,
       bytes: item.bytes,
+      route: item.metadata?.route || "",
       ...getRequestContext(req)
     });
 
     res.json({ item });
   } catch (error) {
     logEvent(serverLogger, "warn", "jietu.capture_failed", {
-      path: String(req.body?.path || req.query?.path || ""),
+      route: String(req.body?.metadata?.route || ""),
       error: error.message,
       ...getRequestContext(req)
     });
     res.status(error.statusCode || 500).json({
       message: error.message || "截图失败"
+    });
+  }
+}
+
+async function handleBrowserScreenshotRequest(req, res) {
+  if (!screenshotService.isEnabled()) {
+    res.status(403).json({ message: "截图 API 未启用，请设置 CAN_JIETU=true 并重启 server" });
+    return;
+  }
+
+  if (browserHub.sockets.size === 0) {
+    res.status(409).json({ message: "当前没有已连接的 Web 控制台浏览器" });
+    return;
+  }
+
+  const body = isPlainObject(req.body) ? req.body : {};
+  const requestId = randomUUID();
+  const timeoutMs = normalizeBrowserScreenshotTimeout(body.timeoutMs);
+  const requestPayload = {
+    requestId,
+    selector: normalizeOptionalText(body.selector, 120),
+    name: normalizeOptionalText(body.name, 80),
+    engine: normalizeOptionalText(body.engine, 40) || "real",
+    scale: normalizeScreenshotScale(body.scale),
+    backgroundColor: normalizeOptionalText(body.backgroundColor, 80),
+    requestedAt: new Date().toISOString()
+  };
+
+  try {
+    const resultPromise = createPendingBrowserScreenshotRequest({
+      requestId,
+      timeoutMs,
+      requester: getRequestContext(req)
+    });
+
+    browserHub.broadcast("jietu.requested", requestPayload);
+
+    logEvent(serverLogger, "info", "jietu.requested", {
+      requestId,
+      subscribers: browserHub.sockets.size,
+      timeoutMs,
+      ...getRequestContext(req)
+    });
+
+    const item = await resultPromise;
+    res.json({ item });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      requestId,
+      message: error.message || "浏览器截图失败"
     });
   }
 }
@@ -2796,11 +2861,94 @@ async function handleBrowserMessage(socket, raw) {
     return;
   }
 
+  if (message.type === "jietu.completed") {
+    handleBrowserScreenshotCompleted(socket, message.payload || {});
+    return;
+  }
+
+  if (message.type === "jietu.failed") {
+    handleBrowserScreenshotFailed(socket, message.payload || {});
+    return;
+  }
+
   logEvent(serverLogger, "warn", "browser.websocket_unsupported_message", {
     userId: socket.auth.user.id,
     username: socket.auth.user.username,
     type: String(message.type || "")
   });
+}
+
+function createPendingBrowserScreenshotRequest({ requestId, timeoutMs, requester }) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingBrowserScreenshotRequests.delete(requestId);
+      reject(createHttpError(504, "等待浏览器截图超时"));
+    }, timeoutMs);
+
+    pendingBrowserScreenshotRequests.set(requestId, {
+      requestId,
+      timer,
+      resolve,
+      reject,
+      requester,
+      createdAt: new Date().toISOString()
+    });
+  });
+}
+
+function handleBrowserScreenshotCompleted(socket, payload) {
+  const requestId = String(payload?.requestId || "").trim();
+  const pending = pendingBrowserScreenshotRequests.get(requestId);
+
+  if (!pending) {
+    logEvent(serverLogger, "warn", "jietu.completed_without_pending_request", {
+      requestId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username
+    });
+    return;
+  }
+
+  clearTimeout(pending.timer);
+  pendingBrowserScreenshotRequests.delete(requestId);
+
+  logEvent(serverLogger, "info", "jietu.request_completed", {
+    requestId,
+    userId: socket.auth.user.id,
+    username: socket.auth.user.username,
+    path: payload.item?.relativePath || "",
+    bytes: payload.item?.bytes || 0
+  });
+
+  pending.resolve(payload.item || {});
+}
+
+function handleBrowserScreenshotFailed(socket, payload) {
+  const requestId = String(payload?.requestId || "").trim();
+  const pending = pendingBrowserScreenshotRequests.get(requestId);
+  const message = String(payload?.message || "浏览器截图失败").slice(0, 500);
+
+  if (!pending) {
+    logEvent(serverLogger, "warn", "jietu.failed_without_pending_request", {
+      requestId,
+      userId: socket.auth.user.id,
+      username: socket.auth.user.username,
+      error: message
+    });
+    return;
+  }
+
+  clearTimeout(pending.timer);
+  pendingBrowserScreenshotRequests.delete(requestId);
+
+  logEvent(serverLogger, "warn", "jietu.request_failed", {
+    requestId,
+    userId: socket.auth.user.id,
+    username: socket.auth.user.username,
+    error: message
+  });
+
+  pending.reject(createHttpError(500, message));
 }
 
 async function handleBrowserTerminalSessionInput(socket, payload) {
@@ -3362,10 +3510,6 @@ function getRequestContext(req) {
   };
 }
 
-function getScreenshotRequestOrigin() {
-  return config.jietuWebBaseUrl || `http://127.0.0.1:${config.httpPort}`;
-}
-
 async function ensureManagedAgentReadyForControl(agentId) {
   if (!config.agentApprovalRequired) {
     return null;
@@ -3438,17 +3582,26 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeBoolean(value, fallback = false) {
-  if (value === undefined || value === null || value === "") {
-    return fallback;
+function normalizeOptionalText(value, maxLength) {
+  return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeBrowserScreenshotTimeout(value) {
+  const parsed = Math.floor(Number(value));
+  const fallback = Math.max(1000, config.jietuRequestTimeoutMs);
+  const timeoutMs = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+
+  return Math.max(1000, Math.min(timeoutMs, 120000));
+}
+
+function normalizeScreenshotScale(value) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
   }
 
-  if (typeof value === "boolean") {
-    return value;
-  }
-
-  const normalized = String(value).trim().toLowerCase();
-  return ["1", "true", "yes", "on"].includes(normalized);
+  return Math.max(0.5, Math.min(parsed, 3));
 }
 
 function sendAgentPong(socket, agentId, payload) {

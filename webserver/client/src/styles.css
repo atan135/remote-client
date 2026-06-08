@@ -194,6 +194,10 @@ textarea {
   min-width: 0;
 }
 
+.console-jietu-button {
+  display: none;
+}
+
 .console-mobile-topbar {
   margin-bottom: 8px;
 }
@@ -440,6 +444,24 @@ textarea {
   display: inline-block;
   font-size: 17px;
   line-height: 1;
+}
+
+.topbar-jietu-button {
+  color: #ffd6a1;
+}
+
+.topbar-jietu-button.active {
+  color: #bff2d3;
+}
+
+.topbar-jietu-button:disabled {
+  cursor: progress;
+  opacity: 0.68;
+}
+
+.topbar-jietu-button svg {
+  width: 17px;
+  height: 17px;
 }
 
 .content {
@@ -4304,6 +4326,48 @@ textarea {
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.03);
+  }
+
+  .console-jietu-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 142px;
+    height: 42px;
+    padding: 0 13px;
+    border: 1px solid rgba(242, 166, 90, 0.28);
+    border-radius: 10px;
+    background: rgba(242, 166, 90, 0.1);
+    color: #ffd6a1;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  .console-jietu-button:hover,
+  .console-jietu-button.active {
+    border-color: rgba(103, 196, 142, 0.38);
+    background: rgba(103, 196, 142, 0.13);
+    color: #bff2d3;
+  }
+
+  .console-jietu-button:disabled {
+    cursor: progress;
+    opacity: 0.72;
+  }
+
+  .console-jietu-icon {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+  }
+
+  .console-jietu-icon svg {
+    width: 16px;
+    height: 16px;
   }
 
   .console-content {

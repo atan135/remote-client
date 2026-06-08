@@ -107,7 +107,6 @@ Copy-Item webserver/server/.env.example webserver/server/.env
 - `REGISTRATION_APPROVAL_REQUIRED`
 - `AGENT_APPROVAL_REQUIRED`
 - `CAN_JIETU`
-- `JIETU_WEB_BASE_URL`
 - `WEBSERVER_SIGN_PRIVATE_KEY_PATH`
 - `WEBSERVER_SIGN_PUBLIC_KEY_PATH`
 
@@ -122,8 +121,6 @@ ALLOW_PUBLIC_REGISTRATION=true
 REGISTRATION_APPROVAL_REQUIRED=false
 AGENT_APPROVAL_REQUIRED=true
 CAN_JIETU=false
-# 如果测试环境通过 Vite 访问前端，启用截图时设置为 http://127.0.0.1:5173
-JIETU_WEB_BASE_URL=
 WEBSERVER_SIGN_PRIVATE_KEY_PATH=./keys/webserver_sign_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 ```
@@ -133,17 +130,38 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 ```env
 CAN_JIETU=true
 JIETU_OUTPUT_DIR=../output/image
+JIETU_JSON_LIMIT=20mb
+JIETU_MAX_UPLOAD_BYTES=15728640
+JIETU_REQUEST_TIMEOUT_MS=30000
 ```
 
-启用后重启 server，可调用：
+启用后重启 server，在已打开的 Web 控制台页面中调用浏览器侧截图函数：
 
-```bash
-curl -X POST http://127.0.0.1:3100/api/jietu \
-  -H "Content-Type: application/json" \
-  -d "{\"path\":\"/terminal\",\"width\":1440,\"height\":1000,\"fullPage\":true}"
+```js
+await window.remoteClientJietu()
 ```
 
-服务端会把截图保存到 `webserver/output/image`，响应中返回保存路径。该接口是否可用只由 `CAN_JIETU` 控制，不要求登录态；如果请求里带有当前控制台的 cookie，截图浏览器会复用该 cookie，从而截到登录后的页面。
+当前默认使用真实浏览器画面截图。页面顶部会在 `CAN_JIETU=true` 且浏览器支持屏幕捕获时显示真实截图授权按钮。点击后按浏览器提示选择当前标签页；授权完成后，命令行触发截图会从该真实画面流截取当前帧。该授权由浏览器安全策略要求，命令行和 server 不能绕过。
+
+也可以从命令行触发当前已连接的 Web 控制台浏览器截图：
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:3100/api/jietu/request" `
+  -H "Content-Type: application/json" `
+  -d '{"name":"terminal-from-cli"}'
+```
+
+等价地，也可以显式指定真实画面流截图：
+
+```powershell
+curl.exe -X POST "http://127.0.0.1:3100/api/jietu/request" `
+  -H "Content-Type: application/json" `
+  -d '{"name":"terminal-from-cli","engine":"real","timeoutMs":60000}'
+```
+
+这条命令不会由 server 自己模拟页面，而是通过 `/ws/browser` 通知已打开且已登录的控制台页面执行浏览器端截图。若没有打开的 Web 控制台浏览器，接口会返回 409。
+
+服务端会把浏览器上传的 PNG 保存到 `webserver/output/image`，响应中返回保存路径。该接口是否可用只由 `CAN_JIETU` 控制。真实截图截取的是授权时选择的浏览器捕获源；如果选择 Chrome 窗口，会包含标签栏、地址栏和 DevTools。若只想保留项目页面区域，授权时选择当前标签页，并避免把 DevTools 停靠在页面内。`html2canvas`、`native`、`auto` 仅作为显式调试选项保留，复杂页面下可能因跨域资源或 CSS 限制失败。
 
 ### 3.2 配置 `localapp`
 

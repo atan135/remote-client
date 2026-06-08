@@ -23,8 +23,10 @@ defineProps({
       <h1>{{ currentTab.label }}</h1>
     </div>
 
-    <button class="topbar-icon-button" type="button" :aria-label="currentTab.label">
-      <span class="topbar-icon">◎</span>
-    </button>
+    <slot name="actions">
+      <button class="topbar-icon-button" type="button" :aria-label="currentTab.label">
+        <span class="topbar-icon">◎</span>
+      </button>
+    </slot>
   </header>
 </template>

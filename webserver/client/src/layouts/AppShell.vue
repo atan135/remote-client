@@ -1,8 +1,10 @@
 <script setup>
 import { ChatDotRound, DataBoard, House, Monitor, Tickets, User, UserFilled } from "@element-plus/icons-vue";
-import { computed, watch } from "vue";
+import { ElMessage } from "element-plus";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 
+import { getRealCaptureState, startRealCapture, stopRealCapture } from "../browser-jietu";
 import BottomTabBar from "../components/BottomTabBar.vue";
 import TopBar from "../components/TopBar.vue";
 import { useConsoleStore } from "../stores/console";
@@ -26,6 +28,25 @@ const liveStatusText = computed(() =>
 );
 
 const showHeaderMeta = computed(() => currentTabKey.value !== "profile");
+const realCaptureState = ref(createRealCaptureStateFallback());
+const realCaptureBusy = ref(false);
+const showRealCaptureControl = computed(
+  () => store.appConfig.canJietu && realCaptureState.value.supported
+);
+const showHeaderActions = computed(() => showHeaderMeta.value || showRealCaptureControl.value);
+const realCaptureButtonText = computed(() => {
+  if (realCaptureBusy.value) {
+    return "授权中";
+  }
+
+  return realCaptureState.value.active ? "停止真实截图" : "启用真实截图";
+});
+const realCaptureButtonTitle = computed(() =>
+  realCaptureState.value.active
+    ? "停止当前浏览器真实画面授权"
+    : "授权后命令行截图会优先截取当前浏览器真实画面"
+);
+let realCaptureRefreshTimer = 0;
 
 const navIcons = {
   home: House,
@@ -46,6 +67,18 @@ watch(
   { immediate: true }
 );
 
+onMounted(() => {
+  refreshRealCaptureState();
+  realCaptureRefreshTimer = window.setInterval(refreshRealCaptureState, 2000);
+});
+
+onBeforeUnmount(() => {
+  if (realCaptureRefreshTimer) {
+    window.clearInterval(realCaptureRefreshTimer);
+    realCaptureRefreshTimer = 0;
+  }
+});
+
 function navigate(tabKey) {
   const target = store.resolvedTabs.find((item) => item.key === tabKey);
 
@@ -54,6 +87,50 @@ function navigate(tabKey) {
   }
 
   router.push(target.to);
+}
+
+async function toggleRealCapture() {
+  if (realCaptureBusy.value) {
+    return;
+  }
+
+  realCaptureBusy.value = true;
+
+  try {
+    if (realCaptureState.value.active) {
+      stopRealCapture();
+      refreshRealCaptureState();
+      ElMessage.success("真实截图已停止");
+      return;
+    }
+
+    realCaptureState.value = await startRealCapture();
+    ElMessage.success("真实截图已启用");
+  } catch (error) {
+    refreshRealCaptureState();
+    ElMessage.error(error?.message || "真实截图授权失败");
+  } finally {
+    realCaptureBusy.value = false;
+  }
+}
+
+function refreshRealCaptureState() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  realCaptureState.value = getRealCaptureState();
+}
+
+function createRealCaptureStateFallback() {
+  return {
+    supported: false,
+    active: false,
+    trackState: "",
+    label: "",
+    width: 0,
+    height: 0
+  };
 }
 </script>
 
@@ -95,7 +172,25 @@ function navigate(tabKey) {
     </aside>
 
     <section class="console-main">
-      <TopBar class="console-mobile-topbar" :current-tab="currentTab" :avatar-label="store.avatarLabel" />
+      <TopBar class="console-mobile-topbar" :current-tab="currentTab" :avatar-label="store.avatarLabel">
+        <template #actions>
+          <button
+            v-if="showRealCaptureControl"
+            class="topbar-icon-button topbar-jietu-button"
+            :class="{ active: realCaptureState.active }"
+            type="button"
+            :disabled="realCaptureBusy"
+            :title="realCaptureButtonTitle"
+            aria-label="真实截图授权"
+            @click="toggleRealCapture"
+          >
+            <Monitor />
+          </button>
+          <button v-else class="topbar-icon-button" type="button" :aria-label="currentTab.label">
+            <span class="topbar-icon">◎</span>
+          </button>
+        </template>
+      </TopBar>
 
       <header class="console-header">
         <div class="console-header-copy">
@@ -103,15 +198,29 @@ function navigate(tabKey) {
           <p>{{ currentTab?.description }}</p>
         </div>
 
-        <div v-if="showHeaderMeta" class="console-header-meta">
-          <div class="console-chip">
+        <div v-if="showHeaderActions" class="console-header-meta">
+          <div v-if="showHeaderMeta" class="console-chip">
             <span>当前设备</span>
             <strong>{{ activeAgentSummary }}</strong>
           </div>
-          <div class="console-chip">
+          <div v-if="showHeaderMeta" class="console-chip">
             <span>在线设备</span>
             <strong>{{ store.onlineAgentCount }} / {{ store.agents.length }}</strong>
           </div>
+          <button
+            v-if="showRealCaptureControl"
+            class="console-jietu-button"
+            :class="{ active: realCaptureState.active }"
+            type="button"
+            :disabled="realCaptureBusy"
+            :title="realCaptureButtonTitle"
+            @click="toggleRealCapture"
+          >
+            <span class="console-jietu-icon">
+              <Monitor />
+            </span>
+            <span>{{ realCaptureButtonText }}</span>
+          </button>
         </div>
       </header>
 

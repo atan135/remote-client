@@ -2,6 +2,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import { computed, reactive, ref, watch } from "vue";
 import { defineStore } from "pinia";
 
+import { captureBrowserJietu } from "../browser-jietu";
 import { NAV_ITEMS } from "../constants/navigation";
 
 const fallbackTerminalProfiles = Object.freeze([
@@ -26,6 +27,7 @@ const fallbackTerminalProfiles = Object.freeze([
 
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 1200;
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
+const JIETU_LOG_PREFIX = "[remote-client:jietu]";
 const PENDING_COMMAND_STATUSES = new Set(["queued", "running", "dispatched"]);
 const FAILED_COMMAND_STATUSES = new Set(["failed", "timed_out", "connection_lost"]);
 const commandShellOptions = Object.freeze([
@@ -151,7 +153,8 @@ export const useConsoleStore = defineStore("console", () => {
   const appConfig = reactive({
     allowPublicRegistration: true,
     registrationApprovalRequired: false,
-    agentApprovalRequired: false
+    agentApprovalRequired: false,
+    canJietu: false
   });
 
   let socket = null;
@@ -448,6 +451,7 @@ export const useConsoleStore = defineStore("console", () => {
     appConfig.allowPublicRegistration = Boolean(payload.allowPublicRegistration);
     appConfig.registrationApprovalRequired = Boolean(payload.registrationApprovalRequired);
     appConfig.agentApprovalRequired = Boolean(payload.agentApprovalRequired);
+    appConfig.canJietu = Boolean(payload.canJietu);
   }
 
   async function loadSession() {
@@ -2199,6 +2203,126 @@ export const useConsoleStore = defineStore("console", () => {
     }, 3000);
   }
 
+  async function handleJietuRequested(payload = {}) {
+    const requestId = String(payload?.requestId || "").trim();
+
+    if (!requestId) {
+      logJietuError("收到截图请求但缺少 requestId", {
+        payloadType: typeof payload
+      });
+      return;
+    }
+
+    const requestDetails = {
+      requestId,
+      selector: payload.selector || "body",
+      name: payload.name || requestId,
+      engine: payload.engine || "real",
+      scale: payload.scale || "",
+      route: window.location.hash || window.location.pathname,
+      socketReadyState: getBrowserSocketReadyState()
+    };
+
+    logJietu("收到服务端截图请求", requestDetails);
+
+    try {
+      logJietu("开始执行浏览器截图", requestDetails);
+      const item = await captureBrowserJietu({
+        requestId,
+        engine: payload.engine || "real",
+        selector: payload.selector || undefined,
+        name: payload.name || requestId,
+        scale: payload.scale || undefined,
+        backgroundColor: payload.backgroundColor ?? undefined,
+        capturedBy: "jietu.requested"
+      });
+
+      logJietu("浏览器截图和上传完成", {
+        requestId,
+        relativePath: item?.relativePath || "",
+        bytes: item?.bytes || 0
+      });
+
+      const sent = sendBrowserSocketMessage("jietu.completed", {
+        requestId,
+        item
+      });
+
+      logJietu("返回服务端完成消息", {
+        requestId,
+        sent,
+        socketReadyState: getBrowserSocketReadyState()
+      });
+    } catch (error) {
+      const message = error?.message || String(error || "") || "浏览器截图失败";
+      logJietuError("浏览器截图流程失败", {
+        requestId,
+        message
+      });
+
+      const sent = sendBrowserSocketMessage("jietu.failed", {
+        requestId,
+        message
+      });
+
+      logJietu("返回服务端失败消息", {
+        requestId,
+        sent,
+        socketReadyState: getBrowserSocketReadyState()
+      });
+    }
+  }
+
+  function sendBrowserSocketMessage(type, payload) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type,
+        payload,
+        sentAt: new Date().toISOString()
+      })
+    );
+    return true;
+  }
+
+  function getBrowserSocketReadyState() {
+    if (!socket) {
+      return "none";
+    }
+
+    switch (socket.readyState) {
+      case WebSocket.CONNECTING:
+        return "connecting";
+      case WebSocket.OPEN:
+        return "open";
+      case WebSocket.CLOSING:
+        return "closing";
+      case WebSocket.CLOSED:
+        return "closed";
+      default:
+        return String(socket.readyState);
+    }
+  }
+
+  function logJietu(message, details = {}) {
+    if (typeof console === "undefined" || typeof console.info !== "function") {
+      return;
+    }
+
+    console.info(`${JIETU_LOG_PREFIX} ${message}`, details);
+  }
+
+  function logJietuError(message, details = {}) {
+    if (typeof console === "undefined" || typeof console.error !== "function") {
+      return;
+    }
+
+    console.error(`${JIETU_LOG_PREFIX} ${message}`, details);
+  }
+
   function queueBrowserMessage(message) {
     queuedBrowserMessages.push(message);
 
@@ -2274,6 +2398,9 @@ export const useConsoleStore = defineStore("console", () => {
           break;
         case "terminal.session.output":
           appendTerminalSessionOutput(message.payload);
+          break;
+        case "jietu.requested":
+          void handleJietuRequested(message.payload);
           break;
         default:
           break;
