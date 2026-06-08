@@ -1093,6 +1093,7 @@ textarea {
 
 .profile-summary-copy {
   display: grid;
+  flex: 1 1 auto;
   gap: 4px;
   min-width: 0;
 }
@@ -1107,6 +1108,11 @@ textarea {
   color: var(--text-dim);
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.profile-summary-logout.el-button {
+  flex: 0 0 auto;
+  min-width: 104px;
 }
 
 .profile-identity-tags {
@@ -1308,14 +1314,6 @@ textarea {
 
 .profile-panel-actions {
   margin-top: 4px;
-}
-
-.profile-logout-actions {
-  padding-top: 4px;
-}
-
-.profile-logout-actions .el-button {
-  min-width: 132px;
 }
 
 .profile-admin-card {
@@ -2008,6 +2006,148 @@ textarea {
 .tasks-filter-field {
   flex: 1 1 280px;
   margin-bottom: 0;
+}
+
+.users-page {
+  display: grid;
+  gap: 18px;
+}
+
+.users-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.users-metric-card > .el-card__body {
+  min-height: 92px;
+}
+
+.users-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.users-toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.users-toolbar h3 {
+  margin: 2px 0 0;
+  font-size: 1.1rem;
+}
+
+.users-toolbar p:not(.eyebrow) {
+  margin: 6px 0 0;
+  color: var(--text-dim);
+}
+
+.users-error-banner {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid rgba(239, 129, 120, 0.2);
+  border-radius: 10px;
+  background: rgba(239, 129, 120, 0.08);
+  color: var(--el-color-danger);
+}
+
+.users-table {
+  --el-table-bg-color: transparent;
+  --el-table-tr-bg-color: transparent;
+  --el-table-header-bg-color: rgba(255, 255, 255, 0.04);
+  --el-table-row-hover-bg-color: rgba(255, 255, 255, 0.045);
+  --el-table-border-color: rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.users-table .el-table__cell {
+  color: var(--text);
+}
+
+.users-account-cell,
+.users-dialog-identity > div {
+  display: grid;
+  gap: 4px;
+}
+
+.users-account-cell span,
+.users-date-cell,
+.users-note-cell,
+.users-dialog-identity span {
+  color: var(--text-dim);
+}
+
+.users-row-actions,
+.users-dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.users-row-actions .el-button + .el-button,
+.users-dialog-footer .el-button + .el-button {
+  margin-left: 0;
+}
+
+.users-dialog-form {
+  display: grid;
+  gap: 12px;
+}
+
+.users-dialog-form .field-block {
+  margin-bottom: 0;
+}
+
+.users-dialog-switch {
+  margin-top: 0;
+}
+
+.users-dialog-identity {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+@media (max-width: 860px) {
+  .users-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .users-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .users-toolbar .el-button {
+    width: 100%;
+  }
+}
+
+@media (max-width: 560px) {
+  .users-summary-grid,
+  .users-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .users-dialog-footer {
+    justify-content: stretch;
+  }
+
+  .users-dialog-footer .el-button {
+    flex: 1 1 auto;
+  }
 }
 
 .tasks-toolbar-footer {
@@ -3449,8 +3589,14 @@ textarea {
   }
 
   .profile-summary-strip {
+    align-items: flex-start;
+    flex-wrap: wrap;
     margin-bottom: 14px;
     padding-bottom: 14px;
+  }
+
+  .profile-summary-logout.el-button {
+    width: 100%;
   }
 
   .profile-section-title {
@@ -3483,10 +3629,6 @@ textarea {
     align-items: center;
     flex-direction: column;
     text-align: center;
-  }
-
-  .profile-logout-actions .el-button {
-    width: 100%;
   }
 
   .profile-panel-dialog.el-dialog {

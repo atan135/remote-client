@@ -1,5 +1,5 @@
 <script setup>
-import { ElAvatar, ElButton, ElCard, ElDialog, ElInput, ElOption, ElSelect, ElSwitch, ElTag } from "element-plus";
+import { ElAvatar, ElButton, ElCard, ElDialog, ElInput, ElSwitch, ElTag } from "element-plus";
 import { computed, ref } from "vue";
 import EmptyState from "./EmptyState.vue";
 
@@ -14,10 +14,6 @@ const props = defineProps({
   },
   isAdmin: {
     type: Boolean,
-    required: true
-  },
-  users: {
-    type: Array,
     required: true
   },
   managedAgents: {
@@ -40,23 +36,11 @@ const props = defineProps({
     type: Object,
     required: true
   },
-  userForm: {
-    type: Object,
-    required: true
-  },
   authCodeForm: {
     type: Object,
     required: true
   },
   changingPassword: {
-    type: Boolean,
-    required: true
-  },
-  creatingUser: {
-    type: Boolean,
-    required: true
-  },
-  loadingUsers: {
     type: Boolean,
     required: true
   },
@@ -73,10 +57,6 @@ const props = defineProps({
     required: true
   },
   authCodesError: {
-    type: String,
-    default: ""
-  },
-  usersError: {
     type: String,
     default: ""
   },
@@ -97,22 +77,6 @@ const props = defineProps({
     default: null
   },
   deletingAuthCodeId: {
-    type: [Number, String, null],
-    default: null
-  },
-  updatingUserId: {
-    type: [Number, String, null],
-    default: null
-  },
-  resettingUserId: {
-    type: [Number, String, null],
-    default: null
-  },
-  approvingUserId: {
-    type: [Number, String, null],
-    default: null
-  },
-  rejectingUserId: {
     type: [Number, String, null],
     default: null
   },
@@ -137,11 +101,6 @@ const props = defineProps({
 const emit = defineEmits([
   "logout",
   "submitChangePassword",
-  "createUser",
-  "saveUser",
-  "approveUser",
-  "rejectUser",
-  "resetPassword",
   "createAuthCode",
   "saveAuthCode",
   "deleteAuthCode",
@@ -253,6 +212,9 @@ function backToMenu() {
               <strong>{{ displayName }}</strong>
               <span>{{ session.user.username }} / {{ session.user.role }}</span>
             </div>
+            <el-button class="profile-summary-logout" plain round @click="emit('logout')">
+              退出登录
+            </el-button>
           </div>
 
           <div class="profile-section-title">
@@ -327,9 +289,6 @@ function backToMenu() {
             </div>
           </div>
 
-          <div class="hero-actions profile-panel-actions profile-logout-actions">
-            <el-button plain @click="emit('logout')">退出登录</el-button>
-          </div>
         </div>
 
         <div v-else-if="profileView === 'password'" class="profile-panel-section">
@@ -461,153 +420,6 @@ function backToMenu() {
               description="新增 auth_code 后，设备公钥绑定会显示在这里。"
             />
           </div>
-
-          <el-card v-if="isAdmin" class="surface-card info-card profile-admin-card" shadow="never">
-            <div class="card-head">
-              <div>
-                <p class="eyebrow">Admin</p>
-                <h3>用户管理</h3>
-              </div>
-              <el-tag round effect="plain">{{ users.length }}</el-tag>
-            </div>
-
-            <label class="field-block">
-              <span>用户名</span>
-              <el-input v-model="userForm.username" placeholder="新用户名" />
-            </label>
-
-            <label class="field-block">
-              <span>显示名</span>
-              <el-input v-model="userForm.displayName" placeholder="显示名" />
-            </label>
-
-            <label class="field-block">
-              <span>密码</span>
-              <el-input v-model="userForm.password" show-password placeholder="初始密码" />
-            </label>
-
-            <label class="field-block">
-              <span>角色</span>
-              <el-select v-model="userForm.role">
-                <el-option label="admin" value="admin" />
-                <el-option label="operator" value="operator" />
-                <el-option label="viewer" value="viewer" />
-              </el-select>
-            </label>
-
-            <div class="switch-row">
-              <span>创建后启用</span>
-              <el-switch v-model="userForm.isActive" />
-            </div>
-
-            <div class="hero-actions">
-              <el-button type="primary" round :disabled="creatingUser" @click="emit('createUser')">
-                {{ creatingUser ? "创建中..." : "创建用户" }}
-              </el-button>
-            </div>
-
-            <div class="stack-grid compact-stack">
-              <el-card v-for="user in users" :key="user.id" class="surface-card nested-card" shadow="never">
-                <div class="card-head card-head-tight">
-                  <div>
-                    <h3>{{ user.username }}</h3>
-                    <p>{{ user.createdAt }}</p>
-                  </div>
-                  <div class="hero-actions">
-                    <el-tag
-                      :type="user.approvalStatus === 'approved' ? 'success' : user.approvalStatus === 'pending' ? 'warning' : 'danger'"
-                      effect="dark"
-                      round
-                    >
-                      {{ user.approvalStatus }}
-                    </el-tag>
-                    <el-tag :type="user.isActive ? 'success' : 'danger'" effect="plain" round>
-                      {{ user.isActive ? "active" : "disabled" }}
-                    </el-tag>
-                  </div>
-                </div>
-
-                <label class="field-block">
-                  <span>显示名</span>
-                  <el-input v-model="user.displayName" />
-                </label>
-
-                <label class="field-block">
-                  <span>角色</span>
-                  <el-select v-model="user.role">
-                    <el-option label="admin" value="admin" />
-                    <el-option label="operator" value="operator" />
-                    <el-option label="viewer" value="viewer" />
-                  </el-select>
-                </label>
-
-                <div class="switch-row">
-                  <span>启用用户</span>
-                  <el-switch v-model="user.isActive" />
-                </div>
-
-                <label class="field-block">
-                  <span>申请备注</span>
-                  <el-input v-model="user.applicationNote" disabled />
-                </label>
-
-                <label class="field-block">
-                  <span>审核备注</span>
-                  <el-input v-model="user.reviewComment" type="textarea" :rows="2" />
-                </label>
-
-                <div class="hero-actions">
-                  <el-button round :disabled="updatingUserId === user.id" @click="emit('saveUser', user)">
-                    {{ updatingUserId === user.id ? "保存中..." : "保存" }}
-                  </el-button>
-                  <el-button
-                    v-if="user.approvalStatus !== 'approved'"
-                    type="primary"
-                    plain
-                    round
-                    :disabled="approvingUserId === user.id"
-                    @click="emit('approveUser', user)"
-                  >
-                    {{ approvingUserId === user.id ? "提交中..." : "通过" }}
-                  </el-button>
-                  <el-button
-                    v-if="user.approvalStatus !== 'rejected' && user.id !== session.user.id"
-                    type="danger"
-                    plain
-                    round
-                    :disabled="rejectingUserId === user.id"
-                    @click="emit('rejectUser', user)"
-                  >
-                    {{ rejectingUserId === user.id ? "提交中..." : "拒绝" }}
-                  </el-button>
-                  <el-button round :disabled="resettingUserId === user.id" @click="emit('resetPassword', user)">
-                    {{ resettingUserId === user.id ? "提交中..." : "重置密码" }}
-                  </el-button>
-                </div>
-              </el-card>
-
-              <EmptyState
-                v-if="loadingUsers && !users.length"
-                compact
-                variant="loading"
-                title="正在加载用户"
-                description="正在同步用户列表。"
-              />
-              <EmptyState
-                v-else-if="usersError && !users.length"
-                compact
-                variant="error"
-                title="用户列表加载失败"
-                :description="usersError"
-              />
-              <EmptyState
-                v-else-if="!users.length"
-                compact
-                title="暂无用户"
-                description="创建用户后，账号会显示在这里。"
-              />
-            </div>
-          </el-card>
 
           <el-card v-if="isAdmin" class="surface-card info-card profile-admin-card" shadow="never">
             <div class="card-head">

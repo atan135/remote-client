@@ -28,6 +28,14 @@ export const NAV_ITEMS = Object.freeze([
     description: "命令时间线与执行结果"
   },
   {
+    key: "users",
+    name: "users",
+    path: "/users",
+    label: "用户",
+    description: "用户创建、审核与密码重置",
+    adminOnly: true
+  },
+  {
     key: "profile",
     name: "profile",
     path: "/profile",

@@ -387,7 +387,7 @@ export const useConsoleStore = defineStore("console", () => {
   );
 
   const resolvedTabs = computed(() =>
-    NAV_ITEMS.map((tab) => ({
+    NAV_ITEMS.filter((tab) => !tab.adminOnly || isAdmin.value).map((tab) => ({
       ...tab,
       to: {
         name: tab.name

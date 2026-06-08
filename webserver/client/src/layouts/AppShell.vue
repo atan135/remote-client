@@ -1,6 +1,6 @@
 <script setup>
-import { ChatDotRound, DataBoard, House, Monitor, Tickets, User } from "@element-plus/icons-vue";
-import { computed } from "vue";
+import { ChatDotRound, DataBoard, House, Monitor, Tickets, User, UserFilled } from "@element-plus/icons-vue";
+import { computed, watch } from "vue";
 import { RouterView, useRoute, useRouter } from "vue-router";
 
 import BottomTabBar from "../components/BottomTabBar.vue";
@@ -32,8 +32,19 @@ const navIcons = {
   explore: Monitor,
   chat: ChatDotRound,
   tasks: Tickets,
+  users: UserFilled,
   profile: User
 };
+
+watch(
+  () => [currentTabKey.value, store.isAdmin],
+  ([tabKey, isAdmin]) => {
+    if (tabKey === "users" && !isAdmin) {
+      router.replace({ name: "home" });
+    }
+  },
+  { immediate: true }
+);
 
 function navigate(tabKey) {
   const target = store.resolvedTabs.find((item) => item.key === tabKey);
