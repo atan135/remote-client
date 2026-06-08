@@ -106,6 +106,8 @@ Copy-Item webserver/server/.env.example webserver/server/.env
 - `ALLOW_PUBLIC_REGISTRATION`
 - `REGISTRATION_APPROVAL_REQUIRED`
 - `AGENT_APPROVAL_REQUIRED`
+- `CAN_JIETU`
+- `JIETU_WEB_BASE_URL`
 - `WEBSERVER_SIGN_PRIVATE_KEY_PATH`
 - `WEBSERVER_SIGN_PUBLIC_KEY_PATH`
 
@@ -119,9 +121,29 @@ SESSION_SECURE=false
 ALLOW_PUBLIC_REGISTRATION=true
 REGISTRATION_APPROVAL_REQUIRED=false
 AGENT_APPROVAL_REQUIRED=true
+CAN_JIETU=false
+# 如果测试环境通过 Vite 访问前端，启用截图时设置为 http://127.0.0.1:5173
+JIETU_WEB_BASE_URL=
 WEBSERVER_SIGN_PRIVATE_KEY_PATH=./keys/webserver_sign_private.pem
 WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 ```
+
+截图 API 默认关闭。需要让 AI 或脚本快速获取当前 Web 控制台页面时，在 `webserver/server/.env` 中设置：
+
+```env
+CAN_JIETU=true
+JIETU_OUTPUT_DIR=../output/image
+```
+
+启用后重启 server，可调用：
+
+```bash
+curl -X POST http://127.0.0.1:3100/api/jietu \
+  -H "Content-Type: application/json" \
+  -d "{\"path\":\"/terminal\",\"width\":1440,\"height\":1000,\"fullPage\":true}"
+```
+
+服务端会把截图保存到 `webserver/output/image`，响应中返回保存路径。该接口是否可用只由 `CAN_JIETU` 控制，不要求登录态；如果请求里带有当前控制台的 cookie，截图浏览器会复用该 cookie，从而截到登录后的页面。
 
 ### 3.2 配置 `localapp`
 

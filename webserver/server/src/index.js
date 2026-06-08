@@ -31,6 +31,7 @@ import {
 } from "./persistence/terminal-session-history-service.js";
 import { BrowserHub } from "./realtime/browser-hub.js";
 import { SecureCommandService } from "./security/secure-command-service.js";
+import { ScreenshotService } from "./screenshot/screenshot-service.js";
 import { AgentRegistry } from "./state/agent-registry.js";
 import { CommandStore } from "./state/command-store.js";
 import { TerminalSessionStore } from "./state/terminal-session-store.js";
@@ -50,6 +51,7 @@ const sessionService = new SessionService(pool, config);
 const commandHistoryService = new CommandHistoryService(pool);
 const terminalSessionHistoryService = new TerminalSessionHistoryService(pool);
 const secureCommandService = new SecureCommandService(config);
+const screenshotService = new ScreenshotService(config, serverLogger);
 const app = express();
 const server = http.createServer(app);
 const agentRegistry = new AgentRegistry();
@@ -86,6 +88,14 @@ app.get("/api/config", async (_req, res) => {
     registrationApprovalRequired: config.registrationApprovalRequired,
     agentApprovalRequired: config.agentApprovalRequired
   });
+});
+
+app.get("/api/jietu", (req, res) => {
+  void handleScreenshotRequest(req, res);
+});
+
+app.post("/api/jietu", (req, res) => {
+  void handleScreenshotRequest(req, res);
 });
 
 app.get("/api/auth/session", requireAuth, (req, res) => {
@@ -801,6 +811,41 @@ app.post("/api/remote-files/read", requireAuth, (req, res) => {
   void handleRemoteFileReadRequest(req, res);
 });
 
+async function handleScreenshotRequest(req, res) {
+  try {
+    const body = isPlainObject(req.body) ? req.body : {};
+    const query = isPlainObject(req.query) ? req.query : {};
+    const item = await screenshotService.capture({
+      path: body.path || query.path || body.route || query.route || "/",
+      name: body.name || query.name || "",
+      width: body.width || query.width,
+      height: body.height || query.height,
+      deviceScaleFactor: body.deviceScaleFactor || query.deviceScaleFactor,
+      fullPage: normalizeBoolean(body.fullPage ?? query.fullPage, false),
+      cookieHeader: req.headers?.cookie || "",
+      requestOrigin: getScreenshotRequestOrigin()
+    });
+
+    logEvent(serverLogger, "info", "jietu.captured", {
+      path: item.relativePath,
+      url: item.url,
+      bytes: item.bytes,
+      ...getRequestContext(req)
+    });
+
+    res.json({ item });
+  } catch (error) {
+    logEvent(serverLogger, "warn", "jietu.capture_failed", {
+      path: String(req.body?.path || req.query?.path || ""),
+      error: error.message,
+      ...getRequestContext(req)
+    });
+    res.status(error.statusCode || 500).json({
+      message: error.message || "截图失败"
+    });
+  }
+}
+
 async function handleCommandRequest(req, res) {
   const command = String(req.body?.command || "").trim();
   const agentId = String(req.body?.agentId || "").trim();
@@ -1445,6 +1490,30 @@ process.on("unhandledRejection", (reason) => {
     reason: formatUnknownError(reason)
   });
 });
+
+process.on("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
+process.on("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
+
+async function shutdown(signal) {
+  logEvent(serverLogger, "info", "server.shutdown_requested", {
+    signal
+  });
+
+  await Promise.allSettled([
+    new Promise((resolve) => {
+      server.close(() => resolve());
+    }),
+    screenshotService.close(),
+    pool.end()
+  ]);
+
+  process.exit(0);
+}
 
 function scheduleAgentDisconnectHandling(agentId, meta = {}) {
   clearPendingAgentDisconnect(agentId);
@@ -3293,6 +3362,10 @@ function getRequestContext(req) {
   };
 }
 
+function getScreenshotRequestOrigin() {
+  return config.jietuWebBaseUrl || `http://127.0.0.1:${config.httpPort}`;
+}
+
 async function ensureManagedAgentReadyForControl(agentId) {
   if (!config.agentApprovalRequired) {
     return null;
@@ -3363,6 +3436,19 @@ function isDuplicateEntryError(error) {
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") {
+    return fallback;
+  }
+
+  if (typeof value === "boolean") {
+    return value;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  return ["1", "true", "yes", "on"].includes(normalized);
 }
 
 function sendAgentPong(socket, agentId, payload) {
