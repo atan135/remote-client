@@ -1,19 +1,28 @@
 <script setup>
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, ref, watch } from "vue";
 import {
   ElAutocomplete,
   ElButton,
   ElCard,
-  ElCollapse,
-  ElCollapseItem,
+  ElIcon,
   ElInput,
   ElOption,
   ElOptionGroup,
+  ElPopover,
   ElSelect,
   ElTabPane,
   ElTabs,
   ElTag
 } from "element-plus";
+import {
+  Back,
+  Document,
+  EditPen,
+  FolderOpened,
+  InfoFilled,
+  SwitchButton,
+  VideoPause
+} from "@element-plus/icons-vue";
 import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
 import TerminalEmulator from "./TerminalEmulator.vue";
 import EmptyState from "./EmptyState.vue";
@@ -161,8 +170,10 @@ const emit = defineEmits([
 const activeMode = ref("command");
 const sessionScreen = ref("main");
 const detailSessionId = ref("");
-const sessionMetaPanels = ref([]);
 const remoteFileDialogVisible = ref(false);
+const sessionInputPopoverVisible = ref(false);
+const remoteFilePopoverVisible = ref(false);
+const terminalEmulatorRef = ref(null);
 
 const currentSession = computed(
   () =>
@@ -308,6 +319,11 @@ const shouldPreferFinalAnswer = computed(
 );
 
 const hasFinalAnswer = computed(() => Boolean(String(currentSession.value?.finalText || "").trim()));
+const currentSessionProfileText = computed(
+  () => currentSession.value?.profileLabel || currentSession.value?.profile || "-"
+);
+const currentSessionCwdText = computed(() => currentSession.value?.cwd || "-");
+const currentSessionExitCodeText = computed(() => currentSession.value?.exitCode ?? "-");
 const canOpenRemoteFile = computed(
   () =>
     Boolean(
@@ -332,8 +348,6 @@ const currentRemoteFileViewer = computed(() => {
 
   return viewer;
 });
-const rawTerminalPanels = ref(["raw"]);
-
 function createPresetCommandKey(label, command, index) {
   return `${index}:${label}\u0000${command}`;
 }
@@ -431,16 +445,24 @@ function sendSelectedSessionPresetInput() {
 
 function openSessionDetail(sessionId) {
   detailSessionId.value = sessionId;
-  sessionMetaPanels.value = [];
-  rawTerminalPanels.value = ["raw"];
+  sessionInputPopoverVisible.value = false;
+  remoteFilePopoverVisible.value = false;
   activeMode.value = "session";
   sessionScreen.value = "detail";
   emit("select:terminalSession", sessionId);
+  fitVisibleTerminal();
 }
 
 function goBackToSessionList() {
+  sessionInputPopoverVisible.value = false;
+  remoteFilePopoverVisible.value = false;
   activeMode.value = "session";
   sessionScreen.value = "main";
+}
+
+async function fitVisibleTerminal() {
+  await nextTick();
+  terminalEmulatorRef.value?.fit?.();
 }
 
 function openRemoteFileViewer() {
@@ -459,8 +481,8 @@ watch(
   () => {
     selectedPresetCommandKey.value = "";
     selectedSessionPresetCommandKey.value = "";
-    sessionMetaPanels.value = [];
-    rawTerminalPanels.value = [];
+    sessionInputPopoverVisible.value = false;
+    remoteFilePopoverVisible.value = false;
     sessionScreen.value = "main";
     detailSessionId.value = "";
   }
@@ -500,33 +522,39 @@ watch(presetCommands, (items) => {
   selectedSessionPresetCommandKey.value = "";
 });
 
-watch(currentSession, (session) => {
-  if (session) {
-    if (
-      shouldPreferFinalAnswer.value &&
-      !hasFinalAnswer.value &&
-      !rawTerminalPanels.value.includes("raw")
-    ) {
-      rawTerminalPanels.value = ["raw"];
+watch(
+  () => currentSession.value?.sessionId || "",
+  (sessionId) => {
+    if (sessionId) {
+      fitVisibleTerminal();
+      return;
     }
 
-    return;
-  }
+    if (sessionScreen.value === "detail") {
+      sessionScreen.value = "main";
+    }
 
-  if (sessionScreen.value === "detail") {
-    sessionScreen.value = "main";
+    detailSessionId.value = "";
+    selectedSessionPresetCommandKey.value = "";
   }
-
-  sessionMetaPanels.value = [];
-  rawTerminalPanels.value = [];
-  detailSessionId.value = "";
-  selectedSessionPresetCommandKey.value = "";
-});
+);
 
 watch(
   () => currentRemoteFileViewer.value?.openedAt || "",
   (openedAt) => {
     remoteFileDialogVisible.value = Boolean(openedAt);
+  }
+);
+
+watch(
+  [
+    () => sessionInputPopoverVisible.value,
+    () => remoteFilePopoverVisible.value,
+    () => shouldPreferFinalAnswer.value,
+    () => hasFinalAnswer.value
+  ],
+  () => {
+    fitVisibleTerminal();
   }
 );
 </script>
@@ -731,42 +759,190 @@ watch(
       shadow="never">
       <div class="explore-session-screen">
         <div class="profile-screen-top explore-session-detail-top">
-          <el-button class="back-button" round plain @click="goBackToSessionList">
-            返回会话
+          <el-button class="back-button explore-session-icon-button" round plain title="返回会话" @click="goBackToSessionList">
+            <el-icon><Back /></el-icon>
+            <span>返回</span>
           </el-button>
           <div class="explore-session-top-actions">
             <el-tag :type="currentSession ? statusType(currentSession.status) : 'info'" effect="dark" round>
               {{ currentSession?.status || "未选择会话" }}
             </el-tag>
-            <el-button v-if="currentSession" round type="danger" plain :disabled="!canTerminateCurrentSession"
-              @click="emit('terminate-terminal-session', currentSession.sessionId)">
-              {{
-                terminatingTerminalSessionId === currentSession.sessionId
-                  ? "终止中..."
-                  : "结束会话"
-              }}
-            </el-button>
+            <template v-if="currentSession">
+              <el-popover
+                v-model:visible="sessionInputPopoverVisible"
+                placement="bottom-end"
+                trigger="click"
+                width="min(560px, calc(100vw - 32px))"
+                popper-class="terminal-tool-popover"
+                @hide="fitVisibleTerminal"
+              >
+                <template #reference>
+                  <el-button
+                    v-if="!isTerminalSessionClosed(currentSession.status)"
+                    class="explore-session-icon-button"
+                    round
+                    plain
+                    title="发送输入"
+                  >
+                    <el-icon><EditPen /></el-icon>
+                    <span>{{ shouldPreferFinalAnswer ? "提问" : "输入" }}</span>
+                  </el-button>
+                </template>
+                <div class="terminal-tool-panel">
+                  <div class="terminal-tool-head">
+                    <strong>{{ shouldPreferFinalAnswer ? "继续提问" : "发送输入" }}</strong>
+                    <small>也可以直接在下方终端中输入。</small>
+                  </div>
+                  <label v-if="presetCommands.length" class="field-block field-block-tight explore-session-preset-field">
+                    <span>预设输入</span>
+                    <el-select :model-value="selectedSessionPresetCommandKey" clearable
+                      placeholder="选择当前设备 localapp/.env 中的预设输入" @update:model-value="handleSessionPresetCommandChange">
+                      <el-option v-for="preset in presetCommands" :key="`session-${preset.key}`" :label="preset.label"
+                        :value="preset.key" />
+                    </el-select>
+                    <p v-if="selectedSessionPresetCommand" class="muted explore-preset-command-preview">
+                      {{ selectedSessionPresetCommand.command }}
+                    </p>
+                  </label>
+                  <label class="field-block field-block-tight explore-session-input">
+                    <span>文本输入</span>
+                    <el-input :model-value="terminalInput" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }"
+                      :placeholder="shouldPreferFinalAnswer
+                        ? '输入你的追加要求，发送到当前模型会话'
+                        : '向当前终端会话发送输入'
+                        " @update:model-value="emit('update:terminalInput', $event)" />
+                  </label>
+                  <div class="hero-actions explore-session-input-actions">
+                    <el-button
+                      v-if="presetCommands.length"
+                      class="explore-session-action explore-session-action-preset"
+                      round
+                      plain
+                      :disabled="!canSendSessionPresetInput"
+                      @click="sendSelectedSessionPresetInput">
+                      {{ sendingTerminalInput ? "发送中..." : "发送预设输入" }}
+                    </el-button>
+                    <el-button
+                      class="explore-session-action explore-session-action-send"
+                      type="primary"
+                      round
+                      :disabled="!canSendTerminalInput"
+                      @click="emit('send-terminal-input', currentSession.sessionId)">
+                      {{ sendingTerminalInput ? "发送中..." : "发送" }}
+                    </el-button>
+                  </div>
+                </div>
+              </el-popover>
+
+              <el-button
+                v-if="!isTerminalSessionClosed(currentSession.status)"
+                class="explore-session-icon-button"
+                round
+                plain
+                type="warning"
+                title="停止当前任务"
+                :disabled="!canInterruptCurrentSession"
+                @click="emit('interrupt-terminal-session', currentSession.sessionId)">
+                <el-icon><VideoPause /></el-icon>
+                <span>停止</span>
+              </el-button>
+
+              <el-popover
+                v-model:visible="remoteFilePopoverVisible"
+                placement="bottom-end"
+                trigger="click"
+                width="min(500px, calc(100vw - 32px))"
+                popper-class="terminal-tool-popover"
+                @hide="fitVisibleTerminal"
+              >
+                <template #reference>
+                  <el-button class="explore-session-icon-button" round plain title="打开目标文件">
+                    <el-icon><FolderOpened /></el-icon>
+                    <span>文件</span>
+                  </el-button>
+                </template>
+                <div class="terminal-tool-panel">
+                  <div class="terminal-tool-head">
+                    <strong>打开目标文件</strong>
+                    <small>读取当前设备上的文本文件并在弹窗中预览。</small>
+                  </div>
+                  <label class="field-block field-block-tight">
+                    <span>文件路径</span>
+                    <el-input :model-value="remoteFilePath" placeholder="例如：C:\\project\\remote-client\\CLAUDE.md"
+                      @update:model-value="emit('update:remoteFilePath', $event)" @keyup.enter="openRemoteFileViewer" />
+                  </label>
+                  <div class="hero-actions explore-file-launcher-actions">
+                    <el-button type="primary" round :disabled="!canOpenRemoteFile" @click="openRemoteFileViewer">
+                      {{ readingRemoteFile ? "打开中..." : "打开文件" }}
+                    </el-button>
+                  </div>
+                </div>
+              </el-popover>
+
+              <el-popover
+                placement="bottom-end"
+                trigger="click"
+                width="min(480px, calc(100vw - 32px))"
+                popper-class="terminal-tool-popover"
+                @hide="fitVisibleTerminal"
+              >
+                <template #reference>
+                  <el-button class="explore-session-icon-button" round plain title="会话信息">
+                    <el-icon><InfoFilled /></el-icon>
+                    <span>详情</span>
+                  </el-button>
+                </template>
+                <div class="terminal-tool-panel">
+                  <div class="terminal-tool-head">
+                    <strong>会话信息</strong>
+                    <small>{{ currentSession.sessionId }}</small>
+                  </div>
+                  <div class="detail-grid explore-session-meta-grid">
+                    <div class="detail-row">
+                      <span>Profile</span>
+                      <strong>{{ currentSessionProfileText }}</strong>
+                    </div>
+                    <div class="detail-row">
+                      <span>工作目录</span>
+                      <strong>{{ currentSessionCwdText }}</strong>
+                    </div>
+                    <div class="detail-row">
+                      <span>退出码</span>
+                      <strong>{{ currentSessionExitCodeText }}</strong>
+                    </div>
+                  </div>
+                </div>
+              </el-popover>
+
+              <el-button
+                class="explore-session-icon-button"
+                round
+                type="danger"
+                plain
+                title="结束会话"
+                :disabled="!canTerminateCurrentSession"
+                @click="emit('terminate-terminal-session', currentSession.sessionId)">
+                <el-icon><SwitchButton /></el-icon>
+                <span>
+                  {{
+                    terminatingTerminalSessionId === currentSession.sessionId
+                      ? "终止中"
+                      : "结束"
+                  }}
+                </span>
+              </el-button>
+            </template>
           </div>
         </div>
 
-        <el-collapse v-if="currentSession" v-model="sessionMetaPanels" class="explore-session-meta">
-          <el-collapse-item name="meta" title="会话信息">
-            <div class="detail-grid">
-              <div class="detail-row">
-                <span>Profile</span>
-                <strong>{{ currentSession.profileLabel || currentSession.profile }}</strong>
-              </div>
-              <div class="detail-row">
-                <span>工作目录</span>
-                <strong>{{ currentSession.cwd || "-" }}</strong>
-              </div>
-              <div class="detail-row">
-                <span>退出码</span>
-                <strong>{{ currentSession.exitCode ?? "-" }}</strong>
-              </div>
-            </div>
-          </el-collapse-item>
-        </el-collapse>
+        <div v-if="currentSession" class="explore-session-summary-strip">
+          <span>
+            <el-icon><Document /></el-icon>
+            {{ currentSessionProfileText }}
+          </span>
+          <span class="explore-session-summary-cwd">{{ currentSessionCwdText }}</span>
+          <span>退出码 {{ currentSessionExitCodeText }}</span>
+        </div>
 
         <div v-if="currentSession" class="explore-terminal-shell">
           <div v-if="shouldPreferFinalAnswer" class="console-block final-answer-block"
@@ -778,81 +954,18 @@ watch(
             </p>
           </div>
 
-          <label v-if="currentSession && !isTerminalSessionClosed(currentSession.status)"
-            class="field-block field-block-tight explore-session-input">
-            <span>{{ shouldPreferFinalAnswer ? "继续提问" : "发送输入" }}</span>
-            <div v-if="presetCommands.length" class="field-block field-block-tight explore-session-preset-field">
-              <span>预设输入</span>
-              <el-select :model-value="selectedSessionPresetCommandKey" clearable
-                placeholder="选择当前设备 localapp/.env 中的预设输入" @update:model-value="handleSessionPresetCommandChange">
-                <el-option v-for="preset in presetCommands" :key="`session-${preset.key}`" :label="preset.label"
-                  :value="preset.key" />
-              </el-select>
-              <p v-if="selectedSessionPresetCommand" class="muted explore-preset-command-preview">
-                {{ selectedSessionPresetCommand.command }}
-              </p>
+          <div class="explore-terminal-frame">
+            <div v-if="shouldPreferFinalAnswer" class="explore-terminal-frame-head">
+              <span>原始终端输出</span>
             </div>
-            <div class="explore-session-input-row">
-              <el-input :model-value="terminalInput" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }"
-                :placeholder="shouldPreferFinalAnswer
-                  ? '输入你的追加要求，发送到当前模型会话'
-                  : '向当前终端会话发送输入'
-                  " @update:model-value="emit('update:terminalInput', $event)" />
-            </div>
-            <div class="hero-actions explore-session-input-actions">
-              <el-button
-                v-if="presetCommands.length"
-                class="explore-session-action explore-session-action-preset"
-                round
-                plain
-                :disabled="!canSendSessionPresetInput"
-                @click="sendSelectedSessionPresetInput">
-                {{ sendingTerminalInput ? "发送中..." : "发送预设输入" }}
-              </el-button>
-              <el-button
-                class="explore-session-action explore-session-action-send"
-                type="primary"
-                round
-                :disabled="!canSendTerminalInput"
-                @click="emit('send-terminal-input', currentSession.sessionId)">
-                {{ sendingTerminalInput ? "发送中..." : "发送" }}
-              </el-button>
-              <el-button
-                class="explore-session-action explore-session-action-stop"
-                round
-                plain
-                type="warning"
-                :disabled="!canInterruptCurrentSession"
-                @click="emit('interrupt-terminal-session', currentSession.sessionId)">
-                停止任务
-              </el-button>
-            </div>
-          </label>
-
-          <el-collapse v-model="rawTerminalPanels" class="explore-raw-terminal">
-            <el-collapse-item name="raw" :title="shouldPreferFinalAnswer ? '原始终端输出（调试）' : '终端输出'">
-              <TerminalEmulator class="explore-terminal" :session-id="currentSession.sessionId"
-                :outputs="currentSession.outputs || []" :interactive="!isTerminalSessionClosed(currentSession.status)"
-                @terminal-data="
-                  emit('send-terminal-raw-input', {
-                    input: $event,
-                    sessionId: currentSession.sessionId
-                  })
-                  " @terminal-resize="emit('resize-terminal-session', $event)" />
-            </el-collapse-item>
-          </el-collapse>
-
-          <div v-if="currentSession" class="console-block explore-file-launcher">
-            <h4>打开目标文件</h4>
-            <label class="field-block field-block-tight">
-              <el-input :model-value="remoteFilePath" placeholder="例如：C:\\project\\remote-client\\CLAUDE.md"
-                @update:model-value="emit('update:remoteFilePath', $event)" @keyup.enter="openRemoteFileViewer" />
-            </label>
-            <div class="hero-actions explore-file-launcher-actions">
-              <el-button type="primary" round :disabled="!canOpenRemoteFile" @click="openRemoteFileViewer">
-                {{ readingRemoteFile ? "打开中..." : "打开文件" }}
-              </el-button>
-            </div>
+            <TerminalEmulator ref="terminalEmulatorRef" class="explore-terminal" :session-id="currentSession.sessionId"
+              :outputs="currentSession.outputs || []" :interactive="!isTerminalSessionClosed(currentSession.status)"
+              @terminal-data="
+                emit('send-terminal-raw-input', {
+                  input: $event,
+                  sessionId: currentSession.sessionId
+                })
+                " @terminal-resize="emit('resize-terminal-session', $event)" />
           </div>
 
           <div v-if="remoteFileError" class="console-block error explore-file-open-error">

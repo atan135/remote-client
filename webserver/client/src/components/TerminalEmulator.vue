@@ -175,6 +175,10 @@ function scheduleFitTerminal() {
   });
 }
 
+defineExpose({
+  fit: scheduleFitTerminal
+});
+
 function handleWindowResize() {
   scheduleFitTerminal();
 }
