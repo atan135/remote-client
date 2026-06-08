@@ -1,10 +1,7 @@
 <script setup>
 import {
-  Aim,
   ArrowRight,
-  Monitor,
   Refresh,
-  Tickets
 } from "@element-plus/icons-vue";
 import { ElAlert, ElButton, ElCard, ElDialog, ElIcon, ElTag } from "element-plus";
 import { computed, ref } from "vue";
@@ -67,27 +64,36 @@ const currentAgentLabel = computed(() => props.activeAgent?.label || props.activ
 
 const connectionText = computed(() => (props.wsConnected ? "实时同步已连接" : "实时链路重连中"));
 
+const onlineAgents = computed(() => props.agents.filter((agent) => String(agent?.status || "") === "online"));
+
+const latestCommandSummary = computed(() => {
+  if (!latestCommand.value) {
+    return {
+      status: "暂无记录",
+      target: "-",
+      command: "尚未提交命令"
+    };
+  }
+
+  return {
+    status: latestCommand.value.status || "-",
+    target: latestCommand.value.agentId || latestCommand.value.agentLabel || "-",
+    command: latestCommand.value.command || latestCommand.value.commandText || "命令内容未记录"
+  };
+});
+
 const metrics = computed(() => [
   {
     key: "online",
     label: "在线设备",
     value: props.onlineAgentCount,
-    detail: `总计 ${props.agents.length} 台`,
-    icon: Monitor
+    detail: `总计 ${props.agents.length} 台 / 在线 ${onlineAgents.value.length} 台`
   },
   {
     key: "commands",
     label: "命令记录",
     value: props.commands.length,
-    detail: latestCommand.value ? `最近状态 ${latestCommand.value.status || "-"}` : "暂无命令记录",
-    icon: Tickets
-  },
-  {
-    key: "current",
-    label: "当前设备",
-    value: currentAgentLabel.value,
-    detail: props.activeAgent?.agentId || "未选择设备",
-    icon: Aim
+    detail: latestCommand.value ? `最近状态 ${latestCommand.value.status || "-"}` : "暂无命令记录"
   }
 ]);
 
@@ -182,49 +188,49 @@ function diagnosisStatusType(value) {
 
 <template>
   <section class="page home-page">
-    <el-card class="surface-card hero-card home-hero-card" shadow="never">
-      <div class="home-hero-main">
-        <div class="home-status-badge" :class="{ online: wsConnected }">
-          <span class="console-status-dot" :class="{ online: wsConnected }"></span>
-          <span>{{ connectionText }}</span>
+    <el-card class="surface-card home-summary-card" shadow="never">
+      <div class="home-summary-main">
+        <div>
+          <div class="home-hero-kicker">
+            <span class="console-status-dot" :class="{ online: wsConnected }"></span>
+            <span>{{ connectionText }}</span>
+          </div>
+          <h2>控制台概览</h2>
         </div>
-        <h2>{{ displayName || "控制台" }}</h2>
-        <p class="hero-copy">
-          {{ activeAgent ? `当前设备 ${currentAgentLabel}` : "选择在线设备后即可下发安全命令。" }}
-        </p>
+      </div>
+
+      <div class="home-summary-metrics">
+        <div v-for="metric in metrics" :key="metric.key" class="home-summary-metric">
+          <span>{{ metric.label }}</span>
+          <strong>{{ metric.value }}</strong>
+          <small>{{ metric.detail }}</small>
+        </div>
+        <div class="home-summary-metric">
+          <span>当前设备</span>
+          <strong>{{ currentAgentLabel }}</strong>
+          <small>{{ activeAgent?.agentId || "未选择设备" }}</small>
+        </div>
       </div>
 
       <div class="home-hero-actions">
         <el-button type="primary" @click="emit('go-terminal')">
-          发送命令
+          打开终端
           <el-icon class="el-icon--right"><ArrowRight /></el-icon>
         </el-button>
         <el-button plain @click="emit('go-terminal')">
-          {{ activeAgent?.label || "选择设备" }}
+          一次性命令
         </el-button>
       </div>
     </el-card>
 
-    <section class="metrics-grid">
-      <el-card v-for="metric in metrics" :key="metric.key" class="surface-card metric-card" shadow="never">
-        <div class="metric-card-top">
-          <span>{{ metric.label }}</span>
-          <span class="metric-icon">
-            <component :is="metric.icon" />
-          </span>
-        </div>
-        <strong>{{ metric.value }}</strong>
-        <small>{{ metric.detail }}</small>
-      </el-card>
-    </section>
-
-    <el-card class="surface-card home-device-panel" shadow="never">
-      <section class="home-device-list">
-        <div class="card-head">
+    <section class="home-workspace">
+      <el-card class="surface-card home-device-list-card" shadow="never">
+        <div class="home-section-head">
           <div>
             <h3>可用设备</h3>
+            <p>选择目标机器，进入终端或查看诊断。</p>
           </div>
-          <el-tag round effect="plain">{{ agents.length }}</el-tag>
+          <el-tag round effect="plain">{{ agents.length }} 台</el-tag>
         </div>
 
         <div v-if="loadingAgents && !agents.length" class="home-empty-state-wrap">
@@ -275,39 +281,58 @@ function diagnosisStatusType(value) {
             <el-button plain @click="emit('go-terminal')">查看终端配置</el-button>
           </EmptyState>
         </div>
-      </section>
+      </el-card>
 
-      <section class="home-device-detail">
-        <div class="card-head">
+      <el-card class="surface-card home-device-detail-card" shadow="never">
+        <div class="home-section-head">
           <div>
-            <h3>设备详情</h3>
+            <h3>当前设备</h3>
+            <p>{{ activeAgent ? "设备基础信息与最近活动。" : "尚未选择设备。" }}</p>
           </div>
           <el-tag v-if="activeAgent" :type="statusType(activeAgent.status)" round effect="plain">
             {{ activeAgent.status }}
           </el-tag>
         </div>
 
-        <div v-if="activeAgent" class="detail-grid">
-          <div class="detail-row">
-            <span>设备 ID</span>
-            <strong>{{ activeAgent.agentId }}</strong>
+        <template v-if="activeAgent">
+          <div class="detail-grid">
+            <div class="detail-row">
+              <span>设备 ID</span>
+              <strong>{{ activeAgent.agentId }}</strong>
+            </div>
+            <div class="detail-row">
+              <span>主机名</span>
+              <strong>{{ activeAgent.hostname || "-" }}</strong>
+            </div>
+            <div class="detail-row">
+              <span>平台 / 架构</span>
+              <strong>{{ activeAgent.platform }} / {{ activeAgent.arch }}</strong>
+            </div>
+          </div>
+          <div v-if="activeAgent.commonWorkingDirectories?.length" class="console-block compact-stack">
+            <h4>Common Working Directories</h4>
+            <pre>{{ activeAgent.commonWorkingDirectories.join("\n") }}</pre>
+          </div>
+        </template>
+        <EmptyState v-else compact title="未选择设备" description="从左侧设备列表中选择一台在线设备。" />
+
+        <div class="home-command-inline">
+          <div class="home-section-head home-command-inline-head">
+            <div>
+              <h3>最近命令</h3>
+              <p>{{ latestCommandSummary.command }}</p>
+            </div>
+            <el-tag :type="latestCommand ? statusType(latestCommand.status) : 'info'" round effect="plain">
+              {{ latestCommandSummary.status }}
+            </el-tag>
           </div>
           <div class="detail-row">
-            <span>主机名</span>
-            <strong>{{ activeAgent.hostname || "-" }}</strong>
-          </div>
-          <div class="detail-row">
-            <span>平台 / 架构</span>
-            <strong>{{ activeAgent.platform }} / {{ activeAgent.arch }}</strong>
+            <span>目标设备</span>
+            <strong>{{ latestCommandSummary.target }}</strong>
           </div>
         </div>
-        <div v-if="activeAgent?.commonWorkingDirectories?.length" class="console-block compact-stack">
-          <h4>Common Working Directories</h4>
-          <pre>{{ activeAgent.commonWorkingDirectories.join("\n") }}</pre>
-        </div>
-        <EmptyState v-else-if="!activeAgent" compact title="未选择设备" description="从左侧设备列表中选择一台在线设备。" />
-      </section>
-    </el-card>
+      </el-card>
+    </section>
 
     <el-dialog
       v-model="diagnosticsVisible"
