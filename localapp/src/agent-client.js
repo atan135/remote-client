@@ -23,8 +23,11 @@ export class AgentClient {
     this.executionGateway = executionGateway;
     this.profileRegistry = profileRegistry;
     this.socket = null;
+    this.socketGeneration = 0;
     this.reconnectTimer = null;
     this.idlePingTimer = null;
+    this.heartbeatTimeoutTimer = null;
+    this.pendingPing = null;
     this.lastSocketActivityAt = 0;
     this.commandQueue = [];
     this.processing = false;
@@ -53,9 +56,15 @@ export class AgentClient {
       serverWsUrl: url.toString()
     });
 
-    this.socket = new WebSocket(url);
+    const socket = new WebSocket(url);
+    const socketGeneration = ++this.socketGeneration;
+    this.socket = socket;
 
-    this.socket.on("open", () => {
+    socket.on("open", () => {
+      if (!this.isCurrentSocket(socket, socketGeneration)) {
+        return;
+      }
+
       logEvent(this.agentLogger, "info", "agent.connected", {
         agentId: this.config.agentId
       });
@@ -67,7 +76,11 @@ export class AgentClient {
       this.processQueue();
     });
 
-    this.socket.on("message", (raw) => {
+    socket.on("message", (raw) => {
+      if (!this.isCurrentSocket(socket, socketGeneration)) {
+        return;
+      }
+
       this.touchSocketActivity();
       try {
         const message = JSON.parse(String(raw));
@@ -81,7 +94,11 @@ export class AgentClient {
       }
     });
 
-    this.socket.on("close", (code, reasonBuffer) => {
+    socket.on("close", (code, reasonBuffer) => {
+      if (!this.isCurrentSocket(socket, socketGeneration)) {
+        return;
+      }
+
       logEvent(this.agentLogger, "warn", "agent.disconnected", {
         agentId: this.config.agentId,
         closeCode: code,
@@ -91,7 +108,11 @@ export class AgentClient {
       this.scheduleReconnect();
     });
 
-    this.socket.on("error", (error) => {
+    socket.on("error", (error) => {
+      if (!this.isCurrentSocket(socket, socketGeneration)) {
+        return;
+      }
+
       logEvent(this.agentLogger, "error", "agent.websocket_error", {
         agentId: this.config.agentId,
         error: error.message
@@ -101,6 +122,7 @@ export class AgentClient {
 
   handleMessage(message) {
     if (message.type === "agent.pong") {
+      this.handleAgentPong(message);
       return;
     }
 
@@ -305,6 +327,7 @@ export class AgentClient {
     this.stopIdlePing();
     this.lastSocketActivityAt = Date.now();
     const idlePingIntervalMs = resolveIdlePingIntervalMs(this.config);
+    const heartbeatTimeoutMs = resolveHeartbeatTimeoutMs(this.config, idlePingIntervalMs);
 
     this.idlePingTimer = setInterval(() => {
       if (!this.isOpen()) {
@@ -313,16 +336,30 @@ export class AgentClient {
 
       const idleForMs = Date.now() - this.lastSocketActivityAt;
 
-      if (idleForMs < idlePingIntervalMs) {
+      if (this.pendingPing || idleForMs < idlePingIntervalMs) {
         return;
       }
 
-      this.send("agent.ping", {
+      const pingId = randomUUID();
+      this.pendingPing = {
+        pingId,
+        sentAtMs: Date.now(),
+        idleForMs
+      };
+
+      const sent = this.send("agent.ping", {
         agentId: this.config.agentId,
-        pingId: randomUUID(),
+        pingId,
         idleForMs,
         pingedAt: new Date().toISOString()
       });
+
+      if (!sent) {
+        this.clearPendingPing();
+        return;
+      }
+
+      this.armHeartbeatTimeout(heartbeatTimeoutMs);
     }, idlePingIntervalMs);
   }
 
@@ -330,6 +367,76 @@ export class AgentClient {
     if (this.idlePingTimer) {
       clearInterval(this.idlePingTimer);
       this.idlePingTimer = null;
+    }
+
+    this.clearPendingPing();
+  }
+
+  handleAgentPong(message) {
+    const payload = isPlainObject(message?.payload) ? message.payload : {};
+    const pingId = String(payload.pingId || "");
+
+    if (!this.pendingPing || this.pendingPing.pingId !== pingId) {
+      return;
+    }
+
+    const roundTripMs = Date.now() - this.pendingPing.sentAtMs;
+    this.clearPendingPing();
+
+    logEvent(this.agentLogger, "info", "agent.pong_received", {
+      agentId: this.config.agentId,
+      pingId,
+      roundTripMs
+    });
+  }
+
+  armHeartbeatTimeout(timeoutMs) {
+    if (this.heartbeatTimeoutTimer) {
+      clearTimeout(this.heartbeatTimeoutTimer);
+      this.heartbeatTimeoutTimer = null;
+    }
+
+    this.heartbeatTimeoutTimer = setTimeout(() => {
+      this.heartbeatTimeoutTimer = null;
+      this.terminateUnresponsiveSocket(timeoutMs);
+    }, timeoutMs);
+  }
+
+  clearPendingPing() {
+    if (this.heartbeatTimeoutTimer) {
+      clearTimeout(this.heartbeatTimeoutTimer);
+      this.heartbeatTimeoutTimer = null;
+    }
+
+    this.pendingPing = null;
+  }
+
+  terminateUnresponsiveSocket(timeoutMs) {
+    if (!this.socket) {
+      return;
+    }
+
+    logEvent(this.agentLogger, "warn", "agent.heartbeat_timeout", {
+      agentId: this.config.agentId,
+      pingId: this.pendingPing?.pingId || "",
+      heartbeatTimeoutMs: timeoutMs,
+      pendingForMs: this.pendingPing ? Date.now() - this.pendingPing.sentAtMs : 0,
+      socketReadyState: this.socket.readyState
+    });
+
+    this.clearPendingPing();
+    this.stopIdlePing();
+    this.scheduleReconnect();
+
+    try {
+      this.socket.terminate();
+    } catch (error) {
+      logEvent(this.agentLogger, "error", "agent.socket_terminate_failed", {
+        agentId: this.config.agentId,
+        error: error.message
+      });
+      this.stopIdlePing();
+      this.scheduleReconnect();
     }
   }
 
@@ -379,8 +486,10 @@ export class AgentClient {
 
     while (this.outbox.length > 0 && this.isOpen()) {
       const message = this.outbox.shift();
-      this.socket.send(message);
-      this.touchSocketActivity();
+      if (!this.sendRaw(message, "agent.outbox_flush")) {
+        this.outbox.unshift(message);
+        return;
+      }
     }
   }
 
@@ -401,9 +510,7 @@ export class AgentClient {
     }
 
     if (this.isOpen()) {
-      this.socket.send(message);
-      this.touchSocketActivity();
-      return;
+      return this.sendRaw(message, type);
     }
 
     if (persistIfOffline) {
@@ -414,10 +521,40 @@ export class AgentClient {
         outboxSize: this.outbox.length
       });
     }
+
+    return false;
   }
 
   isOpen() {
     return this.socket && this.socket.readyState === WebSocket.OPEN;
+  }
+
+  isCurrentSocket(socket, socketGeneration) {
+    return this.socket === socket && this.socketGeneration === socketGeneration;
+  }
+
+  sendRaw(message, type) {
+    try {
+      this.socket.send(message);
+      this.touchSocketActivity();
+      return true;
+    } catch (error) {
+      logEvent(this.agentLogger, "error", "agent.websocket_send_failed", {
+        agentId: this.config.agentId,
+        type,
+        error: error.message,
+        socketReadyState: this.socket?.readyState ?? null
+      });
+
+      this.stopIdlePing();
+      this.scheduleReconnect();
+
+      try {
+        this.socket?.terminate();
+      } catch {}
+
+      return false;
+    }
   }
 
   touchSocketActivity() {
@@ -809,4 +946,14 @@ function resolveIdlePingIntervalMs(config) {
   }
 
   return 15000;
+}
+
+function resolveHeartbeatTimeoutMs(config, intervalMs) {
+  const timeoutMs = Number(config?.heartbeatTimeoutMs);
+
+  if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+    return timeoutMs;
+  }
+
+  return Math.max(10000, Math.ceil(Number(intervalMs) * 0.75));
 }

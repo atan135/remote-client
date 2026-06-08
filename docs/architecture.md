@@ -366,6 +366,7 @@ profile 当前可约束：
 
 - `agent.register`
 - `agent.heartbeat`
+- `agent.ping`
 - `command.started`
 - `command.finished`
 - `terminal.session.created`
@@ -382,6 +383,7 @@ profile 当前可约束：
 - `agent.access.rejected`
 - `agent.access.disabled`
 - `agent.access.reverify_required`
+- `agent.pong`
 - `command.execute.secure`
 - `terminal.session.create.secure`
 - `terminal.session.input.secure`
@@ -412,6 +414,12 @@ profile 当前可约束：
 7. agent 验签、解密、执行
 8. agent 回传 `command.started` / `command.finished`
 9. 服务端更新状态并广播给浏览器
+
+### 连接保活与重连
+
+- `localapp` 空闲超过 `HEARTBEAT_INTERVAL_MS` 后发送 `agent.ping`，服务端收到后更新 `lastSeenAt` 并回复 `agent.pong`。
+- `localapp` 在 `HEARTBEAT_TIMEOUT_MS` 内收不到对应 `agent.pong` 时，会主动终止当前 WebSocket，并按 `RECONNECT_INTERVAL_MS` 重连。
+- 服务端正常退出时会向 agent/browser WebSocket 发送 `1012 server_restart` 关闭帧；如果关闭帧因网络或进程状态未到达，agent 侧心跳超时仍会兜底触发重连。
 
 ### 交互式终端
 

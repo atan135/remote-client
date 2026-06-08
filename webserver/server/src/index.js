@@ -68,6 +68,7 @@ const pendingBrowserScreenshotRequests = new Map();
 const pendingTerminalSessionPersists = new Map();
 const pendingTerminalSessionTurnSyncs = new Map();
 const agentHeartbeatBroadcastState = new Map();
+let shutdownInProgress = false;
 const remoteFileReadTimeoutMs = Math.max(5000, Math.min(config.secureCommandTtlMs, 20000));
 const terminalSessionPersistDebounceMs = Math.max(0, config.terminalSessionPersistDebounceMs);
 const terminalSessionTurnSyncDebounceMs = Math.max(0, config.terminalSessionTurnSyncDebounceMs);
@@ -1565,11 +1566,22 @@ process.on("SIGTERM", () => {
 });
 
 async function shutdown(signal) {
+  if (shutdownInProgress) {
+    return;
+  }
+
+  shutdownInProgress = true;
+
   logEvent(serverLogger, "info", "server.shutdown_requested", {
     signal
   });
 
+  closeWebSocketServerClients(agentSocketServer, 1012, "server_restart");
+  closeWebSocketServerClients(browserSocketServer, 1012, "server_restart");
+
   await Promise.allSettled([
+    waitForWebSocketServerClientsToClose(agentSocketServer, 2000),
+    waitForWebSocketServerClientsToClose(browserSocketServer, 2000),
     new Promise((resolve) => {
       server.close(() => resolve());
     }),
@@ -1578,6 +1590,54 @@ async function shutdown(signal) {
   ]);
 
   process.exit(0);
+}
+
+function closeWebSocketServerClients(socketServer, code, reason) {
+  for (const socket of socketServer.clients) {
+    if (!socket || socket.readyState === WebSocket.CLOSED) {
+      continue;
+    }
+
+    try {
+      socket.close(code, reason);
+    } catch {
+      try {
+        socket.terminate();
+      } catch {}
+    }
+  }
+}
+
+function waitForWebSocketServerClientsToClose(socketServer, timeoutMs) {
+  return new Promise((resolve) => {
+    const deadline = Date.now() + timeoutMs;
+
+    const checkClosed = () => {
+      const openSockets = Array.from(socketServer.clients).filter(
+        (socket) => socket.readyState !== WebSocket.CLOSED
+      );
+
+      if (openSockets.length === 0) {
+        resolve();
+        return;
+      }
+
+      if (Date.now() >= deadline) {
+        for (const socket of openSockets) {
+          try {
+            socket.terminate();
+          } catch {}
+        }
+
+        resolve();
+        return;
+      }
+
+      setTimeout(checkClosed, 50);
+    };
+
+    checkClosed();
+  });
 }
 
 function scheduleAgentDisconnectHandling(agentId, meta = {}) {

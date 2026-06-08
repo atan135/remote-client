@@ -156,6 +156,7 @@
 
 当前已实现：
 
+- `agent.pong`
 - `command.execute.secure`
 - `terminal.session.create.secure`
 - `terminal.session.input.secure`
@@ -169,6 +170,7 @@
 
 - `agent.register`
 - `agent.heartbeat`
+- `agent.ping`
 - `command.started`
 - `command.finished`
 - `terminal.session.created`
@@ -331,6 +333,8 @@
 - 重建活动会话视图
 - 标记丢失会话
 - 向浏览器重新广播
+
+连接保活由 `localapp` 侧主动驱动：空闲超过 `HEARTBEAT_INTERVAL_MS` 会发送 `agent.ping`，服务端回复 `agent.pong`；如果 `HEARTBEAT_TIMEOUT_MS` 内未收到对应 pong，`localapp` 会终止当前 WebSocket 并按 `RECONNECT_INTERVAL_MS` 周期重连。服务端重启时会主动发送 `1012 server_restart` 关闭帧，但 agent 侧心跳超时仍作为半开连接兜底。
 
 ## 当前实现边界
 

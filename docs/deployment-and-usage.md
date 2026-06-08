@@ -603,6 +603,7 @@ LOCAL_DEBUG_SERVER_ENABLED=false
 - `AGENT_ID` 必须稳定且唯一
 - `AGENT_APPLICATION_NOTE` 会随设备注册上报，便于管理员审核时识别用途
 - `AGENT_SHARED_TOKEN` 必须与服务端一致
+- `HEARTBEAT_INTERVAL_MS` 控制空闲多久后发送 `agent.ping`，`HEARTBEAT_TIMEOUT_MS` 控制等待 `agent.pong` 的最长时间，超时后会按 `RECONNECT_INTERVAL_MS` 重连
 
 ### 5.4 生成或分发密钥
 

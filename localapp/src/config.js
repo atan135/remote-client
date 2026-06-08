@@ -98,6 +98,7 @@ export function loadConfig() {
     agentApplicationNote: process.env.AGENT_APPLICATION_NOTE || "",
     agentSharedToken: process.env.AGENT_SHARED_TOKEN || "",
     heartbeatIntervalMs: toNumber(process.env.HEARTBEAT_INTERVAL_MS, 15000),
+    heartbeatTimeoutMs: toNumber(process.env.HEARTBEAT_TIMEOUT_MS, 10000),
     reconnectIntervalMs: toNumber(process.env.RECONNECT_INTERVAL_MS, 5000),
     commandTimeoutMs: toNumber(process.env.COMMAND_TIMEOUT_MS, 120000),
     maxBufferBytes: toNumber(process.env.MAX_BUFFER_BYTES, 1024 * 1024),
