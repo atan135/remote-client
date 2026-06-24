@@ -91,16 +91,22 @@
 
 ## 4. 远程文本文件读取
 
-当前还新增了独立能力：
+当前还新增了独立能力。它复用安全 envelope，但不是通过终端命令读取文件，也不依赖 PTY 会话存在：
 
 `浏览器 -> /api/remote-files/read -> file.read.secure -> localapp -> file.read.completed`
 
 当前支持：
 
 - 文本文件预览
-- 相对路径结合会话 cwd 解析
+- `sessionId` 只是可选上下文，`/api/remote-files/read` 允许不传 `sessionId`
+- 绝对路径无需 `baseCwd`
+- 相对路径必须有显式 `baseCwd`；前端文件面板默认用会话创建时的 `cwd` 作为基准目录
+- 服务端只使用请求 `baseCwd` 或已记录的会话创建 `cwd`，不会实时探测活动终端当前目录
+- `localapp` 使用 `fs/stat/read` 读取文件，不通过 shell、PTY 或终端命令读取
 - 文件大小截断
 - 常见编码识别
+
+注意：终端 cwd 不再是文件读取的可靠隐式来源，不应描述为自动跟随当前终端目录。Windows `localapp` 也不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
 
 ## 当前实现状态
 
