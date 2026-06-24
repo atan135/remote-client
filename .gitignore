@@ -9,6 +9,7 @@ webserver/output/
 localapp/keys/
 webserver/server/keys/
 testfolder/
+summary/
 .env
 .env.local
 .DS_Store
