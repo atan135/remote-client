@@ -60,6 +60,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  terminalSessionName: {
+    type: String,
+    default: ""
+  },
   terminalCwd: {
     type: String,
     required: true
@@ -132,6 +136,10 @@ const props = defineProps({
     type: String,
     default: ""
   },
+  renamingTerminalSessionId: {
+    type: String,
+    default: ""
+  },
   deletingTerminalSessionId: {
     type: String,
     default: ""
@@ -151,6 +159,7 @@ const emit = defineEmits([
   "update:commandInput",
   "update:commandShell",
   "update:terminalProfile",
+  "update:terminalSessionName",
   "update:terminalCwd",
   "update:terminalInput",
   "update:remoteFilePath",
@@ -163,9 +172,12 @@ const emit = defineEmits([
   "send-terminal-raw-input",
   "open-remote-file",
   "resize-terminal-session",
+  "rename-terminal-session",
   "terminate-terminal-session",
   "delete-terminal-session"
 ]);
+
+const TERMINAL_SESSION_NAME_MAX_LENGTH = 128;
 
 const activeMode = ref("command");
 const sessionScreen = ref("main");
@@ -173,6 +185,10 @@ const detailSessionId = ref("");
 const remoteFileDialogVisible = ref(false);
 const sessionInputPopoverVisible = ref(false);
 const remoteFilePopoverVisible = ref(false);
+const renameSessionPopoverVisible = ref(false);
+const renameSessionInput = ref("");
+const renameSessionError = ref("");
+const savingSessionName = ref(false);
 const terminalEmulatorRef = ref(null);
 
 const currentSession = computed(
@@ -319,11 +335,24 @@ const shouldPreferFinalAnswer = computed(
 );
 
 const hasFinalAnswer = computed(() => Boolean(String(currentSession.value?.finalText || "").trim()));
+const currentSessionDisplayName = computed(() => getTerminalSessionDisplayName(currentSession.value));
+const currentSessionRawName = computed(() => normalizeTerminalSessionName(currentSession.value?.sessionName));
 const currentSessionProfileText = computed(
   () => currentSession.value?.profileLabel || currentSession.value?.profile || "-"
 );
 const currentSessionCwdText = computed(() => currentSession.value?.cwd || "-");
 const currentSessionExitCodeText = computed(() => currentSession.value?.exitCode ?? "-");
+const isRenamingCurrentSession = computed(
+  () => Boolean(currentSession.value?.sessionId && props.renamingTerminalSessionId === currentSession.value.sessionId)
+);
+const canSaveSessionName = computed(() =>
+  Boolean(
+      currentSession.value &&
+      !savingSessionName.value &&
+      !isRenamingCurrentSession.value &&
+      normalizeTerminalSessionName(renameSessionInput.value) !== currentSessionRawName.value
+  )
+);
 const canOpenRemoteFile = computed(
   () =>
     Boolean(
@@ -378,6 +407,20 @@ function canDeleteSession(session) {
 
 function getTerminalProfileDisplayName(profileLike) {
   return String(profileLike?.label || profileLike?.profileLabel || profileLike?.name || profileLike?.profile || "").trim();
+}
+
+function normalizeTerminalSessionName(value) {
+  return String(value ?? "").trim().slice(0, TERMINAL_SESSION_NAME_MAX_LENGTH);
+}
+
+function getTerminalSessionDisplayName(session) {
+  const sessionName = normalizeTerminalSessionName(session?.sessionName);
+
+  if (sessionName) {
+    return sessionName;
+  }
+
+  return String(session?.profileLabel || session?.profile || "-").trim() || "-";
 }
 
 function getTerminalProfileOptionLabel(profile) {
@@ -447,6 +490,8 @@ function openSessionDetail(sessionId) {
   detailSessionId.value = sessionId;
   sessionInputPopoverVisible.value = false;
   remoteFilePopoverVisible.value = false;
+  renameSessionPopoverVisible.value = false;
+  renameSessionError.value = "";
   activeMode.value = "session";
   sessionScreen.value = "detail";
   emit("select:terminalSession", sessionId);
@@ -456,6 +501,8 @@ function openSessionDetail(sessionId) {
 function goBackToSessionList() {
   sessionInputPopoverVisible.value = false;
   remoteFilePopoverVisible.value = false;
+  renameSessionPopoverVisible.value = false;
+  renameSessionError.value = "";
   activeMode.value = "session";
   sessionScreen.value = "main";
 }
@@ -474,6 +521,50 @@ function openRemoteFileViewer() {
     sessionId: currentSession.value.sessionId,
     filePath: props.remoteFilePath
   });
+}
+
+function openRenameSessionPopover() {
+  renameSessionInput.value = currentSessionRawName.value;
+  renameSessionError.value = "";
+}
+
+function saveSessionName() {
+  if (!currentSession.value || savingSessionName.value || isRenamingCurrentSession.value) {
+    return;
+  }
+
+  const sessionName = normalizeTerminalSessionName(renameSessionInput.value);
+
+  if (sessionName === currentSessionRawName.value) {
+    renameSessionPopoverVisible.value = false;
+    renameSessionError.value = "";
+    return;
+  }
+
+  renameSessionInput.value = sessionName;
+  renameSessionError.value = "";
+  savingSessionName.value = true;
+
+  emit("rename-terminal-session", {
+    sessionId: currentSession.value.sessionId,
+    sessionName,
+    onDone: (ok, message) => {
+      savingSessionName.value = false;
+
+      if (!ok) {
+        renameSessionError.value = message || "会话名称保存失败，请稍后重试。";
+        return;
+      }
+
+      renameSessionPopoverVisible.value = false;
+    }
+  });
+}
+
+function resetSessionNameEditor() {
+  savingSessionName.value = false;
+  renameSessionInput.value = currentSessionRawName.value;
+  renameSessionError.value = "";
 }
 
 watch(
@@ -679,6 +770,18 @@ watch(
               </label>
 
               <label class="field-block field-block-tight">
+                <span>会话名称</span>
+                <el-input
+                  :model-value="terminalSessionName"
+                  clearable
+                  maxlength="128"
+                  show-word-limit
+                  placeholder="可选，例如：生产排障 / Codex 修复"
+                  @update:model-value="emit('update:terminalSessionName', $event)"
+                />
+              </label>
+
+              <label class="field-block field-block-tight">
                 <span>工作目录</span>
                 <el-autocomplete :model-value="terminalCwd" :fetch-suggestions="queryCommonWorkingDirectories"
                   :trigger-on-focus="Boolean(activeAgent?.commonWorkingDirectories?.length)" clearable
@@ -708,7 +811,7 @@ watch(
                 :class="{ active: session.sessionId === currentSession?.sessionId }">
                 <button class="session-item-main" type="button" @click="openSessionDetail(session.sessionId)">
                   <span class="stack-text">
-                    <strong>{{ session.profileLabel || session.profile }}</strong>
+                    <strong>{{ getTerminalSessionDisplayName(session) }}</strong>
                     <small>{{ session.createdAt }}</small>
                   </span>
                 </button>
@@ -763,6 +866,10 @@ watch(
             <el-icon><Back /></el-icon>
             <span>返回</span>
           </el-button>
+          <div v-if="currentSession" class="explore-session-title-block">
+            <strong>{{ currentSessionDisplayName }}</strong>
+            <small>{{ currentSessionProfileText }}</small>
+          </div>
           <div class="explore-session-top-actions">
             <el-tag :type="currentSession ? statusType(currentSession.status) : 'info'" effect="dark" round>
               {{ currentSession?.status || "未选择会话" }}
@@ -899,6 +1006,10 @@ watch(
                   </div>
                   <div class="detail-grid explore-session-meta-grid">
                     <div class="detail-row">
+                      <span>会话名称</span>
+                      <strong>{{ currentSessionRawName || "未命名" }}</strong>
+                    </div>
+                    <div class="detail-row">
                       <span>Profile</span>
                       <strong>{{ currentSessionProfileText }}</strong>
                     </div>
@@ -910,6 +1021,61 @@ watch(
                       <span>退出码</span>
                       <strong>{{ currentSessionExitCodeText }}</strong>
                     </div>
+                  </div>
+                </div>
+              </el-popover>
+
+              <el-popover
+                v-model:visible="renameSessionPopoverVisible"
+                placement="bottom-end"
+                trigger="click"
+                width="min(460px, calc(100vw - 32px))"
+                popper-class="terminal-tool-popover"
+                @show="openRenameSessionPopover"
+                @hide="resetSessionNameEditor"
+              >
+                <template #reference>
+                  <el-button class="explore-session-icon-button" round plain title="重命名会话">
+                    <el-icon><EditPen /></el-icon>
+                    <span>命名</span>
+                  </el-button>
+                </template>
+                <div class="terminal-tool-panel">
+                  <div class="terminal-tool-head">
+                    <strong>重命名会话</strong>
+                    <small>{{ currentSession.sessionId }}</small>
+                  </div>
+                  <label class="field-block field-block-tight">
+                    <span>会话名称</span>
+                    <el-input
+                      v-model="renameSessionInput"
+                      clearable
+                      maxlength="128"
+                      show-word-limit
+                      placeholder="留空则使用 Profile 名称"
+                      @keyup.enter="saveSessionName"
+                    />
+                    <small v-if="renameSessionError" class="form-error-text">
+                      {{ renameSessionError }}
+                    </small>
+                  </label>
+                  <div class="hero-actions explore-session-rename-actions">
+                    <el-button
+                      round
+                      plain
+                      :disabled="savingSessionName || isRenamingCurrentSession"
+                      @click="resetSessionNameEditor"
+                    >
+                      还原
+                    </el-button>
+                    <el-button
+                      type="primary"
+                      round
+                      :disabled="!canSaveSessionName"
+                      @click="saveSessionName"
+                    >
+                      {{ savingSessionName || isRenamingCurrentSession ? "保存中..." : "保存" }}
+                    </el-button>
                   </div>
                 </div>
               </el-popover>
@@ -938,8 +1104,9 @@ watch(
         <div v-if="currentSession" class="explore-session-summary-strip">
           <span>
             <el-icon><Document /></el-icon>
-            {{ currentSessionProfileText }}
+            {{ currentSessionDisplayName }}
           </span>
+          <span>{{ currentSessionProfileText }}</span>
           <span class="explore-session-summary-cwd">{{ currentSessionCwdText }}</span>
           <span>退出码 {{ currentSessionExitCodeText }}</span>
         </div>

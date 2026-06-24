@@ -18,6 +18,14 @@ async function handleSubmitCommand(commandOverride) {
     name: "tasks"
   });
 }
+
+async function handleRenameTerminalSession(payload) {
+  const didRename = await store.renameTerminalSession(payload?.sessionId, payload?.sessionName);
+
+  if (typeof payload?.onDone === "function") {
+    payload.onDone(Boolean(didRename), didRename ? "" : store.wsState.error);
+  }
+}
 </script>
 
 <template>
@@ -30,6 +38,7 @@ async function handleSubmitCommand(commandOverride) {
     :command-shell="store.commandShell"
     :command-shell-options="store.commandShellOptions"
     :terminal-profile="store.terminalProfile"
+    :terminal-session-name="store.terminalSessionName"
     :terminal-cwd="store.terminalCwd"
     :terminal-input="store.terminalInput"
     :remote-file-path="store.remoteFilePath"
@@ -48,6 +57,7 @@ async function handleSubmitCommand(commandOverride) {
     :sending-terminal-input="store.sendingTerminalInput"
     :reading-remote-file="store.readingRemoteFile"
     :terminating-terminal-session-id="store.terminatingTerminalSessionId || ''"
+    :renaming-terminal-session-id="store.renamingTerminalSessionId || ''"
     :deleting-terminal-session-id="store.deletingTerminalSessionId || ''"
     :loading-terminal-sessions="store.loadingTerminalSessions"
     :terminal-sessions-error="store.loadErrors.terminalSessions"
@@ -55,6 +65,7 @@ async function handleSubmitCommand(commandOverride) {
     @update:command-input="store.commandInput = $event"
     @update:command-shell="store.commandShell = $event"
     @update:terminal-profile="store.terminalProfile = $event"
+    @update:terminal-session-name="store.terminalSessionName = $event"
     @update:terminal-cwd="store.terminalCwd = $event"
     @update:terminal-input="store.terminalInput = $event"
     @update:remote-file-path="store.updateRemoteFilePath"
@@ -67,6 +78,7 @@ async function handleSubmitCommand(commandOverride) {
     @send-terminal-raw-input="store.queueTerminalRawInput($event)"
     @open-remote-file="store.openRemoteFile"
     @resize-terminal-session="store.queueTerminalResize($event)"
+    @rename-terminal-session="handleRenameTerminalSession"
     @terminate-terminal-session="store.terminateTerminalSession"
     @delete-terminal-session="store.deleteTerminalSession"
   />

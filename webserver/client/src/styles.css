@@ -754,6 +754,12 @@ textarea {
   color: var(--text-dim);
 }
 
+.form-error-text {
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .hero-card h2,
 .section-banner h2,
 .profile-hero h2 {
@@ -1615,7 +1621,7 @@ textarea {
 }
 
 .explore-session-form {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr);
   align-items: start;
   gap: 8px;
 }
@@ -1671,6 +1677,33 @@ textarea {
   gap: 8px;
 }
 
+.explore-session-title-block {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+
+.explore-session-title-block strong,
+.explore-session-title-block small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.explore-session-title-block strong {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.25;
+}
+
+.explore-session-title-block small {
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.25;
+}
+
 .explore-session-top-actions {
   display: flex;
   align-items: center;
@@ -1710,6 +1743,8 @@ textarea {
   align-items: center;
   min-width: 0;
   gap: 5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1762,6 +1797,16 @@ textarea {
 
 .explore-session-meta-grid {
   gap: 8px;
+}
+
+.explore-session-meta-grid .detail-row {
+  min-width: 0;
+}
+
+.explore-session-meta-grid .detail-row strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .explore-terminal-shell {
@@ -1836,6 +1881,11 @@ textarea {
 }
 
 .explore-session-input-actions {
+  margin-top: 10px;
+}
+
+.explore-session-rename-actions {
+  justify-content: flex-end;
   margin-top: 10px;
 }
 
@@ -4046,12 +4096,18 @@ textarea {
     flex-direction: column;
   }
 
+  .explore-session-title-block {
+    order: 1;
+    width: 100%;
+  }
+
   .explore-session-top-actions {
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     flex-shrink: 0;
     width: 100%;
     gap: 6px;
+    order: 2;
   }
 
   .explore-session-top-actions .el-tag {
@@ -4080,6 +4136,10 @@ textarea {
     flex-wrap: wrap;
     min-height: 0;
     padding: 5px 8px;
+  }
+
+  .explore-session-summary-strip span {
+    max-width: 100%;
   }
 
   .explore-terminal-shell {

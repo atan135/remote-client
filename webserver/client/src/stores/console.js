@@ -26,6 +26,7 @@ const fallbackTerminalProfiles = Object.freeze([
 ]);
 
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 1200;
+const TERMINAL_SESSION_NAME_MAX_LENGTH = 128;
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
 const JIETU_LOG_PREFIX = "[remote-client:jietu]";
 const PENDING_COMMAND_STATUSES = new Set(["queued", "running", "dispatched"]);
@@ -64,6 +65,7 @@ export const useConsoleStore = defineStore("console", () => {
   const commandInput = ref("");
   const commandShell = ref("powershell");
   const terminalProfile = ref("");
+  const terminalSessionName = ref("");
   const terminalCwd = ref("");
   const terminalInput = ref("");
   const remoteFilePath = ref("");
@@ -94,6 +96,7 @@ export const useConsoleStore = defineStore("console", () => {
   const deletingAuthCodeId = ref(null);
   const deletingAdminAuthCodeId = ref(null);
   const terminatingTerminalSessionId = ref(null);
+  const renamingTerminalSessionId = ref(null);
   const deletingTerminalSessionId = ref(null);
   const deletingCommandRequestId = ref(null);
   const clearingCommands = ref(false);
@@ -1008,7 +1011,16 @@ export const useConsoleStore = defineStore("console", () => {
   }
 
   async function createTerminalSession(options = {}) {
+    const hasSessionNameOption = Object.prototype.hasOwnProperty.call(options || {}, "sessionName");
+    const shouldUseSessionNameInput = !hasSessionNameOption && Object.keys(options || {}).length === 0;
     const requestedProfile = String(options?.profile || terminalProfile.value || "").trim();
+    const requestedSessionName = normalizeTerminalSessionName(
+      hasSessionNameOption
+        ? options.sessionName
+        : shouldUseSessionNameInput
+          ? terminalSessionName.value
+          : ""
+    );
     const requestedCwd = String(
       options && Object.prototype.hasOwnProperty.call(options, "cwd")
         ? options.cwd
@@ -1047,6 +1059,7 @@ export const useConsoleStore = defineStore("console", () => {
         body: JSON.stringify({
           agentId: selectedAgentId.value,
           profile: requestedProfile,
+          sessionName: requestedSessionName,
           cwd: requestedCwd,
           env: {},
           cols: 120,
@@ -1077,6 +1090,9 @@ export const useConsoleStore = defineStore("console", () => {
         }
       }
 
+      if (shouldUseSessionNameInput) {
+        terminalSessionName.value = "";
+      }
       terminalInput.value = "";
       return payload.item || true;
     } catch (error) {
@@ -1084,6 +1100,66 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     } finally {
       creatingTerminalSession.value = false;
+    }
+  }
+
+  async function renameTerminalSession(sessionId, sessionName) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedSessionName = normalizeTerminalSessionName(sessionName);
+
+    if (!normalizedSessionId) {
+      return false;
+    }
+
+    if (renamingTerminalSessionId.value === normalizedSessionId) {
+      return false;
+    }
+
+    renamingTerminalSessionId.value = normalizedSessionId;
+    wsState.error = "";
+
+    try {
+      const response = await fetch(`/api/terminal-sessions/${encodeURIComponent(normalizedSessionId)}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          sessionName: normalizedSessionName
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "终端会话重命名失败");
+      }
+
+      if (payload.item) {
+        upsertTerminalSession(payload.item);
+      } else {
+        const current = terminalSessionById.value.get(normalizedSessionId);
+
+        if (current) {
+          upsertTerminalSession({
+            ...current,
+            sessionName: normalizedSessionName
+          });
+        }
+      }
+
+      ElMessage.success(normalizedSessionName ? "会话名称已更新" : "会话名称已清空");
+      return payload.item || true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      renamingTerminalSessionId.value = null;
     }
   }
 
@@ -2504,6 +2580,7 @@ export const useConsoleStore = defineStore("console", () => {
     commandInput.value = "";
     commandShell.value = "powershell";
     terminalProfile.value = "";
+    terminalSessionName.value = "";
     terminalCwd.value = "";
     terminalInput.value = "";
     authMode.value = "login";
@@ -2534,6 +2611,7 @@ export const useConsoleStore = defineStore("console", () => {
     approvingManagedAgentId.value = null;
     rejectingManagedAgentId.value = null;
     updatingManagedAgentId.value = null;
+    renamingTerminalSessionId.value = null;
     deletingAdminAuthCodeId.value = null;
     if (terminalResizeFlushTimer) {
       window.clearTimeout(terminalResizeFlushTimer);
@@ -2799,6 +2877,10 @@ export const useConsoleStore = defineStore("console", () => {
 
   function normalizeAgentId(value) {
     return String(value || "").trim().toLowerCase();
+  }
+
+  function normalizeTerminalSessionName(value) {
+    return String(value ?? "").trim().slice(0, TERMINAL_SESSION_NAME_MAX_LENGTH);
   }
 
   function normalizeTerminalDimension(value) {
@@ -3211,6 +3293,8 @@ export const useConsoleStore = defineStore("console", () => {
     rejectUser,
     rejectingManagedAgentId,
     rejectingUserId,
+    renameTerminalSession,
+    renamingTerminalSessionId,
     resolvedTabs,
     resettingUserId,
     saveAuthCode,
@@ -3227,6 +3311,7 @@ export const useConsoleStore = defineStore("console", () => {
     terminalCwd,
     terminalInput,
     terminalProfile,
+    terminalSessionName,
     terminateTerminalSession,
     terminatingTerminalSessionId,
     timelineFilterAgentId,

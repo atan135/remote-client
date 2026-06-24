@@ -1172,10 +1172,11 @@ function getAiProfileOptionLabel(profile) {
 
 function getAiSessionOptionLabel(session) {
   const updatedAt = formatCreatedAt(session?.updatedAt || session?.createdAt);
+  const sessionName = String(session?.sessionName || "").trim();
   const cwd = String(session?.cwd || "").trim();
   const status = statusText(session?.status || "");
   const suffix = [status, updatedAt].filter(Boolean).join(" · ");
-  return `${cwd || session?.sessionId || "Codex 会话"}${suffix ? ` (${suffix})` : ""}`;
+  return `${sessionName || cwd || session?.sessionId || "Codex 会话"}${suffix ? ` (${suffix})` : ""}`;
 }
 
 function isAiTerminalSession(session) {
