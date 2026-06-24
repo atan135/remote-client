@@ -47,11 +47,64 @@ export function readTextFilePreview(filePath, options = {}) {
 }
 
 function resolveRequestedFilePath(requestedPath, baseCwd) {
-  if (baseCwd) {
-    return path.resolve(baseCwd, requestedPath);
+  if (isUnsupportedPosixStylePath(requestedPath)) {
+    throw new Error("当前 Windows agent 不支持自动转换 POSIX/Git Bash 风格路径，请输入 Windows 绝对路径或基准目录");
   }
 
-  return path.resolve(requestedPath);
+  if (isWindowsDriveRelativePath(requestedPath)) {
+    throw new Error("请输入完整 Windows 绝对路径，例如 C:\\path\\file.txt");
+  }
+
+  if (isAbsoluteFilePath(requestedPath)) {
+    return path.resolve(requestedPath);
+  }
+
+  if (!baseCwd) {
+    throw new Error("请输入绝对路径或基准目录");
+  }
+
+  if (isUnsupportedPosixStylePath(baseCwd)) {
+    throw new Error("当前 Windows agent 不支持自动转换 POSIX/Git Bash 风格基准目录，请输入 Windows 绝对路径");
+  }
+
+  if (isWindowsDriveRelativePath(baseCwd)) {
+    throw new Error("基准目录必须是完整 Windows 绝对路径，例如 C:\\path");
+  }
+
+  if (!isAbsoluteFilePath(baseCwd)) {
+    throw new Error("基准目录必须是绝对路径");
+  }
+
+  return path.resolve(baseCwd, requestedPath);
+}
+
+function isAbsoluteFilePath(value) {
+  const candidate = normalizeFilePathInput(value);
+
+  if (!candidate) {
+    return false;
+  }
+
+  if (os.platform() === "win32") {
+    return /^[A-Za-z]:[\\/]/.test(candidate) || /^\\\\[^\\]/.test(candidate) || /^\/\/[^/]/.test(candidate);
+  }
+
+  return path.isAbsolute(candidate);
+}
+
+function isUnsupportedPosixStylePath(value) {
+  const candidate = normalizeFilePathInput(value);
+
+  if (os.platform() !== "win32" || !candidate.startsWith("/")) {
+    return false;
+  }
+
+  return !/^[A-Za-z]:[\\/]/.test(candidate) && !/^\/\//.test(candidate);
+}
+
+function isWindowsDriveRelativePath(value) {
+  const candidate = normalizeFilePathInput(value);
+  return os.platform() === "win32" && /^[A-Za-z]:(?![\\/])/.test(candidate);
 }
 
 function normalizeFilePathInput(value) {

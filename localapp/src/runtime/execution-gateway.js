@@ -12,26 +12,11 @@ export class ExecutionGateway {
   }
 
   async readTextFile(filePath, options = {}) {
-    const baseCwd =
-      String(options.baseCwd || "").trim() ||
-      (await this.resolveRemoteFileBaseCwd(options.sessionId, filePath));
-
     return readTextFilePreview(filePath, {
-      baseCwd,
+      baseCwd: String(options.baseCwd || "").trim(),
       maxBytes: this.config.remoteFileMaxBytes,
       windowsEncoding: this.config.windowsOutputEncoding
     });
-  }
-
-  async resolveRemoteFileBaseCwd(sessionId, filePath) {
-    const normalizedSessionId = String(sessionId || "").trim();
-    const normalizedFilePath = String(filePath || "").trim();
-
-    if (!normalizedSessionId || !normalizedFilePath) {
-      return "";
-    }
-
-    return this.ptySessionManager.querySessionCwd(normalizedSessionId, normalizedFilePath);
   }
 
   createTerminalSession(options) {

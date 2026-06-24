@@ -117,6 +117,7 @@ export class PtySessionManager {
       requestId,
       agentId,
       profile: profileName,
+      cwd: launch.cwd,
       profileLabel: handle.profileLabel,
       profileSource: handle.profileSource,
       profileKind: handle.profileKind,

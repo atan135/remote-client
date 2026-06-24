@@ -1230,7 +1230,7 @@ export const useConsoleStore = defineStore("console", () => {
     ).trim();
     const baseCwd = String(payload?.baseCwd || payload?.cwd || "").trim();
 
-    if (!agentId || !sessionId || !context) {
+    if (!agentId || !context) {
       return false;
     }
 
@@ -3155,7 +3155,7 @@ export const useConsoleStore = defineStore("console", () => {
     const normalizedAgentId = normalizeAgentId(agentId);
     const normalizedSessionId = String(sessionId || "").trim();
 
-    if (!normalizedAgentId || !normalizedSessionId) {
+    if (!normalizedAgentId) {
       return "";
     }
 

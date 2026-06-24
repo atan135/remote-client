@@ -2288,10 +2288,12 @@ async function handleAgentMessage(agentId, socket, message) {
   }
 
   if (message.type === "terminal.session.created") {
+    const reportedCwd = normalizeRemoteFilePath(message.payload.cwd);
     const record = terminalSessionStore.update(message.payload.sessionId, {
       status: "running",
       startedAt: message.payload.startedAt || new Date().toISOString(),
       pid: message.payload.pid ?? null,
+      ...(reportedCwd ? { cwd: reportedCwd } : {}),
       profileLabel: String(message.payload.profileLabel || ""),
       profileSource: String(message.payload.profileSource || ""),
       profileKind: String(message.payload.profileKind || ""),
@@ -2932,18 +2934,21 @@ async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePat
     sessionId: normalizedSessionId,
     filePath: normalizedFilePath,
     sessionStatus: fileSessionContext?.status || "",
-    hasBaseCwd: Boolean(fileSessionContext?.baseCwd || requestedBaseCwd),
+    baseCwdSource: requestedBaseCwd ? "request" : fileSessionContext?.baseCwdSource || "",
+    hasBaseCwd: Boolean(requestedBaseCwd || fileSessionContext?.baseCwd),
     userId: user.id,
     username: user.username
   });
 
   try {
+    const dispatchBaseCwd = requestedBaseCwd || fileSessionContext?.baseCwd || "";
+
     return await dispatchRemoteFileRead(normalizedAgentId, {
       user,
       authCodeBinding,
       sessionId: normalizedSessionId,
       filePath: normalizedFilePath,
-      baseCwd: fileSessionContext?.baseCwd || requestedBaseCwd || ""
+      baseCwd: dispatchBaseCwd
     });
   } catch (error) {
     throw createHttpError(error.statusCode || 500, error.message || "远程读取文件失败");
@@ -2977,13 +2982,14 @@ async function resolveRemoteFileSessionContext({ agentId, sessionId }) {
     throw createHttpError(403, "终端会话不属于当前 agent");
   }
 
-  const shouldUseStoredCwd =
-    !activeSession || isTerminalSessionClosedStatus(activeSession.status);
+  const storedCwd = normalizeRemoteFilePath(session.cwd);
+  const baseCwd = isPathAbsoluteForKnownPlatforms(storedCwd) ? storedCwd : "";
 
   return {
     sessionId: normalizedSessionId,
     status: String(session.status || ""),
-    baseCwd: shouldUseStoredCwd ? String(session.cwd || "").trim() : ""
+    baseCwd,
+    baseCwdSource: baseCwd ? "session.created.cwd" : ""
   };
 }
 
@@ -3823,6 +3829,21 @@ function normalizeRemoteFilePath(value) {
   }
 
   return trimmed;
+}
+
+function isPathAbsoluteForKnownPlatforms(value) {
+  const candidate = normalizeRemoteFilePath(value);
+
+  if (!candidate) {
+    return false;
+  }
+
+  return (
+    path.isAbsolute(candidate) ||
+    /^[A-Za-z]:[\\/]/.test(candidate) ||
+    /^\\\\[^\\]/.test(candidate) ||
+    /^\/\/[^/]/.test(candidate)
+  );
 }
 
 function normalizeTerminalDimension(value) {
