@@ -79,6 +79,7 @@ async function handleRenameTerminalSession(payload) {
     @interrupt-terminal-session="store.interruptTerminalSession"
     @send-terminal-raw-input="store.queueTerminalRawInput($event)"
     @open-remote-file="store.openRemoteFile"
+    @close-remote-file-preview="store.clearRemoteFilePreviewViewer"
     @resize-terminal-session="store.queueTerminalResize($event)"
     @rename-terminal-session="handleRenameTerminalSession"
     @terminate-terminal-session="store.terminateTerminalSession"

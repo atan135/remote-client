@@ -1231,6 +1231,19 @@ export const useConsoleStore = defineStore("console", () => {
     clearRemoteFileErrorForContext(context);
   }
 
+  function clearRemoteFilePreviewViewer(payload = {}) {
+    const context = String(payload?.context || "").trim() || createRemoteFileContext(
+      payload?.agentId || selectedAgentId.value,
+      payload?.sessionId || activeTerminalSession.value?.sessionId || ""
+    );
+
+    if (!context) {
+      return;
+    }
+
+    remoteFileViewersByContext.delete(context);
+  }
+
   async function openRemoteFile(payload = {}) {
     const agentId = String(payload?.agentId || selectedAgentId.value || "").trim();
     const sessionId = String(
@@ -3459,6 +3472,7 @@ export const useConsoleStore = defineStore("console", () => {
     approvingUserId,
     clearAutoOpenTerminalSession,
     clearCommandRecords,
+    clearRemoteFilePreviewViewer,
     commandInput,
     commandShell,
     commandShellOptions,

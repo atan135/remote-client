@@ -176,6 +176,7 @@ const emit = defineEmits([
   "interrupt-terminal-session",
   "send-terminal-raw-input",
   "open-remote-file",
+  "close-remote-file-preview",
   "resize-terminal-session",
   "rename-terminal-session",
   "terminate-terminal-session",
@@ -526,6 +527,25 @@ function openRemoteFileViewer() {
     sessionId: currentSession.value.sessionId,
     filePath: props.remoteFilePath,
     baseCwd: props.remoteFileBaseCwd
+  });
+}
+
+function handleRemoteFileDialogVisibleChange(visible) {
+  remoteFileDialogVisible.value = Boolean(visible);
+
+  if (visible) {
+    return;
+  }
+
+  const viewer = currentRemoteFileViewer.value;
+
+  if (!viewer?.openedAt) {
+    return;
+  }
+
+  emit("close-remote-file-preview", {
+    agentId: viewer.agentId || props.selectedAgentId,
+    sessionId: viewer.sessionId || currentSession.value?.sessionId || ""
   });
 }
 
@@ -1168,8 +1188,9 @@ watch(
     </el-card>
 
     <RemoteFilePreviewDialog
-      v-model="remoteFileDialogVisible"
+      :model-value="remoteFileDialogVisible"
       :viewer="currentRemoteFileViewer"
+      @update:model-value="handleRemoteFileDialogVisibleChange"
     />
   </section>
 </template>
