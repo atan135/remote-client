@@ -176,16 +176,30 @@ export class SchemaService {
 
   async columnExists(tableName, columnName) {
     const [rows] = await this.pool.query(
-      `SHOW COLUMNS FROM \`${tableName}\` LIKE ?`,
-      [columnName]
+      `
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND column_name = ?
+        LIMIT 1
+      `,
+      [tableName, columnName]
     );
     return Array.isArray(rows) && rows.length > 0;
   }
 
   async indexExists(tableName, indexName) {
     const [rows] = await this.pool.query(
-      `SHOW INDEX FROM \`${tableName}\` WHERE Key_name = ?`,
-      [indexName]
+      `
+        SELECT 1
+        FROM information_schema.statistics
+        WHERE table_schema = DATABASE()
+          AND table_name = ?
+          AND index_name = ?
+        LIMIT 1
+      `,
+      [tableName, indexName]
     );
     return Array.isArray(rows) && rows.length > 0;
   }
