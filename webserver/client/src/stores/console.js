@@ -70,6 +70,7 @@ export const useConsoleStore = defineStore("console", () => {
   const terminalCwd = ref("");
   const terminalInput = ref("");
   const remoteFilePathsByContext = reactive(new Map());
+  const remoteFileBaseCwdsByContext = reactive(new Map());
   const remoteFileErrorsByContext = reactive(new Map());
   const remoteFileViewersByContext = reactive(new Map());
   const emptyRemoteFileViewer = createEmptyRemoteFileViewer();
@@ -333,6 +334,7 @@ export const useConsoleStore = defineStore("console", () => {
   );
 
   const remoteFilePath = computed(() => getRemoteFilePathForContext(activeRemoteFileContext.value));
+  const remoteFileBaseCwd = computed(() => getRemoteFileBaseCwdForContext(activeRemoteFileContext.value));
   const remoteFileError = computed(() => getRemoteFileErrorForContext(activeRemoteFileContext.value));
   const remoteFileViewer = computed(() => getRemoteFileViewerForContext(activeRemoteFileContext.value));
 
@@ -1218,6 +1220,17 @@ export const useConsoleStore = defineStore("console", () => {
     clearRemoteFileErrorForContext(context);
   }
 
+  function updateRemoteFileBaseCwd(value) {
+    const context = activeRemoteFileContext.value;
+
+    if (!context) {
+      return;
+    }
+
+    setRemoteFileBaseCwdForContext(context, value);
+    clearRemoteFileErrorForContext(context);
+  }
+
   async function openRemoteFile(payload = {}) {
     const agentId = String(payload?.agentId || selectedAgentId.value || "").trim();
     const sessionId = String(
@@ -1228,7 +1241,17 @@ export const useConsoleStore = defineStore("console", () => {
     const filePath = String(
       payload?.filePath || (shouldRememberPath ? getRemoteFilePathForContext(context) : "") || ""
     ).trim();
-    const baseCwd = String(payload?.baseCwd || payload?.cwd || "").trim();
+    const hasPayloadBaseCwd =
+      payload &&
+      (Object.prototype.hasOwnProperty.call(payload, "baseCwd") ||
+        Object.prototype.hasOwnProperty.call(payload, "cwd"));
+    const baseCwd = String(
+      hasPayloadBaseCwd
+        ? payload?.baseCwd ?? payload?.cwd ?? ""
+        : shouldRememberPath
+          ? getRemoteFileBaseCwdForContext(context)
+          : ""
+    ).trim();
 
     if (!agentId || !context) {
       return false;
@@ -1236,6 +1259,11 @@ export const useConsoleStore = defineStore("console", () => {
 
     if (!filePath) {
       setRemoteFileErrorForContext(context, "请输入要打开的文件路径");
+      return false;
+    }
+
+    if (!baseCwd && !isAbsoluteRemoteFilePath(filePath)) {
+      setRemoteFileErrorForContext(context, "相对路径需要先填写基准目录，或改用绝对路径");
       return false;
     }
 
@@ -1272,11 +1300,16 @@ export const useConsoleStore = defineStore("console", () => {
         throw new Error(result.message || "远程读取文件失败");
       }
 
-      const viewer = normalizeRemoteFileViewer(result.item, sessionId);
+      const viewer = normalizeRemoteFileViewer(result.item, sessionId, {
+        agentId,
+        filePath,
+        baseCwd
+      });
       setRemoteFileViewerForContext(context, viewer);
 
       if (shouldRememberPath) {
         setRemoteFilePathForContext(context, viewer.filePath || filePath);
+        setRemoteFileBaseCwdForContext(context, baseCwd);
       }
 
       return viewer;
@@ -2904,6 +2937,35 @@ export const useConsoleStore = defineStore("console", () => {
     return String(value ?? "").trim().slice(0, TERMINAL_SESSION_NAME_MAX_LENGTH);
   }
 
+  function isAbsoluteRemoteFilePath(value) {
+    const candidate = normalizeRemoteFilePathInput(value);
+
+    if (!candidate) {
+      return false;
+    }
+
+    return (
+      /^[A-Za-z]:[\\/]/.test(candidate) ||
+      /^\\\\[^\\]/.test(candidate) ||
+      /^\/\/[^/]/.test(candidate) ||
+      candidate.startsWith("/")
+    );
+  }
+
+  function normalizeRemoteFilePathInput(value) {
+    const trimmed = String(value || "").trim();
+
+    if (
+      trimmed.length >= 2 &&
+      ((trimmed.startsWith("\"") && trimmed.endsWith("\"")) ||
+        (trimmed.startsWith("'") && trimmed.endsWith("'")))
+    ) {
+      return trimmed.slice(1, -1).trim();
+    }
+
+    return trimmed;
+  }
+
   function normalizeTerminalDimension(value) {
     const parsed = Math.floor(Number(value));
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
@@ -3182,6 +3244,29 @@ export const useConsoleStore = defineStore("console", () => {
     remoteFilePathsByContext.set(context, String(value || ""));
   }
 
+  function getRemoteFileBaseCwdForContext(context) {
+    if (!context) {
+      return "";
+    }
+
+    if (remoteFileBaseCwdsByContext.has(context)) {
+      return remoteFileBaseCwdsByContext.get(context) || "";
+    }
+
+    const parts = getRemoteFileContextParts(context);
+    const sessionRecord = terminalSessionById.value.get(parts.sessionId) || null;
+
+    return normalizeAgentId(sessionRecord?.agentId) === parts.agentId ? String(sessionRecord?.cwd || "") : "";
+  }
+
+  function setRemoteFileBaseCwdForContext(context, value) {
+    if (!context) {
+      return;
+    }
+
+    remoteFileBaseCwdsByContext.set(context, String(value || ""));
+  }
+
   function getRemoteFileErrorForContext(context) {
     return context ? remoteFileErrorsByContext.get(context) || "" : "";
   }
@@ -3233,6 +3318,12 @@ export const useConsoleStore = defineStore("console", () => {
       }
     }
 
+    for (const context of Array.from(remoteFileBaseCwdsByContext.keys())) {
+      if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
+        remoteFileBaseCwdsByContext.delete(context);
+      }
+    }
+
     for (const context of Array.from(remoteFileErrorsByContext.keys())) {
       if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
         remoteFileErrorsByContext.delete(context);
@@ -3253,6 +3344,7 @@ export const useConsoleStore = defineStore("console", () => {
 
   function resetRemoteFileState() {
     remoteFilePathsByContext.clear();
+    remoteFileBaseCwdsByContext.clear();
     remoteFileErrorsByContext.clear();
     remoteFileViewersByContext.clear();
   }
@@ -3263,7 +3355,9 @@ export const useConsoleStore = defineStore("console", () => {
       requestId: "",
       agentId: "",
       filePath: "",
+      requestedPath: "",
       resolvedPath: "",
+      baseCwd: "",
       content: "",
       truncated: false,
       bytesRead: 0,
@@ -3275,13 +3369,20 @@ export const useConsoleStore = defineStore("console", () => {
     };
   }
 
-  function normalizeRemoteFileViewer(item, sessionId) {
+  function normalizeRemoteFileViewer(item, sessionId, context = {}) {
+    const filePath = String(item?.filePath || context.filePath || "");
+    const requestedPath = String(item?.requestedPath || item?.filePath || context.filePath || "");
+    const resolvedPath = String(item?.resolvedPath || item?.filePath || "");
+    const baseCwd = String(item?.baseCwd || context.baseCwd || "");
+
     return {
       sessionId: String(sessionId || ""),
       requestId: String(item?.requestId || ""),
-      agentId: String(item?.agentId || ""),
-      filePath: String(item?.filePath || ""),
-      resolvedPath: String(item?.resolvedPath || ""),
+      agentId: String(item?.agentId || context.agentId || ""),
+      filePath,
+      requestedPath,
+      resolvedPath,
+      baseCwd,
       content: String(item?.content || ""),
       truncated: Boolean(item?.truncated),
       bytesRead: Number(item?.bytesRead || 0),
@@ -3404,6 +3505,7 @@ export const useConsoleStore = defineStore("console", () => {
     readingRemoteFile,
     register,
     registerForm,
+    remoteFileBaseCwd,
     remoteFileError,
     remoteFilePath,
     remoteFileViewer,
@@ -3433,6 +3535,7 @@ export const useConsoleStore = defineStore("console", () => {
     terminateTerminalSession,
     terminatingTerminalSessionId,
     timelineFilterAgentId,
+    updateRemoteFileBaseCwd,
     updateRemoteFilePath,
     updatingManagedAgentId,
     updatingUserId,

@@ -34,10 +34,12 @@ const dialogVisible = computed({
   set: (value) => emit("update:modelValue", value)
 });
 
-const fileTitle = computed(() => String(props.viewer?.resolvedPath || props.viewer?.filePath || "文件预览"));
+const fileTitle = computed(() =>
+  String(props.viewer?.resolvedPath || props.viewer?.requestedPath || props.viewer?.filePath || "文件预览")
+);
 
 const isMarkdownFile = computed(() => {
-  const targetPath = String(props.viewer?.resolvedPath || props.viewer?.filePath || "");
+  const targetPath = String(props.viewer?.resolvedPath || props.viewer?.requestedPath || props.viewer?.filePath || "");
   return /\.(md|markdown|mdown|mkd|mkdn)$/i.test(targetPath);
 });
 
@@ -76,16 +78,6 @@ const renderedMarkdown = computed(() => {
   }
 
   return markdownRenderer.render(String(props.viewer.content || ""));
-});
-
-const shouldShowResolvedPathSeparately = computed(() => {
-  const viewer = props.viewer;
-
-  if (!viewer) {
-    return false;
-  }
-
-  return String(viewer.filePath || "").trim() !== String(viewer.resolvedPath || "").trim();
 });
 
 watch(
@@ -139,18 +131,16 @@ function formatCompactDateTime(value) {
         <el-collapse-item name="meta" title="路径与文件详情">
           <div class="detail-grid remote-file-meta">
             <div class="detail-row detail-row-wrap">
-              <span>{{ shouldShowResolvedPathSeparately ? "输入路径" : "文件路径" }}</span>
-              <strong class="detail-value-wrap">
-                {{
-                  shouldShowResolvedPathSeparately
-                    ? viewer.filePath
-                    : viewer.resolvedPath || viewer.filePath || "-"
-                }}
-              </strong>
+              <span>请求路径</span>
+              <strong class="detail-value-wrap">{{ viewer.requestedPath || viewer.filePath || "-" }}</strong>
             </div>
-            <div v-if="shouldShowResolvedPathSeparately" class="detail-row detail-row-wrap">
+            <div class="detail-row detail-row-wrap">
               <span>实际路径</span>
               <strong class="detail-value-wrap">{{ viewer.resolvedPath || "-" }}</strong>
+            </div>
+            <div class="detail-row detail-row-wrap">
+              <span>基准目录</span>
+              <strong class="detail-value-wrap">{{ viewer.baseCwd || "-" }}</strong>
             </div>
             <div class="detail-row">
               <span>编码</span>

@@ -836,6 +836,12 @@ async function openAiFile(message) {
     return;
   }
 
+  if (!message.baseCwd && !isAbsoluteRemoteFilePath(message.filePath)) {
+    message.fileOpenStatus = "failed";
+    appendAssistantMessage("Codex 返回的是相对路径，但消息缺少基准目录；请让 Codex 返回绝对路径后再打开。");
+    return;
+  }
+
   message.fileOpenStatus = "opening";
   const result = await props.remoteFileOpener({
     agentId: message.agentId || props.selectedAgentId,
@@ -1273,6 +1279,21 @@ function normalizePathCandidate(value) {
     .replace(/^result(?: file)?[:：]\s*/i, "")
     .replace(/^["'`]+|["'`]+$/g, "")
     .trim();
+}
+
+function isAbsoluteRemoteFilePath(value) {
+  const candidate = normalizePathCandidate(value);
+
+  if (!candidate) {
+    return false;
+  }
+
+  return (
+    /^[A-Za-z]:[\\/]/.test(candidate) ||
+    /^\\\\[^\\]/.test(candidate) ||
+    /^\/\/[^/]/.test(candidate) ||
+    candidate.startsWith("/")
+  );
 }
 
 function looksLikeResultFilePath(value) {
@@ -1750,6 +1771,9 @@ watch(
               <h4>File</h4>
               <pre>{{ message.filePath }}</pre>
             </div>
+            <p v-if="message.baseCwd" class="muted chat-file-context">
+              基准目录：{{ message.baseCwd }}
+            </p>
 
             <div class="hero-actions chat-action-buttons">
               <el-button

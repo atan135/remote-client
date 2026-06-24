@@ -76,6 +76,10 @@ const props = defineProps({
     type: String,
     required: true
   },
+  remoteFileBaseCwd: {
+    type: String,
+    default: ""
+  },
   remoteFileViewer: {
     type: Object,
     default: null
@@ -163,6 +167,7 @@ const emit = defineEmits([
   "update:terminalCwd",
   "update:terminalInput",
   "update:remoteFilePath",
+  "update:remoteFileBaseCwd",
   "select:terminalSession",
   "opened-terminal-session",
   "submitCommand",
@@ -519,7 +524,8 @@ function openRemoteFileViewer() {
 
   emit("open-remote-file", {
     sessionId: currentSession.value.sessionId,
-    filePath: props.remoteFilePath
+    filePath: props.remoteFilePath,
+    baseCwd: props.remoteFileBaseCwd
   });
 }
 
@@ -971,11 +977,23 @@ watch(
                 <div class="terminal-tool-panel">
                   <div class="terminal-tool-head">
                     <strong>打开目标文件</strong>
-                    <small>读取当前设备上的文本文件并在弹窗中预览。</small>
+                    <small>读取当前设备上的文本文件；相对路径会按下方基准目录解析。</small>
                   </div>
                   <label class="field-block field-block-tight">
+                    <span>基准目录</span>
+                    <el-autocomplete
+                      :model-value="remoteFileBaseCwd"
+                      :fetch-suggestions="queryCommonWorkingDirectories"
+                      :trigger-on-focus="Boolean(activeAgent?.commonWorkingDirectories?.length)"
+                      clearable
+                      placeholder="相对路径必填；绝对路径可留空"
+                      @update:model-value="emit('update:remoteFileBaseCwd', $event)"
+                      @select="emit('update:remoteFileBaseCwd', $event?.value || '')"
+                    />
+                  </label>
+                  <label class="field-block field-block-tight">
                     <span>文件路径</span>
-                    <el-input :model-value="remoteFilePath" placeholder="例如：C:\\project\\remote-client\\CLAUDE.md"
+                    <el-input :model-value="remoteFilePath" placeholder="例如：CLAUDE.md 或 C:\\project\\remote-client\\CLAUDE.md"
                       @update:model-value="emit('update:remoteFilePath', $event)" @keyup.enter="openRemoteFileViewer" />
                   </label>
                   <div class="hero-actions explore-file-launcher-actions">
