@@ -802,6 +802,10 @@ app.post("/api/terminal-sessions", requireAuth, (req, res) => {
   void handleTerminalSessionCreateRequest(req, res);
 });
 
+app.patch("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
+  void handleTerminalSessionRenameRequest(req, res);
+});
+
 app.post("/api/terminal-sessions/:sessionId/input", requireAuth, (req, res) => {
   void handleTerminalSessionInputRequest(req, res);
 });
@@ -1015,6 +1019,7 @@ async function handleCommandRequest(req, res) {
 async function handleTerminalSessionCreateRequest(req, res) {
   const agentId = String(req.body?.agentId || "").trim();
   const profile = String(req.body?.profile || "").trim();
+  const sessionName = normalizeTerminalSessionName(req.body?.sessionName);
   const launchPayload = {
     cwd: String(req.body?.cwd || "").trim(),
     env: isPlainObject(req.body?.env) ? req.body.env : {},
@@ -1064,6 +1069,7 @@ async function handleTerminalSessionCreateRequest(req, res) {
     const record = terminalSessionStore.create({
       agentId,
       profile,
+      sessionName,
       metadata: {
         operatorUserId: req.auth.user.id,
         operatorUsername: req.auth.user.username,
@@ -1118,6 +1124,89 @@ async function handleTerminalSessionCreateRequest(req, res) {
       error: error.message
     });
     res.status(500).json({ message: error.message || "终端会话创建失败" });
+  }
+}
+
+async function handleTerminalSessionRenameRequest(req, res) {
+  const sessionId = String(req.params.sessionId || "").trim();
+
+  if (!sessionId) {
+    res.status(400).json({ message: "sessionId is required" });
+    return;
+  }
+
+  if (!isPlainObject(req.body) || !Object.prototype.hasOwnProperty.call(req.body, "sessionName")) {
+    res.status(400).json({ message: "sessionName is required" });
+    return;
+  }
+
+  const sessionName = normalizeTerminalSessionName(req.body.sessionName);
+
+  try {
+    const activeSession = terminalSessionStore.get(sessionId);
+    const storedSession = activeSession
+      ? null
+      : await terminalSessionHistoryService.getBySessionId(sessionId);
+    const session = activeSession || storedSession;
+
+    if (!session) {
+      res.status(404).json({ message: "会话不存在" });
+      return;
+    }
+
+    await ensureUserCanControlAgent(req.auth.user, session.agentId);
+
+    let item;
+
+    if (activeSession) {
+      const updatedSession =
+        terminalSessionStore.update(sessionId, {
+          sessionName
+        }) || activeSession;
+
+      await terminalSessionHistoryService.upsertSession(updatedSession);
+      broadcastTerminalSessionUpdate(updatedSession);
+      item = serializeTerminalSession(updatedSession);
+    } else {
+      const updatedAt = new Date().toISOString();
+      const updatedSession = await terminalSessionHistoryService.updateSession(sessionId, {
+        sessionName,
+        updatedAt
+      });
+
+      item =
+        updatedSession || {
+          ...storedSession,
+          sessionName,
+          updatedAt
+        };
+      broadcastTerminalSessionUpdate(item);
+    }
+
+    logEvent(commandLogger, "info", "terminal.session.renamed", {
+      sessionId,
+      agentId: String(session.agentId || ""),
+      sessionNameLength: sessionName.length,
+      userId: req.auth.user.id,
+      username: req.auth.user.username
+    });
+
+    res.json({
+      ok: true,
+      sessionId,
+      item
+    });
+  } catch (error) {
+    logEvent(commandLogger, "error", "terminal.session.rename_failed", {
+      sessionId,
+      sessionNameLength: sessionName.length,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "终端会话重命名失败" });
   }
 }
 
@@ -1510,6 +1599,7 @@ async function bootstrap() {
     const approvalSchemaResult = await schemaService.ensureApprovalSchema();
     await commandHistoryService.ensureTables();
     await terminalSessionHistoryService.ensureTables();
+    await schemaService.ensureTerminalSessionSchema();
     await sessionService.purgeExpiredSessions();
     if (approvalSchemaResult?.ok === false) {
       logEvent(serverLogger, "warn", "schema.user_auth_codes_global_owner_index_skipped", {
@@ -3592,6 +3682,26 @@ async function ensureManagedAgentReadyForControl(agentId) {
   return record;
 }
 
+async function ensureUserCanControlAgent(user, agentId) {
+  const normalizedAgentId = String(agentId || "").trim();
+
+  if (!normalizedAgentId) {
+    throw createHttpError(400, "agentId is required");
+  }
+
+  await ensureManagedAgentReadyForControl(normalizedAgentId);
+  const authCodeBinding = await authCodeService.findByUserIdAndAgentId(
+    user.id,
+    normalizedAgentId
+  );
+
+  if (!authCodeBinding) {
+    throw createHttpError(400, "当前用户未为该设备配置 auth_code");
+  }
+
+  return authCodeBinding;
+}
+
 async function disconnectApprovedAgentIfConnected(agentId, options = {}) {
   const normalizedAgentId = String(agentId || "").trim();
 
@@ -3644,6 +3754,10 @@ function isPlainObject(value) {
 
 function normalizeOptionalText(value, maxLength) {
   return String(value || "").trim().slice(0, maxLength);
+}
+
+function normalizeTerminalSessionName(value) {
+  return String(value ?? "").trim().slice(0, 128);
 }
 
 function normalizeBrowserScreenshotTimeout(value) {
@@ -3934,6 +4048,7 @@ function serializeTerminalSession(session, options = {}) {
 
   return {
     ...rest,
+    sessionName: summary.sessionName,
     finalText: summary.finalText,
     finalTextChars: summary.finalTextChars,
     rawCharCount: summary.rawCharCount,

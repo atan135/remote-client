@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS `terminal_sessions` (
   `agent_id` VARCHAR(128) NOT NULL,
   `operator_user_id` BIGINT UNSIGNED NULL,
   `operator_username` VARCHAR(64) NOT NULL DEFAULT '',
+  `session_name` VARCHAR(128) NOT NULL DEFAULT '',
   `profile` VARCHAR(128) NOT NULL,
   `session_type` VARCHAR(64) NOT NULL DEFAULT 'llm_cli',
   `display_mode` VARCHAR(32) NOT NULL DEFAULT 'terminal',

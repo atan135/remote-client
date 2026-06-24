@@ -16,6 +16,7 @@ export class TerminalSessionHistoryService {
         agent_id VARCHAR(128) NOT NULL,
         operator_user_id BIGINT UNSIGNED NULL,
         operator_username VARCHAR(64) NOT NULL DEFAULT '',
+        session_name VARCHAR(128) NOT NULL DEFAULT '',
         profile VARCHAR(128) NOT NULL,
         session_type VARCHAR(64) NOT NULL DEFAULT 'llm_cli',
         display_mode VARCHAR(32) NOT NULL DEFAULT 'terminal',
@@ -49,6 +50,12 @@ export class TerminalSessionHistoryService {
       "terminal_sessions",
       "idx_terminal_sessions_created_at",
       "ALTER TABLE terminal_sessions ADD INDEX idx_terminal_sessions_created_at (created_at)"
+    );
+    await ensureColumn(
+      this.pool,
+      "terminal_sessions",
+      "session_name",
+      "ALTER TABLE terminal_sessions ADD COLUMN session_name VARCHAR(128) NOT NULL DEFAULT '' AFTER operator_username"
     );
 
     await this.pool.execute(`
@@ -84,6 +91,7 @@ export class TerminalSessionHistoryService {
           agent_id,
           operator_user_id,
           operator_username,
+          session_name,
           profile,
           session_type,
           display_mode,
@@ -101,12 +109,13 @@ export class TerminalSessionHistoryService {
           last_output_at,
           closed_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON DUPLICATE KEY UPDATE
           request_id = VALUES(request_id),
           agent_id = VALUES(agent_id),
           operator_user_id = VALUES(operator_user_id),
           operator_username = VALUES(operator_username),
+          session_name = VALUES(session_name),
           profile = VALUES(profile),
           session_type = VALUES(session_type),
           display_mode = VALUES(display_mode),
@@ -129,6 +138,7 @@ export class TerminalSessionHistoryService {
         summary.agentId,
         summary.operatorUserId,
         summary.operatorUsername,
+        summary.sessionName,
         summary.profile,
         summary.sessionType,
         summary.displayMode,
@@ -260,6 +270,7 @@ export class TerminalSessionHistoryService {
           agent_id,
           operator_user_id,
           operator_username,
+          session_name,
           profile,
           session_type,
           display_mode,
@@ -299,6 +310,7 @@ export class TerminalSessionHistoryService {
           agent_id,
           operator_user_id,
           operator_username,
+          session_name,
           profile,
           session_type,
           display_mode,
@@ -337,6 +349,11 @@ export class TerminalSessionHistoryService {
     if (Object.prototype.hasOwnProperty.call(patch, "status")) {
       assignments.push("status = ?");
       values.push(String(patch.status || ""));
+    }
+
+    if (Object.prototype.hasOwnProperty.call(patch, "sessionName")) {
+      assignments.push("session_name = ?");
+      values.push(normalizeSessionName(patch.sessionName));
     }
 
     if (Object.prototype.hasOwnProperty.call(patch, "exitCode")) {
@@ -404,6 +421,7 @@ export function summarizeTerminalSessionRecord(record) {
     agentId: String(record?.agentId || ""),
     operatorUserId: toNullableNumber(record?.operatorUserId),
     operatorUsername: String(record?.operatorUsername || ""),
+    sessionName: normalizeSessionName(record?.sessionName),
     profile: String(record?.profile || ""),
     sessionType: String(record?.sessionType || "llm_cli"),
     displayMode: String(record?.displayMode || "terminal"),
@@ -438,6 +456,10 @@ function clampText(value, maxLength) {
   return text.length <= maxLength ? text : text.slice(0, maxLength);
 }
 
+function normalizeSessionName(value) {
+  return String(value ?? "").trim().slice(0, 128);
+}
+
 function toMysqlDateTime(value) {
   const normalized = String(value || "").trim();
 
@@ -470,6 +492,7 @@ export function serializeStoredTerminalSession(row) {
     agentId: row.agent_id,
     operatorUserId: row.operator_user_id ?? null,
     operatorUsername: row.operator_username || "",
+    sessionName: row.session_name || "",
     profile: row.profile || "",
     sessionType: row.session_type || "llm_cli",
     displayMode: row.display_mode || "terminal",
@@ -500,6 +523,21 @@ async function ensureIndex(pool, tableName, indexName, alterSql) {
       LIMIT 1
     `,
     [tableName, indexName]
+  );
+
+  if (Array.isArray(rows) && rows.length > 0) {
+    return;
+  }
+
+  await pool.execute(alterSql);
+}
+
+async function ensureColumn(pool, tableName, columnName, alterSql) {
+  const [rows] = await pool.execute(
+    `
+      SHOW COLUMNS FROM \`${tableName}\` LIKE ?
+    `,
+    [columnName]
   );
 
   if (Array.isArray(rows) && rows.length > 0) {

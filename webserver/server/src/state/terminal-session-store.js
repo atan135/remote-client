@@ -10,15 +10,17 @@ export class TerminalSessionStore {
     this.inputReceipts = new Map();
   }
 
-  create({ agentId, profile, sessionType = "llm_cli", metadata = {} }) {
+  create({ agentId, profile, sessionType = "llm_cli", sessionName, metadata = {} }) {
     const createdAt = new Date().toISOString();
     const sessionId = randomUUID();
     const requestId = randomUUID();
+    const normalizedSessionName = normalizeSessionName(sessionName ?? metadata.sessionName);
     const record = {
       sessionId,
       requestId,
       agentId,
       sessionType,
+      sessionName: normalizedSessionName,
       profile,
       status: "created",
       createdAt,
@@ -33,7 +35,8 @@ export class TerminalSessionStore {
       finalTextUpdatedAt: null,
       rawTranscript: "",
       outputs: [],
-      ...metadata
+      ...metadata,
+      sessionName: normalizedSessionName
     };
 
     this.sessions.set(sessionId, record);
@@ -100,7 +103,13 @@ export class TerminalSessionStore {
       return null;
     }
 
-    Object.assign(record, patch, {
+    const normalizedPatch = { ...patch };
+
+    if (Object.prototype.hasOwnProperty.call(normalizedPatch, "sessionName")) {
+      normalizedPatch.sessionName = normalizeSessionName(normalizedPatch.sessionName);
+    }
+
+    Object.assign(record, normalizedPatch, {
       updatedAt: new Date().toISOString()
     });
 
@@ -109,6 +118,7 @@ export class TerminalSessionStore {
 
   upsert(sessionLike) {
     const normalized = normalizeSessionRecord(sessionLike, this.outputLimit);
+    const hasSessionName = Object.prototype.hasOwnProperty.call(sessionLike || {}, "sessionName");
 
     if (!normalized) {
       return null;
@@ -121,6 +131,10 @@ export class TerminalSessionStore {
       this.order.unshift(normalized.sessionId);
       this.prune();
       return normalized;
+    }
+
+    if (!hasSessionName) {
+      normalized.sessionName = existing.sessionName || "";
     }
 
     Object.assign(existing, normalized);
@@ -200,6 +214,10 @@ function clampTextTail(value, maxLength) {
   return text.slice(text.length - maxLength);
 }
 
+function normalizeSessionName(value) {
+  return String(value ?? "").trim().slice(0, 128);
+}
+
 function normalizeSessionRecord(sessionLike, outputLimit) {
   const sessionId = String(sessionLike?.sessionId || "").trim();
 
@@ -229,6 +247,7 @@ function normalizeSessionRecord(sessionLike, outputLimit) {
         : null,
     authCodeFingerprint: String(sessionLike?.authCodeFingerprint || ""),
     authCodeRemark: String(sessionLike?.authCodeRemark || ""),
+    sessionName: normalizeSessionName(sessionLike?.sessionName),
     sessionType: String(sessionLike?.sessionType || "llm_cli"),
     profile: String(sessionLike?.profile || ""),
     profileLabel: String(sessionLike?.profileLabel || ""),

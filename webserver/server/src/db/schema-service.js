@@ -11,6 +11,14 @@ export class SchemaService {
     return authCodeOwnership;
   }
 
+  async ensureTerminalSessionSchema() {
+    await this.ensureColumn(
+      "terminal_sessions",
+      "session_name",
+      "ALTER TABLE `terminal_sessions` ADD COLUMN `session_name` VARCHAR(128) NOT NULL DEFAULT '' AFTER `operator_username`"
+    );
+  }
+
   async ensureUsersApprovalColumns() {
     await this.ensureColumn(
       "users",
