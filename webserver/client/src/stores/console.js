@@ -28,6 +28,7 @@ const fallbackTerminalProfiles = Object.freeze([
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 1200;
 const TERMINAL_SESSION_NAME_MAX_LENGTH = 128;
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
+const REMOTE_FILE_CONTEXT_SEPARATOR = "\u0000";
 const JIETU_LOG_PREFIX = "[remote-client:jietu]";
 const PENDING_COMMAND_STATUSES = new Set(["queued", "running", "dispatched"]);
 const FAILED_COMMAND_STATUSES = new Set(["failed", "timed_out", "connection_lost"]);
@@ -68,7 +69,10 @@ export const useConsoleStore = defineStore("console", () => {
   const terminalSessionName = ref("");
   const terminalCwd = ref("");
   const terminalInput = ref("");
-  const remoteFilePath = ref("");
+  const remoteFilePathsByContext = reactive(new Map());
+  const remoteFileErrorsByContext = reactive(new Map());
+  const remoteFileViewersByContext = reactive(new Map());
+  const emptyRemoteFileViewer = createEmptyRemoteFileViewer();
   const bootstrapping = ref(true);
   const authenticating = ref(false);
   const submitting = ref(false);
@@ -102,8 +106,6 @@ export const useConsoleStore = defineStore("console", () => {
   const clearingCommands = ref(false);
   const session = ref(null);
   const authMode = ref("login");
-  const remoteFileError = ref("");
-  const remoteFileViewer = ref(createEmptyRemoteFileViewer());
   const pendingTaskCount = ref(0);
   const failedTaskCount = ref(0);
 
@@ -326,6 +328,14 @@ export const useConsoleStore = defineStore("console", () => {
     return item?.agentId === selectedAgentId.value ? item : null;
   });
 
+  const activeRemoteFileContext = computed(() =>
+    createRemoteFileContext(selectedAgentId.value, activeTerminalSession.value?.sessionId || "")
+  );
+
+  const remoteFilePath = computed(() => getRemoteFilePathForContext(activeRemoteFileContext.value));
+  const remoteFileError = computed(() => getRemoteFileErrorForContext(activeRemoteFileContext.value));
+  const remoteFileViewer = computed(() => getRemoteFileViewerForContext(activeRemoteFileContext.value));
+
   const visibleCommands = computed(() => {
     if (!timelineFilterAgentId.value || timelineFilterAgentId.value === "all") {
       return commands.value;
@@ -409,7 +419,6 @@ export const useConsoleStore = defineStore("console", () => {
     ensureSelectedTerminalProfile();
     ensureSelectedTerminalSession();
     ensureSelectedCommandShell();
-    resetRemoteFileViewer();
   });
 
   watch(availableTerminalProfiles, () => {
@@ -1199,8 +1208,14 @@ export const useConsoleStore = defineStore("console", () => {
   }
 
   function updateRemoteFilePath(value) {
-    remoteFilePath.value = String(value || "");
-    remoteFileError.value = "";
+    const context = activeRemoteFileContext.value;
+
+    if (!context) {
+      return;
+    }
+
+    setRemoteFilePathForContext(context, value);
+    clearRemoteFileErrorForContext(context);
   }
 
   async function openRemoteFile(payload = {}) {
@@ -1208,25 +1223,29 @@ export const useConsoleStore = defineStore("console", () => {
     const sessionId = String(
       payload?.sessionId || activeTerminalSession.value?.sessionId || ""
     ).trim();
-    const filePath = String(payload?.filePath || remoteFilePath.value || "").trim();
+    const context = createRemoteFileContext(agentId, sessionId);
+    const shouldRememberPath = payload?.rememberPath !== false;
+    const filePath = String(
+      payload?.filePath || (shouldRememberPath ? getRemoteFilePathForContext(context) : "") || ""
+    ).trim();
     const baseCwd = String(payload?.baseCwd || payload?.cwd || "").trim();
 
-    if (!agentId || !sessionId) {
+    if (!agentId || !sessionId || !context) {
       return false;
     }
 
     if (!filePath) {
-      remoteFileError.value = "请输入要打开的文件路径";
+      setRemoteFileErrorForContext(context, "请输入要打开的文件路径");
       return false;
     }
 
-    if (!activeAuthCodeBinding.value) {
-      remoteFileError.value = "请先为当前设备配置 auth_code，再读取文件";
+    if (!authCodesByAgentId.value.get(normalizeAgentId(agentId))) {
+      setRemoteFileErrorForContext(context, "请先为当前设备配置 auth_code，再读取文件");
       return false;
     }
 
     readingRemoteFile.value = true;
-    remoteFileError.value = "";
+    clearRemoteFileErrorForContext(context);
 
     try {
       const response = await fetch("/api/remote-files/read", {
@@ -1253,11 +1272,16 @@ export const useConsoleStore = defineStore("console", () => {
         throw new Error(result.message || "远程读取文件失败");
       }
 
-      remoteFileViewer.value = normalizeRemoteFileViewer(result.item, sessionId);
-      remoteFilePath.value = remoteFileViewer.value.filePath || filePath;
-      return remoteFileViewer.value;
+      const viewer = normalizeRemoteFileViewer(result.item, sessionId);
+      setRemoteFileViewerForContext(context, viewer);
+
+      if (shouldRememberPath) {
+        setRemoteFilePathForContext(context, viewer.filePath || filePath);
+      }
+
+      return viewer;
     } catch (error) {
-      remoteFileError.value = error.message;
+      setRemoteFileErrorForContext(context, error.message);
       return false;
     } finally {
       readingRemoteFile.value = false;
@@ -2596,7 +2620,7 @@ export const useConsoleStore = defineStore("console", () => {
     Object.keys(loadErrors).forEach((key) => {
       loadErrors[key] = "";
     });
-    resetRemoteFileViewer();
+    resetRemoteFileState();
     terminalSocketInputQueue.length = 0;
     pendingTerminalSocketInputs.length = 0;
     flushingTerminalSocketInput = false;
@@ -2781,6 +2805,7 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     }
 
+    const sessionRecord = terminalSessionById.value.get(normalizedSessionId) || null;
     const nextItems = terminalSessions.value.filter((item) => item.sessionId !== normalizedSessionId);
     const didRemoveSession = nextItems.length !== terminalSessions.value.length;
 
@@ -2802,11 +2827,7 @@ export const useConsoleStore = defineStore("console", () => {
 
     pendingTerminalResizes.delete(normalizedSessionId);
 
-    if (remoteFileViewer.value.sessionId === normalizedSessionId) {
-      resetRemoteFileViewer({
-        preservePath: true
-      });
-    }
+    deleteRemoteFileStateForSession(normalizedSessionId, sessionRecord?.agentId || "");
 
     return didRemoveSession;
   }
@@ -3130,13 +3151,110 @@ export const useConsoleStore = defineStore("console", () => {
     return String(previousRecord?.createdAt || "") !== String(nextRecord?.createdAt || "");
   }
 
-  function resetRemoteFileViewer({ preservePath = false } = {}) {
-    remoteFileViewer.value = createEmptyRemoteFileViewer();
-    remoteFileError.value = "";
+  function createRemoteFileContext(agentId, sessionId) {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const normalizedSessionId = String(sessionId || "").trim();
 
-    if (!preservePath) {
-      remoteFilePath.value = "";
+    if (!normalizedAgentId || !normalizedSessionId) {
+      return "";
     }
+
+    return `${normalizedAgentId}${REMOTE_FILE_CONTEXT_SEPARATOR}${normalizedSessionId}`;
+  }
+
+  function getRemoteFileContextParts(context) {
+    const [agentId = "", sessionId = ""] = String(context || "").split(REMOTE_FILE_CONTEXT_SEPARATOR);
+    return {
+      agentId,
+      sessionId
+    };
+  }
+
+  function getRemoteFilePathForContext(context) {
+    return context ? remoteFilePathsByContext.get(context) || "" : "";
+  }
+
+  function setRemoteFilePathForContext(context, value) {
+    if (!context) {
+      return;
+    }
+
+    remoteFilePathsByContext.set(context, String(value || ""));
+  }
+
+  function getRemoteFileErrorForContext(context) {
+    return context ? remoteFileErrorsByContext.get(context) || "" : "";
+  }
+
+  function setRemoteFileErrorForContext(context, value) {
+    if (!context) {
+      return;
+    }
+
+    const message = String(value || "");
+
+    if (message) {
+      remoteFileErrorsByContext.set(context, message);
+      return;
+    }
+
+    remoteFileErrorsByContext.delete(context);
+  }
+
+  function clearRemoteFileErrorForContext(context) {
+    if (context) {
+      remoteFileErrorsByContext.delete(context);
+    }
+  }
+
+  function getRemoteFileViewerForContext(context) {
+    return context ? remoteFileViewersByContext.get(context) || emptyRemoteFileViewer : emptyRemoteFileViewer;
+  }
+
+  function setRemoteFileViewerForContext(context, viewer) {
+    if (!context) {
+      return;
+    }
+
+    remoteFileViewersByContext.set(context, viewer || createEmptyRemoteFileViewer());
+  }
+
+  function deleteRemoteFileStateForSession(sessionId, agentId = "") {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedAgentId = normalizeAgentId(agentId);
+
+    if (!normalizedSessionId) {
+      return;
+    }
+
+    for (const context of Array.from(remoteFilePathsByContext.keys())) {
+      if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
+        remoteFilePathsByContext.delete(context);
+      }
+    }
+
+    for (const context of Array.from(remoteFileErrorsByContext.keys())) {
+      if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
+        remoteFileErrorsByContext.delete(context);
+      }
+    }
+
+    for (const context of Array.from(remoteFileViewersByContext.keys())) {
+      if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
+        remoteFileViewersByContext.delete(context);
+      }
+    }
+  }
+
+  function doesRemoteFileContextMatchSession(context, sessionId, agentId) {
+    const parts = getRemoteFileContextParts(context);
+    return parts.sessionId === sessionId && (!agentId || parts.agentId === agentId);
+  }
+
+  function resetRemoteFileState() {
+    remoteFilePathsByContext.clear();
+    remoteFileErrorsByContext.clear();
+    remoteFileViewersByContext.clear();
   }
 
   function createEmptyRemoteFileViewer() {

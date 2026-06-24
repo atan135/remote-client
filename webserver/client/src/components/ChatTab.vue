@@ -841,7 +841,8 @@ async function openAiFile(message) {
     agentId: message.agentId || props.selectedAgentId,
     sessionId: message.sessionId,
     filePath: message.filePath,
-    baseCwd: message.baseCwd || ""
+    baseCwd: message.baseCwd || "",
+    rememberPath: false
   });
 
   if (!result) {
