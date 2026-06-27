@@ -88,6 +88,18 @@ const props = defineProps({
     type: String,
     default: ""
   },
+  remoteFileSaveError: {
+    type: String,
+    default: ""
+  },
+  savingRemoteFile: {
+    type: Boolean,
+    default: false
+  },
+  canSaveRemoteFile: {
+    type: Boolean,
+    default: false
+  },
   availableTerminalProfiles: {
     type: Array,
     required: true
@@ -176,6 +188,7 @@ const emit = defineEmits([
   "interrupt-terminal-session",
   "send-terminal-raw-input",
   "open-remote-file",
+  "save-remote-file",
   "close-remote-file-preview",
   "resize-terminal-session",
   "rename-terminal-session",
@@ -383,6 +396,9 @@ const currentRemoteFileViewer = computed(() => {
 
   return viewer;
 });
+const canSaveCurrentRemoteFile = computed(() =>
+  Boolean(props.canSaveRemoteFile && currentRemoteFileViewer.value?.openedAt)
+);
 function createPresetCommandKey(label, command, index) {
   return `${index}:${label}\u0000${command}`;
 }
@@ -527,6 +543,20 @@ function openRemoteFileViewer() {
     sessionId: currentSession.value.sessionId,
     filePath: props.remoteFilePath,
     baseCwd: props.remoteFileBaseCwd
+  });
+}
+
+function handleRemoteFileSave(payload) {
+  const viewer = payload?.viewer || currentRemoteFileViewer.value || {};
+  const hasPayloadBaseCwd = payload && Object.prototype.hasOwnProperty.call(payload, "baseCwd");
+
+  emit("save-remote-file", {
+    ...payload,
+    viewer,
+    agentId: payload?.agentId || viewer.agentId || props.selectedAgentId,
+    sessionId: payload?.sessionId || viewer.sessionId || currentSession.value?.sessionId || "",
+    filePath: payload?.filePath || viewer.filePath || props.remoteFilePath,
+    baseCwd: hasPayloadBaseCwd ? payload.baseCwd : viewer.baseCwd || props.remoteFileBaseCwd
   });
 }
 
@@ -1190,7 +1220,11 @@ watch(
     <RemoteFilePreviewDialog
       :model-value="remoteFileDialogVisible"
       :viewer="currentRemoteFileViewer"
+      :saving="savingRemoteFile"
+      :save-error="remoteFileSaveError"
+      :can-save="canSaveCurrentRemoteFile"
       @update:model-value="handleRemoteFileDialogVisibleChange"
+      @save="handleRemoteFileSave"
     />
   </section>
 </template>

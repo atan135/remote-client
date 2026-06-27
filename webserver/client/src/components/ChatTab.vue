@@ -15,6 +15,7 @@ import {
 import CommandDetailDialog from "./CommandDetailDialog.vue";
 import EmptyState from "./EmptyState.vue";
 import RemoteFilePreviewDialog from "./RemoteFilePreviewDialog.vue";
+import { useConsoleStore } from "../stores/console";
 
 const CHAT_OUTPUT_PREVIEW_LIMIT = 1200;
 const CHAT_AI_LONG_TEXT_HINT_LIMIT = 300;
@@ -105,6 +106,7 @@ const props = defineProps({
 });
 
 const emit = defineEmits(["update:selectedAgentId", "update:commandShell"]);
+const store = useConsoleStore();
 
 const chatInput = ref("");
 const chatMode = ref(CHAT_MODE_NORMAL);
@@ -115,6 +117,7 @@ const chatAiPendingMessageId = ref("");
 const chatAiLastFinalText = ref("");
 const aiFileDialogVisible = ref(false);
 const activeAiFileViewer = ref(null);
+const activeAiFileMessageId = ref("");
 const activeCommandDetailMessageId = ref("");
 const messageListRef = ref(null);
 const advancedPanels = ref([]);
@@ -432,6 +435,26 @@ const canSend = computed(() => {
 
   return !props.submitting;
 });
+
+const activeAiFileContext = computed(() =>
+  createAiFileContext(activeAiFileViewer.value)
+);
+
+const activeStoreAiFileViewer = computed(() =>
+  activeAiFileContext.value ? store.getRemoteFileViewerForContext(activeAiFileContext.value) : null
+);
+
+const activeAiFileSaving = computed(() =>
+  activeAiFileContext.value ? store.isSavingRemoteFileForContext(activeAiFileContext.value) : false
+);
+
+const activeAiFileSaveError = computed(() =>
+  activeAiFileContext.value ? store.getRemoteFileSaveErrorForContext(activeAiFileContext.value) : ""
+);
+
+const canSaveActiveAiFile = computed(() =>
+  Boolean(activeAiFileViewer.value?.openedAt && props.activeAuthCodeBinding)
+);
 
 function createSystemMessage(text) {
   return createMessage({
@@ -832,7 +855,9 @@ async function openAiFile(message) {
   }
 
   if (message.fileViewer) {
-    showAiFileViewer(message.fileViewer);
+    const context = createAiFileContext(message.fileViewer);
+    const storeViewer = context ? store.getRemoteFileViewerForContext(context) : null;
+    showAiFileViewer(storeViewer?.openedAt ? storeViewer : message.fileViewer, message);
     return;
   }
 
@@ -853,12 +878,64 @@ async function openAiFile(message) {
 
   message.fileViewer = result;
   message.fileOpenStatus = "opened";
-  showAiFileViewer(result);
+  showAiFileViewer(result, message);
 }
 
-function showAiFileViewer(viewer) {
+function showAiFileViewer(viewer, message = null) {
+  if (!viewer && activeAiFileContext.value) {
+    store.clearRemoteFileErrors({
+      context: activeAiFileContext.value
+    });
+  }
+
   activeAiFileViewer.value = viewer || null;
   aiFileDialogVisible.value = Boolean(viewer);
+  activeAiFileMessageId.value = viewer && message?.id ? message.id : "";
+}
+
+function handleAiFileDialogVisibleChange(visible) {
+  aiFileDialogVisible.value = Boolean(visible);
+
+  if (visible) {
+    return;
+  }
+
+  const context = activeAiFileContext.value;
+  activeAiFileViewer.value = null;
+  activeAiFileMessageId.value = "";
+
+  if (context) {
+    store.clearRemoteFileErrors({
+      context
+    });
+  }
+}
+
+function handleAiFileSave(payload) {
+  const viewer = payload?.viewer || activeAiFileViewer.value || {};
+  const hasPayloadBaseCwd = payload && Object.prototype.hasOwnProperty.call(payload, "baseCwd");
+  const savePayload = {
+    ...payload,
+    viewer,
+    context: payload?.context || createAiFileContext(viewer),
+    agentId: payload?.agentId || viewer.agentId || props.selectedAgentId,
+    sessionId: payload?.sessionId || viewer.sessionId || chatAiSessionId.value || "",
+    filePath: payload?.filePath || viewer.filePath || viewer.requestedPath || "",
+    baseCwd: hasPayloadBaseCwd ? payload.baseCwd : viewer.baseCwd || ""
+  };
+
+  return store.saveRemoteFile(savePayload);
+}
+
+function createAiFileContext(viewer) {
+  if (!viewer) {
+    return "";
+  }
+
+  return (
+    String(viewer.context || "").trim() ||
+    store.createRemoteFileContext(viewer.agentId || props.selectedAgentId, viewer.sessionId || chatAiSessionId.value)
+  );
 }
 
 function applyAiFinalText(session) {
@@ -1001,7 +1078,7 @@ function looksLikePromptEchoFinalText(text) {
 }
 
 function settlePendingAiMessageForClosedSession(session) {
-  if (!chatAiPendingMessageId.value || !isTerminalSessionClosedStatus(session?.status)) {
+  if (!chatAiPendingMessageId.value || !isTerminalSessionClosed(session?.status)) {
     return;
   }
 
@@ -1453,7 +1530,48 @@ watch(
       chatAiPendingMessageId.value = "";
       chatAiLastFinalText.value = "";
     }
+    showAiFileViewer(null);
     appendAssistantMessage(`当前设备已切换为 ${props.activeAgent?.label || props.selectedAgentId || "未选择设备"}。`);
+  }
+);
+
+watch(
+  activeStoreAiFileViewer,
+  (viewer) => {
+    if (!aiFileDialogVisible.value || !activeAiFileContext.value || !viewer?.openedAt) {
+      return;
+    }
+
+    activeAiFileViewer.value = viewer;
+
+    const message = messages.value.find((item) => item.id === activeAiFileMessageId.value) || null;
+
+    if (!message) {
+      return;
+    }
+
+    message.fileViewer = viewer;
+    message.fileOpenStatus = "opened";
+    message.filePath = viewer.filePath || message.filePath;
+    message.baseCwd = viewer.baseCwd || message.baseCwd;
+    message.agentId = viewer.agentId || message.agentId;
+    message.sessionId = viewer.sessionId || message.sessionId;
+    message.updatedAt = viewer.writtenAt || viewer.openedAt || new Date().toISOString();
+  }
+);
+
+watch(
+  () => props.terminalSessions.map((item) => item.sessionId).join("|"),
+  () => {
+    if (!activeAiFileViewer.value?.sessionId) {
+      return;
+    }
+
+    if (terminalSessionsById.value.has(activeAiFileViewer.value.sessionId)) {
+      return;
+    }
+
+    showAiFileViewer(null);
   }
 );
 </script>
@@ -1793,8 +1911,13 @@ watch(
     </el-card>
 
     <RemoteFilePreviewDialog
-      v-model="aiFileDialogVisible"
+      :model-value="aiFileDialogVisible"
       :viewer="activeAiFileViewer"
+      :saving="activeAiFileSaving"
+      :save-error="activeAiFileSaveError"
+      :can-save="canSaveActiveAiFile"
+      @update:model-value="handleAiFileDialogVisibleChange"
+      @save="handleAiFileSave"
     />
 
     <CommandDetailDialog

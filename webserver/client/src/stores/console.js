@@ -421,10 +421,26 @@ export const useConsoleStore = defineStore("console", () => {
     () => String(visibleCommands.value[0]?.requestId || "")
   );
 
-  watch(selectedAgentId, () => {
+  watch(selectedAgentId, (_, previousAgentId) => {
+    if (previousAgentId) {
+      clearRemoteFilePreviewViewer({
+        agentId: previousAgentId,
+        sessionId: selectedTerminalSessionId.value
+      });
+    }
     ensureSelectedTerminalProfile();
     ensureSelectedTerminalSession();
     ensureSelectedCommandShell();
+  });
+
+  watch(selectedTerminalSessionId, (_, previousSessionId) => {
+    if (previousSessionId) {
+      const previousSessionRecord = terminalSessionById.value.get(previousSessionId);
+      clearRemoteFilePreviewViewer({
+        agentId: previousSessionRecord?.agentId || selectedAgentId.value,
+        sessionId: previousSessionId
+      });
+    }
   });
 
   watch(availableTerminalProfiles, () => {
@@ -1248,6 +1264,22 @@ export const useConsoleStore = defineStore("console", () => {
     }
 
     remoteFileViewersByContext.delete(context);
+    clearRemoteFileErrorForContext(context);
+    clearRemoteFileSaveErrorForContext(context);
+  }
+
+  function clearRemoteFileErrors(payload = {}) {
+    const context = String(payload?.context || "").trim() || createRemoteFileContext(
+      payload?.agentId || selectedAgentId.value,
+      payload?.sessionId || activeTerminalSession.value?.sessionId || ""
+    );
+
+    if (!context) {
+      return;
+    }
+
+    clearRemoteFileErrorForContext(context);
+    clearRemoteFileSaveErrorForContext(context);
   }
 
   async function openRemoteFile(payload = {}) {
@@ -3677,11 +3709,13 @@ export const useConsoleStore = defineStore("console", () => {
     approvingUserId,
     clearAutoOpenTerminalSession,
     clearCommandRecords,
+    clearRemoteFileErrors,
     clearRemoteFilePreviewViewer,
     commandInput,
     commandShell,
     commandShellOptions,
     commands,
+    createRemoteFileContext,
     createAuthCode,
     createTerminalSession,
     createUser,
@@ -3700,6 +3734,7 @@ export const useConsoleStore = defineStore("console", () => {
     dispose,
     failedTaskCount,
     latestVisibleCommandRequestId,
+    getRemoteFileViewerForContext,
     getRemoteFileSaveErrorForContext,
     isSavingRemoteFileForContext,
     loadAgentDiagnostics,
