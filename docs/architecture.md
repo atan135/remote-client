@@ -1,6 +1,6 @@
 # 功能架构说明
 
-更新时间：2026-05-20
+更新时间：2026-06-28
 
 ## 目标
 
@@ -17,7 +17,7 @@
 - 主动连接 `webserver/server`
 - 验签、解密、执行安全命令
 - 维护交互式 PTY 终端会话
-- 回传命令结果、终端输出和文件读取结果
+- 回传命令结果、终端输出、文件读取结果和文件保存结果
 - 可选开启仅限本机访问的本地调试接口
 
 ### 2. `webserver/server`
@@ -40,7 +40,7 @@ Vue 3 控制台，负责：
 - 一次性命令下发
 - 交互式终端会话创建、输入、终止、删除
 - 对话式命令与 Codex / AI Agent 会话入口
-- 远程文本文件预览；远程文件保存仍处于协议设计阶段
+- 远程文本文件预览与保存
 - `auth_code` 管理
 - 用户审核、设备审核和设备绑定归属管理
 
@@ -149,7 +149,7 @@ agent 注册时会上报本机 RSA 公钥和指纹，服务端会规范化公钥
   - 私钥在服务端签名
   - 公钥分发到 `localapp` 做验签
 
-### 当前已落地和拟新增的安全消息类型
+### 当前已落地的安全消息类型
 
 `webserver -> localapp` 侧已落地：
 
@@ -159,9 +159,6 @@ agent 注册时会上报本机 RSA 公钥和指纹，服务端会规范化公钥
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
-
-拟新增：
-
 - `file.write.secure`
 
 ### `localapp` 执行前校验
@@ -277,6 +274,7 @@ profile 当前可约束：
 ### 服务端入口
 
 - `POST /api/remote-files/read`
+- `POST /api/remote-files/write`
 
 ### 当前能力
 
@@ -285,24 +283,24 @@ profile 当前可约束：
 - 绝对路径可直接读取，不需要 `baseCwd`
 - 相对路径带活动 `sessionId` 时，agent 会优先向 PTY 会话探测当前目录并作为实时基准目录；探测失败时再回退请求中的 `baseCwd`
 - 如果相对文件名在基准目录下没有精确命中，agent 会在受限范围内做文件名模糊搜索；只有唯一匹配时才自动打开
-- 仅支持文本预览
+- 仅支持文本文件预览与保存，不支持二进制文件编辑或保存
 - 超出上限时截断返回
 - 会识别常见编码，Windows 下支持本地编码回退
 
-当前前端已支持在终端详情页中打开和预览文本文件。
+当前前端已支持在探索页、终端相关上下文和对话页文件卡片中打开文本文件。`.txt` 和其他普通文本默认进入编辑态；`.md`、`.markdown`、`.mdown`、`.mkd`、`.mkdn` 默认渲染 Markdown 预览，并可切换到纯文本查看或编辑。
 
-注意：文件内容读取仍由 `localapp` 的 `fs/stat/read` 完成，不通过 shell 或 PTY 执行读文件命令。Windows `localapp` 仍不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
+注意：文件内容读写仍由 `localapp` 的 `fs/stat/read/write` 完成，不通过 shell 或 PTY 执行读写文件命令。Windows `localapp` 仍不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
 
-### 保存协议设计
+### 保存能力
 
-远程文件保存计划作为文件读取的配套能力新增，仍必须复用 `shared/secure-command.mjs` 生成安全 envelope，不恢复明文派发，也不能通过终端命令写文件。
+远程文件保存是文件读取的配套能力，仍复用 `shared/secure-command.mjs` 生成安全 envelope，不恢复明文派发，也不能通过终端命令写文件。
 
 支持的编辑类型边界：
 
 - `.txt`：直接按纯文本编辑和保存。
 - `.md`、`.markdown`、`.mdown`、`.mkd`、`.mkdn`：允许在 Markdown 预览和纯文本编辑之间切换；保存时写回纯文本内容。
 
-以下状态不允许保存，前端和服务端应阻止发起写入，agent 写入前也必须兜底拒绝：
+以下状态不允许保存，前端和服务端会阻止或返回失败，agent 写入前也会兜底拒绝：
 
 - 读取结果已截断。
 - `resolvedPath` 为空。
@@ -310,14 +308,6 @@ profile 当前可约束：
 - agent 判定为二进制文件。
 - 路径解析存在冲突，例如模糊匹配无法唯一确定目标。
 - 远程文件在打开后已变化，表现为写入前 `mtime` 或 `size` 与读取时记录不一致。
-
-拟新增服务端入口：
-
-- `POST /api/remote-files/write`
-
-拟新增 `server -> agent` 安全消息：
-
-- `file.write.secure`
 
 `file.write.secure` 解密后的业务载荷应包含：
 
@@ -337,7 +327,7 @@ profile 当前可约束：
 
 其中 `resolvedPath`、`expectedModifiedAt`、`expectedTotalBytes` 必须来自最近一次成功的 `file.read.completed`，用于避免相对路径重新解析到不同文件或覆盖已变化文件。
 
-拟新增 `agent -> server` 回传：
+`agent -> server` 回传：
 
 - `file.write.completed`
 - `file.write.error`
@@ -411,6 +401,7 @@ profile 当前可约束：
 - 处理登录、会话、用户、`auth_code`
 - 维护在线 agent 注册表
 - 为命令/终端/文件读取生成安全 envelope
+- 为命令/终端/文件读取和文件保存生成安全 envelope
 - 向浏览器广播实时状态
 - 落命令与终端摘要到 MySQL
 
@@ -431,7 +422,7 @@ profile 当前可约束：
 - 当前在线 agent
 - 当前活动命令缓存
 - 当前活动终端会话输出缓存
-- 待完成的远程文件读取请求
+- 待完成的远程文件读取和保存请求
 
 ## `webserver/client` 模块说明
 
@@ -445,7 +436,7 @@ profile 当前可约束：
 - 对话页 Codex / AI Agent 会话模式
 - 终端输出查看
 - `final_text` 查看
-- 远程文件预览
+- 远程文件预览与保存
 - `auth_code` 管理
 - 账号安全
 - 用户管理
@@ -468,8 +459,8 @@ profile 当前可约束：
 - `terminal.session.error`
 - `file.read.completed`
 - `file.read.error`
-- `file.write.completed`（设计中）
-- `file.write.error`（设计中）
+- `file.write.completed`
+- `file.write.error`
 
 ### server -> agent
 
@@ -484,7 +475,7 @@ profile 当前可约束：
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
-- `file.write.secure`（设计中）
+- `file.write.secure`
 
 ### server -> browser
 
@@ -533,10 +524,10 @@ profile 当前可约束：
 4. agent 读取文件并返回 `file.read.completed` 或 `file.read.error`
 5. 服务端将结果同步回浏览器；如果返回的是实时终端目录，会同步更新对应会话 `cwd`
 
-### 远程文件保存（设计中）
+### 远程文件保存
 
 1. 浏览器基于一次成功的文件读取结果进入编辑态。
-2. 浏览器只允许支持的文本类型发起保存，并带上 `resolvedPath`、`modifiedAt`、`totalBytes` 作为期望版本。
+2. 浏览器只允许未截断、带 `resolvedPath` 的文本内容发起保存，并带上 `resolvedPath`、`modifiedAt`、`totalBytes` 作为期望版本。
 3. 服务端生成 `file.write.secure`。
 4. agent 验签、解密并校验 `agentId`、`expiresAt`、`nonce`。
 5. agent 写入前校验远程文件当前 `mtime` 和 `size`，不一致则拒绝覆盖。

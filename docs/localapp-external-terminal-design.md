@@ -1,6 +1,6 @@
 # localapp 双通道远程执行架构说明
 
-更新时间：2026-04-21
+更新时间：2026-06-28
 
 ## 说明
 
@@ -20,7 +20,7 @@
 1. 保留了原有一次性命令执行能力
 2. 已新增交互式 PTY 终端会话能力
 3. 已新增本地调试入口
-4. 已新增远程文本文件读取能力，远程文本文件保存处于协议设计阶段
+4. 已新增远程文本文件读取与保存能力
 5. 已支持 `Claude Code` / `Codex` 这类 profile 驱动的终端会话
 
 ## 当前能力概览
@@ -91,31 +91,35 @@
 
 ## 4. 远程文本文件读取与保存
 
-当前还新增了独立能力。它复用安全 envelope，但不是通过终端命令读取文件，也不依赖 PTY 会话存在：
+当前还新增了独立的远程文本文件能力。它复用安全 envelope，但不是通过终端命令读写文件，也不依赖 PTY 会话存在：
 
 `浏览器 -> /api/remote-files/read -> file.read.secure -> localapp -> file.read.completed`
 
+`浏览器 -> /api/remote-files/write -> file.write.secure -> localapp -> file.write.completed`
+
 当前支持：
 
-- 文本文件预览
+- 文本文件预览与保存
 - `sessionId` 只是可选上下文，`/api/remote-files/read` 允许不传 `sessionId`
 - 绝对路径无需 `baseCwd`
 - 相对路径带活动 `sessionId` 时，agent 会优先向 PTY 会话探测当前目录作为实时基准目录；探测失败时再回退请求 `baseCwd`
 - 如果相对文件名未精确命中，agent 会在基准目录下做受限文件名模糊搜索；只有唯一匹配时才打开
-- `localapp` 使用 `fs/stat/read` 读取文件，不通过 shell、PTY 或终端命令读取
+- `localapp` 使用 `fs/stat/read/write` 读写文件，不通过 shell、PTY 或终端命令读写
 - 文件大小截断
 - 常见编码识别
+- `.txt` 和其他普通文本默认进入纯文本编辑；Markdown 文件默认预览，并可切换纯文本查看或编辑
+- 保存成功后返回新的 `modifiedAt`、`totalBytes`、`bytesWritten` 等元数据，保存失败通过 `file.write.error` 回传
 
-注意：自动获取当前目录只用于解析路径，文件内容读取仍不通过终端命令。Windows `localapp` 也不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
+注意：自动获取当前目录只用于解析路径，文件内容读写仍不通过终端命令。Windows `localapp` 也不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
 
-远程文件保存的设计边界：
+远程文件保存边界：
 
-- 保存能力必须复用安全 envelope，新增 `file.write.secure`，不能恢复明文派发。
+- 保存能力必须复用安全 envelope 和 `file.write.secure`，不能恢复明文派发。
 - 保存必须由 `localapp` 使用文件系统 API 写入，不能通过 shell、PTY 或终端命令写文件。
 - `.txt` 支持纯文本直接编辑；`.md`、`.markdown`、`.mdown`、`.mkd`、`.mkdn` 支持 Markdown 预览和纯文本编辑切换，保存时写回纯文本。
 - 读取结果已截断、`resolvedPath` 为空、读取失败、二进制文件、路径解析冲突、远程文件已变化冲突时不允许保存。
 - 写入前必须校验目标文件当前 `mtime` 和 `size` 是否分别匹配读取时的 `modifiedAt` 和 `totalBytes`；不匹配时拒绝覆盖并要求用户重新打开文件。
-- `file.write.secure` 解密载荷应包含 `requestId`、`agentId`、`sessionId`、`filePath`、`resolvedPath`、`baseCwd`、`content`、`encoding`、`expectedModifiedAt`、`expectedTotalBytes`、`issuedAt`、`expiresAt`、`nonce`。
+- `file.write.secure` 解密载荷包含 `requestId`、`agentId`、`sessionId`、`filePath`、`resolvedPath`、`baseCwd`、`content`、`encoding`、`expectedModifiedAt`、`expectedTotalBytes`、`issuedAt`、`expiresAt`、`nonce`。
 - 写入结果通过 `file.write.completed` 或 `file.write.error` 回传；日志和错误响应不得输出完整大段文件内容。
 
 ## 当前实现状态
@@ -131,9 +135,6 @@
 - `/api/terminal-sessions/:sessionId`
 - `DELETE /api/terminal-sessions/:sessionId`
 - `/api/remote-files/read`
-
-拟新增：
-
 - `/api/remote-files/write`
 
 当前服务端也已实现：
@@ -183,7 +184,7 @@
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
-- `file.write.secure`（设计中）
+- `file.write.secure`
 
 ## 2. agent -> server
 
@@ -201,8 +202,8 @@
 - `terminal.session.error`
 - `file.read.completed`
 - `file.read.error`
-- `file.write.completed`（设计中）
-- `file.write.error`（设计中）
+- `file.write.completed`
+- `file.write.error`
 
 ## 3. server -> browser
 
@@ -381,7 +382,7 @@
 
 当前更准确的描述应是：
 
-> 当前项目已经形成“快速命令 + 交互式 PTY 会话 + 本地调试入口 + 远程文本文件预览”的完整双通道远程执行架构。一次性命令继续保留短链路和串行执行特性，交互式终端则由 `node-pty` 承载，并通过安全 envelope、profile、cwd/env 限制和终端会话摘要持久化完成闭环。
+> 当前项目已经形成“快速命令 + 交互式 PTY 会话 + 本地调试入口 + 远程文本文件预览与保存”的完整双通道远程执行架构。一次性命令继续保留短链路和串行执行特性，交互式终端则由 `node-pty` 承载，并通过安全 envelope、profile、cwd/env 限制和终端会话摘要持久化完成闭环。
 
 ## 最终建议
 

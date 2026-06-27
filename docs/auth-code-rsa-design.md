@@ -1,15 +1,15 @@
 # Auth Code + RSA 双向校验设计
 
-更新时间：2026-05-20
+更新时间：2026-06-28
 
 ## 目标
 
 在 `webserver -> localapp` 的控制链路上同时解决两件事：
 
-- 只有目标 `localapp` 能看到命令/会话/文件读取请求的明文
+- 只有目标 `localapp` 能看到命令/会话/文件读取与保存请求的明文
 - `localapp` 能确认消息确实来自受信任的 `webserver`
 
-当前这套方案已经不是纯设计，命令、安全终端会话和远程文件读取都已经复用同一套安全 envelope 落地。远程文件保存处于协议设计阶段，也必须沿用同一套安全 envelope。
+当前这套方案已经不是纯设计，命令、安全终端会话、远程文件读取和远程文件保存都已经复用同一套安全 envelope 落地。
 
 ## 核心设计
 
@@ -93,7 +93,7 @@
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
-- `file.write.secure`（设计中）
+- `file.write.secure`
 
 这意味着当前安全链路已经不只保护“一次性命令”，也保护：
 
@@ -102,9 +102,9 @@
 - 终端 resize
 - 会话终止
 - 远程文件读取
-- 远程文件保存（设计中）
+- 远程文件保存
 
-`file.write.secure` 的解密后业务载荷应包含：
+`file.write.secure` 的解密后业务载荷包含：
 
 - `requestId`
 - `agentId`
@@ -198,14 +198,14 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 2. 登录 Web 控制台
 3. 如果启用了设备审核，管理员先审核通过该设备；当前代码创建 / 更新绑定时也会校验设备已审核且启用
 4. 若该 `agentId` 尚未被其他用户占用，则为其创建或更新唯一 `auth_code`
-5. 后续只有当前绑定用户才能对该设备发起安全命令、终端会话和文件读取
+5. 后续只有当前绑定用户才能对该设备发起安全命令、终端会话、文件读取和文件保存
 
 若设备已被其他用户绑定：
 
 - 普通用户创建时应直接失败
 - 需要当前绑定用户主动解绑，或由管理员强制解绑后再由新用户绑定
 
-## 当前命令/终端/文件读取的安全封装流程
+## 当前命令/终端/远程文件的安全封装流程
 
 1. 浏览器提交业务请求
 2. 服务端按当前用户和目标 `agentId` 查找 `user_auth_codes`
@@ -250,7 +250,7 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 - `profile`
 - `filePath`
 
-文件保存的 `meta` 可额外带上 `resolvedPath`、`encoding`、`expectedModifiedAt`、`expectedTotalBytes` 这类不含完整文件内容的辅助信息；不得在 `meta`、日志或错误响应里输出完整大段 `content`。
+文件保存的 `meta` 会额外带上 `resolvedPath`、`encoding`、`contentChars`、`contentBytes` 这类不含完整文件内容的辅助信息；不得在 `meta`、日志或错误响应里输出完整大段 `content`。期望版本字段 `expectedModifiedAt`、`expectedTotalBytes` 放在加密后的业务载荷里。
 
 ## `localapp` 当前执行前校验
 
@@ -312,6 +312,7 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 - 一次性命令安全下发
 - 交互式终端会话安全下发
 - 远程文件读取安全下发
+- 远程文件保存安全下发
 
 ### 当前边界
 
@@ -327,6 +328,6 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 与最初设计相比，当前实现的特点是：
 
 - 不只保护一次性命令
-- 已统一扩展到终端会话与文件读取
+- 已统一扩展到终端会话、文件读取与文件保存
 - 前后端与 agent 三端都已真正接入
 - 共享安全逻辑集中在 `shared/secure-command.mjs`
