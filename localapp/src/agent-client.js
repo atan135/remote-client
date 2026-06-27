@@ -168,6 +168,11 @@ export class AgentClient {
       return;
     }
 
+    if (message.type === "file.write.secure") {
+      void this.handleSecureFileWrite(message);
+      return;
+    }
+
     if (message.type === "command.execute") {
       this.rejectInsecureCommand(message.payload || {});
       return;
@@ -797,6 +802,108 @@ export class AgentClient {
         requestId,
         agentId: this.config.agentId,
         filePath,
+        errorCode,
+        error: errorMessage
+      });
+    }
+  }
+
+  async handleSecureFileWrite(message) {
+    let payload;
+
+    try {
+      const unwrapped = this.secureCommandService.unwrapMessage(message, {
+        expectedType: "file.write.secure",
+        requiredFields: [
+          "filePath",
+          "resolvedPath",
+          "expectedModifiedAt",
+          "expectedTotalBytes"
+        ]
+      });
+      payload = unwrapped.payload;
+      if (!Object.hasOwn(payload, "content")) {
+        const error = new Error("缺少必要字段: content");
+        error.code = "missing_required_field";
+        throw error;
+      }
+
+      const displayFilePath = String(payload.filePath);
+      const result = await this.executionGateway.writeTextFile(String(payload.resolvedPath), {
+        sessionId: String(payload.sessionId || ""),
+        baseCwd: String(payload.baseCwd || ""),
+        content: String(payload.content ?? ""),
+        encoding: String(payload.encoding || ""),
+        expectedModifiedAt: payload.expectedModifiedAt,
+        expectedTotalBytes: payload.expectedTotalBytes
+      });
+
+      this.send(
+        "file.write.completed",
+        {
+          requestId: String(payload.requestId || ""),
+          agentId: this.config.agentId,
+          sessionId: String(payload.sessionId || ""),
+          filePath: displayFilePath,
+          resolvedPath: result.resolvedPath,
+          baseCwd: result.baseCwd || "",
+          baseCwdSource: result.baseCwdSource || "",
+          fuzzyMatched: Boolean(result.fuzzyMatched),
+          encoding: String(result.encoding || "utf8"),
+          bytesWritten: Number(result.bytesWritten || 0),
+          totalBytes: Number(result.totalBytes || 0),
+          modifiedAt: result.modifiedAt || null,
+          writtenAt: result.writtenAt || new Date().toISOString()
+        },
+        true
+      );
+
+      logEvent(this.commandLogger, "info", "file.write.completed", {
+        requestId: String(payload.requestId || ""),
+        agentId: this.config.agentId,
+        sessionId: String(payload.sessionId || ""),
+        filePath: displayFilePath,
+        resolvedPath: result.resolvedPath,
+        baseCwd: result.baseCwd || "",
+        baseCwdSource: result.baseCwdSource || "",
+        fuzzyMatched: Boolean(result.fuzzyMatched),
+        encoding: String(result.encoding || "utf8"),
+        bytesWritten: Number(result.bytesWritten || 0),
+        totalBytes: Number(result.totalBytes || 0)
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const requestId = String(payload?.requestId || message?.payload?.requestId || "");
+      const sessionId = String(payload?.sessionId || "");
+      const filePath = String(payload?.filePath || "");
+      const resolvedPath = String(payload?.resolvedPath || "");
+      const errorCode =
+        error && typeof error === "object" && "code" in error
+          ? String(error.code || "FILE_WRITE_FAILED")
+          : "FILE_WRITE_FAILED";
+      const writtenAt = new Date().toISOString();
+
+      this.send(
+        "file.write.error",
+        {
+          requestId,
+          agentId: this.config.agentId,
+          sessionId,
+          filePath,
+          resolvedPath,
+          errorCode,
+          error: errorMessage,
+          writtenAt
+        },
+        true
+      );
+
+      logEvent(this.commandLogger, "warn", "file.write.failed", {
+        requestId,
+        agentId: this.config.agentId,
+        sessionId,
+        filePath,
+        resolvedPath,
         errorCode,
         error: errorMessage
       });

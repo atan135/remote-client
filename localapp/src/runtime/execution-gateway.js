@@ -1,5 +1,5 @@
 import { runCommand } from "../command-runner.js";
-import { readTextFilePreview } from "../file-reader.js";
+import { readTextFilePreview, writeTextFile as writeTextFileContent } from "../file-reader.js";
 
 export class ExecutionGateway {
   constructor(config, ptySessionManager) {
@@ -37,6 +37,37 @@ export class ExecutionGateway {
       baseCwdSource,
       maxBytes: this.config.remoteFileMaxBytes,
       windowsEncoding: this.config.windowsOutputEncoding
+    });
+  }
+
+  async writeTextFile(filePath, options = {}) {
+    const requestedPath = String(filePath || "").trim();
+    const sessionId = String(options.sessionId || "").trim();
+    let baseCwd = String(options.baseCwd || "").trim();
+    let baseCwdSource = baseCwd ? "request" : "";
+
+    if (sessionId) {
+      try {
+        const liveCwd = await this.ptySessionManager.querySessionCwd(sessionId, requestedPath);
+
+        if (liveCwd) {
+          baseCwd = liveCwd;
+          baseCwdSource = "terminal.current.cwd";
+        }
+      } catch (error) {
+        if (!baseCwd) {
+          throw error;
+        }
+      }
+    }
+
+    return writeTextFileContent(filePath, {
+      baseCwd,
+      baseCwdSource,
+      content: options.content,
+      encoding: options.encoding,
+      expectedModifiedAt: options.expectedModifiedAt,
+      expectedTotalBytes: options.expectedTotalBytes
     });
   }
 
