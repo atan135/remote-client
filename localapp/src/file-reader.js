@@ -67,7 +67,52 @@ export function readTextFilePreview(filePath, options = {}) {
   };
 }
 
-function resolveRequestedFilePath(requestedPath, baseCwd) {
+export function writeTextFile(filePath, options = {}) {
+  const requestedPath = normalizeFilePathInput(filePath);
+  const baseCwd = normalizeFilePathInput(options.baseCwd);
+  const baseCwdSource = String(options.baseCwdSource || "").trim();
+
+  if (!requestedPath) {
+    throw createFileError("文件路径不能为空", "FILE_PATH_REQUIRED");
+  }
+
+  const resolution = resolveRequestedFilePath(requestedPath, baseCwd);
+  const resolvedPath = resolution.resolvedPath;
+  const parentDirectory = path.dirname(resolvedPath);
+
+  assertExistingDirectory(parentDirectory, "FILE_PARENT_NOT_FOUND", "目标文件所在目录不存在");
+
+  const stat = statExistingFile(resolvedPath);
+
+  if (!stat.isFile()) {
+    throw createFileError("目标路径不是文件", "FILE_TARGET_NOT_FILE");
+  }
+
+  assertNoWriteConflict(stat, options);
+
+  const encoding = normalizeWritableEncoding(options.encoding);
+  const content = String(options.content ?? "");
+  const buffer = encodeWritableTextBuffer(content, encoding);
+
+  fs.writeFileSync(resolvedPath, buffer);
+
+  const writtenStat = fs.statSync(resolvedPath);
+
+  return {
+    requestedPath,
+    resolvedPath,
+    baseCwd: resolution.baseCwd,
+    baseCwdSource,
+    fuzzyMatched: Boolean(resolution.fuzzyMatched),
+    bytesWritten: buffer.length,
+    totalBytes: Math.max(0, Number(writtenStat.size) || 0),
+    encoding,
+    modifiedAt: writtenStat.mtime instanceof Date ? writtenStat.mtime.toISOString() : null,
+    writtenAt: new Date().toISOString()
+  };
+}
+
+export function resolveRequestedFilePath(requestedPath, baseCwd) {
   if (isUnsupportedPosixStylePath(requestedPath)) {
     throw new Error("当前 Windows agent 不支持自动转换 POSIX/Git Bash 风格路径，请输入 Windows 绝对路径或基准目录");
   }
@@ -254,7 +299,7 @@ function isWindowsDriveRelativePath(value) {
   return os.platform() === "win32" && /^[A-Za-z]:(?![\\/])/.test(candidate);
 }
 
-function normalizeFilePathInput(value) {
+export function normalizeFilePathInput(value) {
   const trimmed = String(value || "").trim();
 
   if (
@@ -283,6 +328,94 @@ function readFileBytes(filePath, bytesToRead) {
   } finally {
     fs.closeSync(fileDescriptor);
   }
+}
+
+function statExistingFile(filePath) {
+  try {
+    return fs.statSync(filePath);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw createFileError("目标文件不存在", "FILE_NOT_FOUND");
+    }
+
+    throw error;
+  }
+}
+
+function assertExistingDirectory(directory, code, message) {
+  let stat;
+
+  try {
+    stat = fs.statSync(directory);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw createFileError(message, code);
+    }
+
+    throw error;
+  }
+
+  if (!stat.isDirectory()) {
+    throw createFileError(message, code);
+  }
+}
+
+function assertNoWriteConflict(stat, options) {
+  const currentModifiedAt = stat.mtime instanceof Date ? stat.mtime.toISOString() : "";
+  const currentTotalBytes = Math.max(0, Number(stat.size) || 0);
+
+  if (hasExpectedValue(options.expectedModifiedAt) && String(options.expectedModifiedAt) !== currentModifiedAt) {
+    throw createFileError("文件已被修改，请刷新后重试", "FILE_CHANGED_CONFLICT", {
+      expectedModifiedAt: String(options.expectedModifiedAt),
+      actualModifiedAt: currentModifiedAt
+    });
+  }
+
+  if (hasExpectedValue(options.expectedTotalBytes) && Number(options.expectedTotalBytes) !== currentTotalBytes) {
+    throw createFileError("文件大小已变化，请刷新后重试", "FILE_CHANGED_CONFLICT", {
+      expectedTotalBytes: Number(options.expectedTotalBytes),
+      actualTotalBytes: currentTotalBytes
+    });
+  }
+}
+
+function hasExpectedValue(value) {
+  return value !== undefined && value !== null && String(value).trim() !== "";
+}
+
+function normalizeWritableEncoding(encoding) {
+  const requestedEncoding = String(encoding || "").trim();
+
+  if (requestedEncoding && iconv.encodingExists(requestedEncoding)) {
+    return requestedEncoding;
+  }
+
+  return "utf8";
+}
+
+function encodeWritableTextBuffer(content, encoding) {
+  const encoded = iconv.encode(content, encoding);
+
+  if (encoding === "utf16-be") {
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), encoded]);
+  }
+
+  if (encoding === "utf16le") {
+    return Buffer.concat([Buffer.from([0xff, 0xfe]), encoded]);
+  }
+
+  return encoded;
+}
+
+function createFileError(message, code, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+
+  for (const [key, value] of Object.entries(details)) {
+    error[key] = value;
+  }
+
+  return error;
 }
 
 function detectFileEncoding(buffer, windowsEncoding) {
