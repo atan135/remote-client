@@ -64,12 +64,14 @@ const browserHub = new BrowserHub();
 const commandDispatchContextSymbol = Symbol("commandDispatchContext");
 const pendingAgentDisconnects = new Map();
 const pendingRemoteFileReads = new Map();
+const pendingRemoteFileWrites = new Map();
 const pendingBrowserScreenshotRequests = new Map();
 const pendingTerminalSessionPersists = new Map();
 const pendingTerminalSessionTurnSyncs = new Map();
 const agentHeartbeatBroadcastState = new Map();
 let shutdownInProgress = false;
 const remoteFileReadTimeoutMs = Math.max(5000, Math.min(config.secureCommandTtlMs, 20000));
+const remoteFileWriteTimeoutMs = remoteFileReadTimeoutMs;
 const terminalSessionPersistDebounceMs = Math.max(0, config.terminalSessionPersistDebounceMs);
 const terminalSessionTurnSyncDebounceMs = Math.max(0, config.terminalSessionTurnSyncDebounceMs);
 const agentHeartbeatBroadcastIntervalMs = Math.max(0, config.agentHeartbeatBroadcastIntervalMs);
@@ -822,6 +824,10 @@ app.post("/api/remote-files/read", requireAuth, (req, res) => {
   void handleRemoteFileReadRequest(req, res);
 });
 
+app.post("/api/remote-files/write", requireAuth, (req, res) => {
+  void handleRemoteFileWriteRequest(req, res);
+});
+
 function handleScreenshotInfoRequest(_req, res) {
   res.json({
     enabled: screenshotService.isEnabled(),
@@ -1429,6 +1435,63 @@ async function handleRemoteFileReadRequest(req, res) {
   }
 }
 
+async function handleRemoteFileWriteRequest(req, res) {
+  const body = isPlainObject(req.body) ? req.body : {};
+  const agentId = String(body.agentId || "").trim();
+  const sessionId = String(body.sessionId || "").trim();
+  const filePath = normalizeRemoteFilePath(body.filePath);
+  const resolvedPath = normalizeRemoteFilePath(body.resolvedPath);
+  const baseCwd = normalizeRemoteFilePath(body.baseCwd || body.cwd);
+  const encoding = String(body.encoding || "utf8").trim() || "utf8";
+  const expectedModifiedAt = body.expectedModifiedAt ?? body.modifiedAt ?? null;
+  const expectedTotalBytes = body.expectedTotalBytes ?? body.totalBytes ?? null;
+  const hasContent = Object.prototype.hasOwnProperty.call(body, "content");
+  const content = hasContent ? String(body.content ?? "") : "";
+  const isTruncated = Boolean(body.truncated || body.isTruncated || body.contentTruncated);
+
+  if (!agentId || !filePath || !resolvedPath || !hasContent) {
+    res.status(400).json({ message: "agentId, filePath, resolvedPath and content are required" });
+    return;
+  }
+
+  if (isTruncated) {
+    res.status(400).json({ message: "截断内容不能保存，请先读取完整文件内容" });
+    return;
+  }
+
+  try {
+    const item = await dispatchRemoteFileWriteForUser({
+      user: req.auth.user,
+      agentId,
+      sessionId,
+      filePath,
+      resolvedPath,
+      baseCwd,
+      encoding,
+      expectedModifiedAt,
+      expectedTotalBytes,
+      content
+    });
+
+    res.json({ item });
+  } catch (error) {
+    logEvent(commandLogger, "warn", "file.write.request_failed", {
+      agentId,
+      sessionId,
+      filePath,
+      resolvedPath,
+      baseCwd,
+      encoding,
+      contentChars: content.length,
+      contentBytes: getTextByteLength(content, encoding),
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res.status(error.statusCode || 500).json({ message: error.message || "远程保存文件失败" });
+  }
+}
+
 const clientDistPath = path.resolve(__dirname, "../../client/dist");
 
 if (fs.existsSync(clientDistPath)) {
@@ -1745,6 +1808,7 @@ function scheduleAgentDisconnectHandling(agentId, meta = {}) {
     const changedCommands = commandStore.markAgentDisconnected(agentId);
     const changedSessions = terminalSessionStore.markAgentDisconnected(agentId);
     rejectPendingRemoteFileReadsByAgent(agentId, "目标 agent 已断开连接，文件读取未完成");
+    rejectPendingRemoteFileWritesByAgent(agentId, "目标 agent 已断开连接，文件保存未完成");
 
     logEvent(serverLogger, "warn", "agent.disconnect_grace_expired", {
       agentId,
@@ -1915,6 +1979,164 @@ function rejectPendingRemoteFileReadsByAgent(agentId, errorMessage) {
   }
 }
 
+function createPendingRemoteFileWrite({
+  requestId,
+  agentId,
+  sessionId,
+  filePath,
+  resolvedPath,
+  encoding,
+  content,
+  user
+}) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingRemoteFileWrites.delete(requestId);
+      logEvent(commandLogger, "warn", "file.write.timeout", {
+        requestId,
+        agentId,
+        sessionId,
+        filePath,
+        resolvedPath,
+        encoding,
+        contentChars: String(content ?? "").length,
+        contentBytes: getTextByteLength(String(content ?? ""), encoding),
+        userId: user.id,
+        username: user.username,
+        timeoutMs: remoteFileWriteTimeoutMs
+      });
+      reject(createHttpError(504, "远程保存文件超时"));
+    }, remoteFileWriteTimeoutMs);
+
+    pendingRemoteFileWrites.set(requestId, {
+      requestId,
+      agentId,
+      sessionId,
+      filePath,
+      resolvedPath,
+      encoding,
+      userId: user.id,
+      username: user.username,
+      timer,
+      resolve,
+      reject
+    });
+  });
+}
+
+function cancelPendingRemoteFileWrite(requestId) {
+  const pending = pendingRemoteFileWrites.get(String(requestId || "").trim());
+
+  if (!pending) {
+    return null;
+  }
+
+  if (pending.timer) {
+    clearTimeout(pending.timer);
+  }
+
+  pendingRemoteFileWrites.delete(pending.requestId);
+  return pending;
+}
+
+function resolveRemoteFileWriteRequest(payload) {
+  const requestId = String(payload?.requestId || "").trim();
+  const pending = cancelPendingRemoteFileWrite(requestId);
+
+  if (!pending) {
+    return;
+  }
+
+  const item = {
+    requestId,
+    agentId: String(payload?.agentId || pending.agentId || ""),
+    sessionId: String(payload?.sessionId || pending.sessionId || ""),
+    filePath: String(payload?.filePath || pending.filePath || ""),
+    resolvedPath: String(payload?.resolvedPath || pending.resolvedPath || ""),
+    baseCwd: String(payload?.baseCwd || ""),
+    baseCwdSource: String(payload?.baseCwdSource || ""),
+    fuzzyMatched: Boolean(payload?.fuzzyMatched),
+    encoding: String(payload?.encoding || pending.encoding || "utf8"),
+    bytesWritten: Number(payload?.bytesWritten || 0),
+    totalBytes: Number(payload?.totalBytes || payload?.bytesWritten || 0),
+    modifiedAt: payload?.modifiedAt || null,
+    writtenAt: payload?.writtenAt || new Date().toISOString()
+  };
+
+  logEvent(commandLogger, "info", "file.write.completed", {
+    requestId,
+    agentId: item.agentId,
+    sessionId: item.sessionId,
+    filePath: item.filePath,
+    resolvedPath: item.resolvedPath,
+    baseCwd: item.baseCwd,
+    baseCwdSource: item.baseCwdSource,
+    fuzzyMatched: item.fuzzyMatched,
+    encoding: item.encoding,
+    bytesWritten: item.bytesWritten,
+    totalBytes: item.totalBytes,
+    userId: pending.userId,
+    username: pending.username
+  });
+
+  pending.resolve(item);
+}
+
+function rejectRemoteFileWriteRequest(payload) {
+  const requestId = String(payload?.requestId || "").trim();
+  const pending = cancelPendingRemoteFileWrite(requestId);
+
+  if (!pending) {
+    return;
+  }
+
+  const errorMessage = String(payload?.error || "远程保存文件失败");
+  const errorCode = String(payload?.errorCode || "");
+
+  logEvent(commandLogger, "warn", "file.write.failed", {
+    requestId,
+    agentId: String(payload?.agentId || pending.agentId || ""),
+    sessionId: String(payload?.sessionId || pending.sessionId || ""),
+    filePath: String(payload?.filePath || pending.filePath || ""),
+    resolvedPath: String(payload?.resolvedPath || pending.resolvedPath || ""),
+    encoding: String(payload?.encoding || pending.encoding || "utf8"),
+    errorCode,
+    error: errorMessage,
+    userId: pending.userId,
+    username: pending.username
+  });
+
+  pending.reject(createHttpError(mapRemoteFileWriteErrorCode(errorCode), errorMessage));
+}
+
+function rejectPendingRemoteFileWritesByAgent(agentId, errorMessage) {
+  const normalizedAgentId = String(agentId || "").trim();
+
+  if (!normalizedAgentId) {
+    return;
+  }
+
+  for (const [requestId, pending] of pendingRemoteFileWrites.entries()) {
+    if (pending.agentId !== normalizedAgentId) {
+      continue;
+    }
+
+    cancelPendingRemoteFileWrite(requestId);
+    logEvent(commandLogger, "warn", "file.write.disconnected", {
+      requestId,
+      agentId: pending.agentId,
+      sessionId: pending.sessionId,
+      filePath: pending.filePath,
+      resolvedPath: pending.resolvedPath,
+      encoding: pending.encoding,
+      error: errorMessage,
+      userId: pending.userId,
+      username: pending.username
+    });
+    pending.reject(createHttpError(409, errorMessage));
+  }
+}
+
 function mapRemoteFileReadErrorCode(errorCode) {
   const normalized = String(errorCode || "").trim().toUpperCase();
 
@@ -1927,6 +2149,34 @@ function mapRemoteFileReadErrorCode(errorCode) {
   }
 
   return 400;
+}
+
+function mapRemoteFileWriteErrorCode(errorCode) {
+  const normalized = String(errorCode || "").trim().toUpperCase();
+
+  if (normalized === "FILE_CHANGED_CONFLICT") {
+    return 409;
+  }
+
+  if (normalized === "FILE_NOT_FOUND" || normalized === "ENOENT") {
+    return 404;
+  }
+
+  if (normalized === "EACCES" || normalized === "EPERM") {
+    return 403;
+  }
+
+  if (
+    normalized === "FILE_PATH_REQUIRED" ||
+    normalized === "FILE_PARENT_NOT_FOUND" ||
+    normalized === "FILE_TARGET_NOT_FILE" ||
+    normalized === "EAMBIGUOUS" ||
+    normalized === "MISSING_REQUIRED_FIELD"
+  ) {
+    return 400;
+  }
+
+  return mapRemoteFileReadErrorCode(normalized);
 }
 
 function updateTerminalSessionCwdFromRemoteFileRead(item) {
@@ -2326,6 +2576,16 @@ async function handleAgentMessage(agentId, socket, message) {
 
   if (message.type === "file.read.error") {
     rejectRemoteFileReadRequest(message.payload);
+    return;
+  }
+
+  if (message.type === "file.write.completed") {
+    resolveRemoteFileWriteRequest(message.payload);
+    return;
+  }
+
+  if (message.type === "file.write.error") {
+    rejectRemoteFileWriteRequest(message.payload);
     return;
   }
 
@@ -2853,6 +3113,49 @@ function dispatchRemoteFileRead(agentId, context) {
   return pendingPromise;
 }
 
+function dispatchRemoteFileWrite(agentId, context) {
+  const socket = agentRegistry.getSocket(agentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createHttpError(409, "目标 agent 当前不在线");
+  }
+
+  const requestId = String(context.requestId || "").trim() || randomUUID();
+  const secureEnvelope = secureCommandService.createFileWriteEnvelope({
+    requestId,
+    agentId,
+    sessionId: context.sessionId,
+    filePath: context.filePath,
+    resolvedPath: context.resolvedPath,
+    baseCwd: context.baseCwd,
+    encoding: context.encoding,
+    expectedModifiedAt: context.expectedModifiedAt,
+    expectedTotalBytes: context.expectedTotalBytes,
+    content: context.content,
+    operatorUser: context.user,
+    authCodeBinding: context.authCodeBinding
+  });
+  const pendingPromise = createPendingRemoteFileWrite({
+    requestId,
+    agentId,
+    sessionId: context.sessionId,
+    filePath: context.filePath,
+    resolvedPath: context.resolvedPath,
+    encoding: context.encoding,
+    content: context.content,
+    user: context.user
+  });
+
+  try {
+    socket.send(JSON.stringify(secureEnvelope));
+  } catch (error) {
+    cancelPendingRemoteFileWrite(requestId);
+    throw error;
+  }
+
+  return pendingPromise;
+}
+
 async function dispatchTerminalSessionInputForUser({ user, sessionId, input, logicalInput = "" }) {
   const normalizedSessionId = String(sessionId || "").trim();
   const normalizedInput = String(input || "");
@@ -2995,6 +3298,87 @@ async function dispatchRemoteFileReadForUser({ user, agentId, sessionId, filePat
     });
   } catch (error) {
     throw createHttpError(error.statusCode || 500, error.message || "远程读取文件失败");
+  }
+}
+
+async function dispatchRemoteFileWriteForUser({
+  user,
+  agentId,
+  sessionId,
+  filePath,
+  resolvedPath,
+  baseCwd,
+  encoding,
+  expectedModifiedAt,
+  expectedTotalBytes,
+  content
+}) {
+  const normalizedAgentId = String(agentId || "").trim();
+  const normalizedSessionId = String(sessionId || "").trim();
+  const normalizedFilePath = normalizeRemoteFilePath(filePath);
+  const normalizedResolvedPath = normalizeRemoteFilePath(resolvedPath);
+  const requestedBaseCwd = normalizeRemoteFilePath(baseCwd);
+  const normalizedEncoding = String(encoding || "utf8").trim() || "utf8";
+  const normalizedContent = String(content ?? "");
+  const requestId = randomUUID();
+
+  if (!normalizedAgentId || !normalizedFilePath || !normalizedResolvedPath) {
+    throw createHttpError(400, "agentId, filePath and resolvedPath are required");
+  }
+
+  const socket = agentRegistry.getSocket(normalizedAgentId);
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    throw createHttpError(409, "目标 agent 当前不在线");
+  }
+
+  await ensureManagedAgentReadyForControl(normalizedAgentId);
+  const authCodeBinding = await authCodeService.findByUserIdAndAgentId(user.id, normalizedAgentId);
+
+  if (!authCodeBinding) {
+    throw createHttpError(400, "当前用户未为该设备配置 auth_code");
+  }
+
+  const fileSessionContext = await resolveRemoteFileSessionContext({
+    agentId: normalizedAgentId,
+    sessionId: normalizedSessionId
+  });
+  const dispatchBaseCwd = requestedBaseCwd || fileSessionContext?.baseCwd || "";
+
+  logEvent(commandLogger, "info", "file.write.requested", {
+    requestId,
+    agentId: normalizedAgentId,
+    sessionId: normalizedSessionId,
+    filePath: normalizedFilePath,
+    resolvedPath: normalizedResolvedPath,
+    baseCwd: dispatchBaseCwd,
+    sessionStatus: fileSessionContext?.status || "",
+    baseCwdSource: requestedBaseCwd ? "request" : fileSessionContext?.baseCwdSource || "",
+    encoding: normalizedEncoding,
+    contentChars: normalizedContent.length,
+    contentBytes: getTextByteLength(normalizedContent, normalizedEncoding),
+    expectedModifiedAt: expectedModifiedAt || null,
+    expectedTotalBytes: expectedTotalBytes ?? null,
+    userId: user.id,
+    username: user.username
+  });
+
+  try {
+    return await dispatchRemoteFileWrite(normalizedAgentId, {
+      requestId,
+      user,
+      authCodeBinding,
+      sessionId: normalizedSessionId,
+      filePath: normalizedFilePath,
+      resolvedPath: normalizedResolvedPath,
+      baseCwd: dispatchBaseCwd,
+      encoding: normalizedEncoding,
+      expectedModifiedAt,
+      expectedTotalBytes,
+      content: normalizedContent
+    });
+  } catch (error) {
+    throw createHttpError(error.statusCode || 500, error.message || "远程保存文件失败");
   }
 }
 
@@ -3872,6 +4256,14 @@ function normalizeRemoteFilePath(value) {
   }
 
   return trimmed;
+}
+
+function getTextByteLength(value, encoding = "utf8") {
+  try {
+    return Buffer.byteLength(String(value ?? ""), String(encoding || "utf8"));
+  } catch {
+    return Buffer.byteLength(String(value ?? ""), "utf8");
+  }
 }
 
 function isPathAbsoluteForKnownPlatforms(value) {

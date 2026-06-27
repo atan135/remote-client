@@ -247,6 +247,60 @@ export class SecureCommandService {
     });
   }
 
+  createFileWriteEnvelope({
+    requestId,
+    agentId,
+    sessionId,
+    filePath,
+    resolvedPath,
+    baseCwd,
+    encoding,
+    expectedModifiedAt,
+    expectedTotalBytes,
+    content,
+    operatorUser,
+    authCodeBinding
+  }) {
+    const issuedAt = new Date();
+    const sentAt = issuedAt.toISOString();
+    const expiresAt = new Date(issuedAt.getTime() + this.config.secureCommandTtlMs).toISOString();
+    const normalizedContent = String(content ?? "");
+
+    return this.createEncryptedEnvelope({
+      messageType: "file.write.secure",
+      requestId,
+      agentId,
+      operatorUser,
+      authCodeBinding,
+      plaintextPayload: {
+        requestId,
+        agentId,
+        sessionId: String(sessionId || ""),
+        filePath,
+        resolvedPath,
+        baseCwd: String(baseCwd || ""),
+        encoding: String(encoding || "utf8"),
+        expectedModifiedAt: expectedModifiedAt || null,
+        expectedTotalBytes: expectedTotalBytes ?? null,
+        content: normalizedContent,
+        issuedAt: sentAt,
+        expiresAt,
+        nonce: randomUUID()
+      },
+      sentAt,
+      expiresAt,
+      metaExtra: {
+        sessionId: String(sessionId || ""),
+        filePath,
+        resolvedPath,
+        hasBaseCwd: Boolean(String(baseCwd || "").trim()),
+        encoding: String(encoding || "utf8"),
+        contentChars: normalizedContent.length,
+        contentBytes: getTextByteLength(normalizedContent, encoding)
+      }
+    });
+  }
+
   createEncryptedEnvelope({
     messageType,
     requestId,
@@ -304,5 +358,13 @@ function readTextFile(filePath) {
     return fs.readFileSync(filePath, "utf8");
   } catch (error) {
     throw new Error(`读取密钥文件失败: ${filePath} (${error.message})`);
+  }
+}
+
+function getTextByteLength(value, encoding = "utf8") {
+  try {
+    return Buffer.byteLength(String(value ?? ""), String(encoding || "utf8"));
+  } catch {
+    return Buffer.byteLength(String(value ?? ""), "utf8");
   }
 }
