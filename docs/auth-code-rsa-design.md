@@ -9,7 +9,7 @@
 - 只有目标 `localapp` 能看到命令/会话/文件读取请求的明文
 - `localapp` 能确认消息确实来自受信任的 `webserver`
 
-当前这套方案已经不是纯设计，命令、安全终端会话和远程文件读取都已经复用同一套安全 envelope 落地。
+当前这套方案已经不是纯设计，命令、安全终端会话和远程文件读取都已经复用同一套安全 envelope 落地。远程文件保存处于协议设计阶段，也必须沿用同一套安全 envelope。
 
 ## 核心设计
 
@@ -93,6 +93,7 @@
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
+- `file.write.secure`（设计中）
 
 这意味着当前安全链路已经不只保护“一次性命令”，也保护：
 
@@ -101,6 +102,25 @@
 - 终端 resize
 - 会话终止
 - 远程文件读取
+- 远程文件保存（设计中）
+
+`file.write.secure` 的解密后业务载荷应包含：
+
+- `requestId`
+- `agentId`
+- `sessionId`
+- `filePath`
+- `resolvedPath`
+- `baseCwd`
+- `content`
+- `encoding`
+- `expectedModifiedAt`
+- `expectedTotalBytes`
+- `issuedAt`
+- `expiresAt`
+- `nonce`
+
+`resolvedPath`、`expectedModifiedAt`、`expectedTotalBytes` 来自最近一次成功的 `file.read.completed`，用于避免保存时重新解析到不同路径，并做远程文件变化冲突检测。
 
 ## 密钥生成工具
 
@@ -224,11 +244,13 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 - `meta.authCodeFingerprint`
 - `meta.webserverSignFingerprint`
 
-终端会话和文件读取会在 `meta` 中额外带上：
+终端会话、文件读取和文件保存会在 `meta` 中额外带上：
 
 - `sessionId`
 - `profile`
 - `filePath`
+
+文件保存的 `meta` 可额外带上 `resolvedPath`、`encoding`、`expectedModifiedAt`、`expectedTotalBytes` 这类不含完整文件内容的辅助信息；不得在 `meta`、日志或错误响应里输出完整大段 `content`。
 
 ## `localapp` 当前执行前校验
 
@@ -242,6 +264,7 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 6. `expiresAt` 必须有效且未过期
 7. `nonce` 必须存在且未重复使用
 8. 调用方要求的字段必须齐全
+9. 对 `file.write.secure`，写入前还必须校验目标文件当前 `mtime` 和 `size` 分别匹配 `expectedModifiedAt` 和 `expectedTotalBytes`
 
 如果任一环节失败：
 
@@ -249,6 +272,7 @@ WEBSERVER_SIGN_PUBLIC_KEY_PATH=./keys/webserver_sign_public.pem
 - 记录结构化日志
 - 一次性命令会回传 `command.finished` 失败态
 - 终端/文件读取会回传对应错误事件
+- 文件保存会回传 `file.write.error`，冲突时拒绝覆盖并提示重新打开
 
 ## 当前日志约束
 

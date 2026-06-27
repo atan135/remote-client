@@ -20,7 +20,7 @@
 1. 保留了原有一次性命令执行能力
 2. 已新增交互式 PTY 终端会话能力
 3. 已新增本地调试入口
-4. 已新增远程文本文件读取能力
+4. 已新增远程文本文件读取能力，远程文本文件保存处于协议设计阶段
 5. 已支持 `Claude Code` / `Codex` 这类 profile 驱动的终端会话
 
 ## 当前能力概览
@@ -89,7 +89,7 @@
 - 需要 `LOCAL_DEBUG_TOKEN`
 - 仅用于开发联调
 
-## 4. 远程文本文件读取
+## 4. 远程文本文件读取与保存
 
 当前还新增了独立能力。它复用安全 envelope，但不是通过终端命令读取文件，也不依赖 PTY 会话存在：
 
@@ -108,6 +108,16 @@
 
 注意：自动获取当前目录只用于解析路径，文件内容读取仍不通过终端命令。Windows `localapp` 也不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
 
+远程文件保存的设计边界：
+
+- 保存能力必须复用安全 envelope，新增 `file.write.secure`，不能恢复明文派发。
+- 保存必须由 `localapp` 使用文件系统 API 写入，不能通过 shell、PTY 或终端命令写文件。
+- `.txt` 支持纯文本直接编辑；`.md`、`.markdown`、`.mdown`、`.mkd`、`.mkdn` 支持 Markdown 预览和纯文本编辑切换，保存时写回纯文本。
+- 读取结果已截断、`resolvedPath` 为空、读取失败、二进制文件、路径解析冲突、远程文件已变化冲突时不允许保存。
+- 写入前必须校验目标文件当前 `mtime` 和 `size` 是否分别匹配读取时的 `modifiedAt` 和 `totalBytes`；不匹配时拒绝覆盖并要求用户重新打开文件。
+- `file.write.secure` 解密载荷应包含 `requestId`、`agentId`、`sessionId`、`filePath`、`resolvedPath`、`baseCwd`、`content`、`encoding`、`expectedModifiedAt`、`expectedTotalBytes`、`issuedAt`、`expiresAt`、`nonce`。
+- 写入结果通过 `file.write.completed` 或 `file.write.error` 回传；日志和错误响应不得输出完整大段文件内容。
+
 ## 当前实现状态
 
 ## 1. `webserver` 侧已落地
@@ -121,6 +131,10 @@
 - `/api/terminal-sessions/:sessionId`
 - `DELETE /api/terminal-sessions/:sessionId`
 - `/api/remote-files/read`
+
+拟新增：
+
+- `/api/remote-files/write`
 
 当前服务端也已实现：
 
@@ -169,6 +183,7 @@
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
+- `file.write.secure`（设计中）
 
 ## 2. agent -> server
 
@@ -186,6 +201,8 @@
 - `terminal.session.error`
 - `file.read.completed`
 - `file.read.error`
+- `file.write.completed`（设计中）
+- `file.write.error`（设计中）
 
 ## 3. server -> browser
 

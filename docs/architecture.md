@@ -40,7 +40,7 @@ Vue 3 控制台，负责：
 - 一次性命令下发
 - 交互式终端会话创建、输入、终止、删除
 - 对话式命令与 Codex / AI Agent 会话入口
-- 远程文本文件预览
+- 远程文本文件预览；远程文件保存仍处于协议设计阶段
 - `auth_code` 管理
 - 用户审核、设备审核和设备绑定归属管理
 
@@ -149,7 +149,7 @@ agent 注册时会上报本机 RSA 公钥和指纹，服务端会规范化公钥
   - 私钥在服务端签名
   - 公钥分发到 `localapp` 做验签
 
-### 当前已落地的安全消息类型
+### 当前已落地和拟新增的安全消息类型
 
 `webserver -> localapp` 侧已落地：
 
@@ -159,6 +159,10 @@ agent 注册时会上报本机 RSA 公钥和指纹，服务端会规范化公钥
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
+
+拟新增：
+
+- `file.write.secure`
 
 ### `localapp` 执行前校验
 
@@ -268,7 +272,7 @@ profile 当前可约束：
 
 当前仍以“摘要持久化”为主，不是完整原始终端流长期落库。
 
-## 远程文件预览
+## 远程文件预览与保存
 
 ### 服务端入口
 
@@ -288,6 +292,89 @@ profile 当前可约束：
 当前前端已支持在终端详情页中打开和预览文本文件。
 
 注意：文件内容读取仍由 `localapp` 的 `fs/stat/read` 完成，不通过 shell 或 PTY 执行读文件命令。Windows `localapp` 仍不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
+
+### 保存协议设计
+
+远程文件保存计划作为文件读取的配套能力新增，仍必须复用 `shared/secure-command.mjs` 生成安全 envelope，不恢复明文派发，也不能通过终端命令写文件。
+
+支持的编辑类型边界：
+
+- `.txt`：直接按纯文本编辑和保存。
+- `.md`、`.markdown`、`.mdown`、`.mkd`、`.mkdn`：允许在 Markdown 预览和纯文本编辑之间切换；保存时写回纯文本内容。
+
+以下状态不允许保存，前端和服务端应阻止发起写入，agent 写入前也必须兜底拒绝：
+
+- 读取结果已截断。
+- `resolvedPath` 为空。
+- 读取失败或文件未成功打开。
+- agent 判定为二进制文件。
+- 路径解析存在冲突，例如模糊匹配无法唯一确定目标。
+- 远程文件在打开后已变化，表现为写入前 `mtime` 或 `size` 与读取时记录不一致。
+
+拟新增服务端入口：
+
+- `POST /api/remote-files/write`
+
+拟新增 `server -> agent` 安全消息：
+
+- `file.write.secure`
+
+`file.write.secure` 解密后的业务载荷应包含：
+
+- `requestId`
+- `agentId`
+- `sessionId`
+- `filePath`
+- `resolvedPath`
+- `baseCwd`
+- `content`
+- `encoding`
+- `expectedModifiedAt`
+- `expectedTotalBytes`
+- `issuedAt`
+- `expiresAt`
+- `nonce`
+
+其中 `resolvedPath`、`expectedModifiedAt`、`expectedTotalBytes` 必须来自最近一次成功的 `file.read.completed`，用于避免相对路径重新解析到不同文件或覆盖已变化文件。
+
+拟新增 `agent -> server` 回传：
+
+- `file.write.completed`
+- `file.write.error`
+
+`file.write.completed` 载荷应包含：
+
+- `requestId`
+- `agentId`
+- `sessionId`
+- `filePath`
+- `resolvedPath`
+- `baseCwd`
+- `encoding`
+- `bytesWritten`
+- `modifiedAt`
+- `totalBytes`
+- `writtenAt`
+
+`file.write.error` 载荷应包含：
+
+- `requestId`
+- `agentId`
+- `sessionId`
+- `filePath`
+- `resolvedPath`
+- `errorCode`
+- `error`
+- `writtenAt`
+
+保存冲突策略：
+
+1. agent 解析并确认目标 `resolvedPath` 后，写入前读取当前 `stat`。
+2. 当前 `mtime` 必须等于 `expectedModifiedAt`，当前 `size` 必须等于 `expectedTotalBytes`。
+3. 任一不匹配时拒绝覆盖，返回冲突错误；浏览器提示用户重新打开文件后再编辑。
+4. 校验通过后才按 `encoding` 写入纯文本内容，并返回新的 `modifiedAt` 和 `totalBytes`。
+
+保存结果和错误仍通过现有 WebSocket 业务消息回传；文件内容不应作为日志、接口错误或 UI 通知的大段文本输出。
 
 ## `localapp` 模块说明
 
@@ -381,6 +468,8 @@ profile 当前可约束：
 - `terminal.session.error`
 - `file.read.completed`
 - `file.read.error`
+- `file.write.completed`（设计中）
+- `file.write.error`（设计中）
 
 ### server -> agent
 
@@ -395,6 +484,7 @@ profile 当前可约束：
 - `terminal.session.resize.secure`
 - `terminal.session.terminate.secure`
 - `file.read.secure`
+- `file.write.secure`（设计中）
 
 ### server -> browser
 
@@ -442,6 +532,15 @@ profile 当前可约束：
 3. agent 对相对路径优先探测活动终端当前目录，并按需要做唯一文件名模糊匹配
 4. agent 读取文件并返回 `file.read.completed` 或 `file.read.error`
 5. 服务端将结果同步回浏览器；如果返回的是实时终端目录，会同步更新对应会话 `cwd`
+
+### 远程文件保存（设计中）
+
+1. 浏览器基于一次成功的文件读取结果进入编辑态。
+2. 浏览器只允许支持的文本类型发起保存，并带上 `resolvedPath`、`modifiedAt`、`totalBytes` 作为期望版本。
+3. 服务端生成 `file.write.secure`。
+4. agent 验签、解密并校验 `agentId`、`expiresAt`、`nonce`。
+5. agent 写入前校验远程文件当前 `mtime` 和 `size`，不一致则拒绝覆盖。
+6. agent 写入成功后返回 `file.write.completed`，失败则返回 `file.write.error`。
 
 ## 日志
 
