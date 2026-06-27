@@ -72,6 +72,8 @@ export const useConsoleStore = defineStore("console", () => {
   const remoteFilePathsByContext = reactive(new Map());
   const remoteFileBaseCwdsByContext = reactive(new Map());
   const remoteFileErrorsByContext = reactive(new Map());
+  const remoteFileSaveErrorsByContext = reactive(new Map());
+  const savingRemoteFileContextsByContext = reactive(new Map());
   const remoteFileViewersByContext = reactive(new Map());
   const emptyRemoteFileViewer = createEmptyRemoteFileViewer();
   const bootstrapping = ref(true);
@@ -336,6 +338,8 @@ export const useConsoleStore = defineStore("console", () => {
   const remoteFilePath = computed(() => getRemoteFilePathForContext(activeRemoteFileContext.value));
   const remoteFileBaseCwd = computed(() => getRemoteFileBaseCwdForContext(activeRemoteFileContext.value));
   const remoteFileError = computed(() => getRemoteFileErrorForContext(activeRemoteFileContext.value));
+  const remoteFileSaveError = computed(() => getRemoteFileSaveErrorForContext(activeRemoteFileContext.value));
+  const savingRemoteFile = computed(() => isSavingRemoteFileForContext(activeRemoteFileContext.value));
   const remoteFileViewer = computed(() => getRemoteFileViewerForContext(activeRemoteFileContext.value));
 
   const visibleCommands = computed(() => {
@@ -1218,6 +1222,7 @@ export const useConsoleStore = defineStore("console", () => {
 
     setRemoteFilePathForContext(context, value);
     clearRemoteFileErrorForContext(context);
+    clearRemoteFileSaveErrorForContext(context);
   }
 
   function updateRemoteFileBaseCwd(value) {
@@ -1229,6 +1234,7 @@ export const useConsoleStore = defineStore("console", () => {
 
     setRemoteFileBaseCwdForContext(context, value);
     clearRemoteFileErrorForContext(context);
+    clearRemoteFileSaveErrorForContext(context);
   }
 
   function clearRemoteFilePreviewViewer(payload = {}) {
@@ -1282,6 +1288,7 @@ export const useConsoleStore = defineStore("console", () => {
 
     readingRemoteFile.value = true;
     clearRemoteFileErrorForContext(context);
+    clearRemoteFileSaveErrorForContext(context);
 
     try {
       const response = await fetch("/api/remote-files/read", {
@@ -1326,6 +1333,145 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     } finally {
       readingRemoteFile.value = false;
+    }
+  }
+
+  async function saveRemoteFile(payload = {}) {
+    const payloadContext = String(payload?.context || "").trim();
+    const payloadContextParts = getRemoteFileContextParts(payloadContext);
+    const payloadAgentId = String(
+      payload?.agentId || payloadContextParts.agentId || selectedAgentId.value || ""
+    ).trim();
+    const payloadSessionId = String(
+      payload?.sessionId || payloadContextParts.sessionId || activeTerminalSession.value?.sessionId || ""
+    ).trim();
+    const context = payloadContext || createRemoteFileContext(payloadAgentId, payloadSessionId);
+    const contextParts = getRemoteFileContextParts(context);
+    const viewer = getRemoteFileViewerForContext(context);
+    const agentId = String(payload?.agentId || viewer.agentId || contextParts.agentId || "").trim();
+    const sessionId = String(payload?.sessionId || viewer.sessionId || contextParts.sessionId || "").trim();
+    const filePath = String(payload?.filePath || viewer.filePath || viewer.requestedPath || "").trim();
+    const resolvedPath = String(payload?.resolvedPath || viewer.resolvedPath || "").trim();
+    const hasPayloadBaseCwd =
+      payload &&
+      (Object.prototype.hasOwnProperty.call(payload, "baseCwd") ||
+        Object.prototype.hasOwnProperty.call(payload, "cwd"));
+    const baseCwd = String(
+      hasPayloadBaseCwd ? payload?.baseCwd ?? payload?.cwd ?? "" : viewer.baseCwd || ""
+    );
+    const hasPayloadContent = payload && Object.prototype.hasOwnProperty.call(payload, "content");
+    const content = String(hasPayloadContent ? payload.content ?? "" : viewer.content || "");
+    const encoding = String(payload?.encoding || viewer.encoding || "utf8");
+    const modifiedAt = payload?.modifiedAt ?? viewer.modifiedAt ?? null;
+    const totalBytes = Number(payload?.totalBytes ?? viewer.totalBytes ?? 0);
+
+    if (!context || !agentId) {
+      const message = "缺少设备 ID，无法保存远程文件";
+      setRemoteFileSaveErrorForContext(context, message);
+      setRemoteFileErrorForContext(context, message);
+      return false;
+    }
+
+    if (!filePath) {
+      const message = "缺少文件路径，无法保存远程文件";
+      setRemoteFileSaveErrorForContext(context, message);
+      setRemoteFileErrorForContext(context, message);
+      return false;
+    }
+
+    if (!resolvedPath) {
+      const message = "请先重新打开文件，确认远程解析路径后再保存";
+      setRemoteFileSaveErrorForContext(context, message);
+      setRemoteFileErrorForContext(context, message);
+      return false;
+    }
+
+    if (Boolean(payload?.truncated ?? viewer.truncated)) {
+      const message = "文件内容已被截断，请重新完整打开后再保存";
+      setRemoteFileSaveErrorForContext(context, message);
+      setRemoteFileErrorForContext(context, message);
+      return false;
+    }
+
+    setSavingRemoteFileForContext(context, true);
+    clearRemoteFileSaveErrorForContext(context);
+
+    try {
+      const response = await fetch("/api/remote-files/write", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          agentId,
+          sessionId,
+          filePath,
+          resolvedPath,
+          baseCwd,
+          encoding,
+          content,
+          modifiedAt,
+          totalBytes,
+          expectedModifiedAt: modifiedAt,
+          expectedTotalBytes: totalBytes
+        })
+      });
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        const message = "请先登录后再保存远程文件";
+        setRemoteFileSaveErrorForContext(context, message);
+        setRemoteFileErrorForContext(context, message);
+        return false;
+      }
+
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(result.message || "远程保存文件失败");
+      }
+
+      const item = result.item || {};
+      const savedAt =
+        item.writtenAt || item.writeAt || item.savedAt || item.readAt || new Date().toISOString();
+      const savedTotalBytes = Number(item.totalBytes ?? item.bytesWritten ?? totalBytes);
+      const savedViewer = {
+        ...viewer,
+        sessionId,
+        requestId: String(item.requestId || viewer.requestId || ""),
+        agentId: String(item.agentId || agentId),
+        filePath: String(item.filePath || filePath),
+        requestedPath: String(item.requestedPath || item.filePath || filePath),
+        resolvedPath: String(item.resolvedPath || resolvedPath),
+        baseCwd: String(item.baseCwd ?? baseCwd),
+        baseCwdSource: String(item.baseCwdSource || viewer.baseCwdSource || ""),
+        content,
+        savedContent: content,
+        lastSavedContent: content,
+        dirtyBaseContent: content,
+        truncated: false,
+        bytesRead: savedTotalBytes,
+        totalBytes: savedTotalBytes,
+        encoding: String(item.encoding || encoding),
+        modifiedAt: item.modifiedAt || modifiedAt,
+        writtenAt: savedAt,
+        readAt: item.readAt || savedAt,
+        openedAt: item.openedAt || savedAt
+      };
+
+      setRemoteFileViewerForContext(context, savedViewer);
+      setRemoteFilePathForContext(context, savedViewer.filePath || filePath);
+      setRemoteFileBaseCwdForContext(context, savedViewer.baseCwd || baseCwd);
+      clearRemoteFileErrorForContext(context);
+      clearRemoteFileSaveErrorForContext(context);
+      return savedViewer;
+    } catch (error) {
+      const message = error.message || "远程保存文件失败";
+      setRemoteFileSaveErrorForContext(context, message);
+      setRemoteFileErrorForContext(context, message);
+      return false;
+    } finally {
+      setSavingRemoteFileForContext(context, false);
     }
   }
 
@@ -3279,6 +3425,48 @@ export const useConsoleStore = defineStore("console", () => {
     return context ? remoteFileErrorsByContext.get(context) || "" : "";
   }
 
+  function getRemoteFileSaveErrorForContext(context) {
+    return context ? remoteFileSaveErrorsByContext.get(context) || "" : "";
+  }
+
+  function setRemoteFileSaveErrorForContext(context, value) {
+    if (!context) {
+      return;
+    }
+
+    const message = String(value || "");
+
+    if (message) {
+      remoteFileSaveErrorsByContext.set(context, message);
+      return;
+    }
+
+    remoteFileSaveErrorsByContext.delete(context);
+  }
+
+  function clearRemoteFileSaveErrorForContext(context) {
+    if (context) {
+      remoteFileSaveErrorsByContext.delete(context);
+    }
+  }
+
+  function isSavingRemoteFileForContext(context) {
+    return context ? Boolean(savingRemoteFileContextsByContext.get(context)) : false;
+  }
+
+  function setSavingRemoteFileForContext(context, value) {
+    if (!context) {
+      return;
+    }
+
+    if (value) {
+      savingRemoteFileContextsByContext.set(context, true);
+      return;
+    }
+
+    savingRemoteFileContextsByContext.delete(context);
+  }
+
   function setRemoteFileErrorForContext(context, value) {
     if (!context) {
       return;
@@ -3338,6 +3526,18 @@ export const useConsoleStore = defineStore("console", () => {
       }
     }
 
+    for (const context of Array.from(remoteFileSaveErrorsByContext.keys())) {
+      if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
+        remoteFileSaveErrorsByContext.delete(context);
+      }
+    }
+
+    for (const context of Array.from(savingRemoteFileContextsByContext.keys())) {
+      if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
+        savingRemoteFileContextsByContext.delete(context);
+      }
+    }
+
     for (const context of Array.from(remoteFileViewersByContext.keys())) {
       if (doesRemoteFileContextMatchSession(context, normalizedSessionId, normalizedAgentId)) {
         remoteFileViewersByContext.delete(context);
@@ -3354,6 +3554,8 @@ export const useConsoleStore = defineStore("console", () => {
     remoteFilePathsByContext.clear();
     remoteFileBaseCwdsByContext.clear();
     remoteFileErrorsByContext.clear();
+    remoteFileSaveErrorsByContext.clear();
+    savingRemoteFileContextsByContext.clear();
     remoteFileViewersByContext.clear();
   }
 
@@ -3367,6 +3569,9 @@ export const useConsoleStore = defineStore("console", () => {
       resolvedPath: "",
       baseCwd: "",
       content: "",
+      savedContent: "",
+      lastSavedContent: "",
+      dirtyBaseContent: "",
       truncated: false,
       bytesRead: 0,
       totalBytes: 0,
@@ -3394,6 +3599,9 @@ export const useConsoleStore = defineStore("console", () => {
       baseCwdSource: String(item?.baseCwdSource || context.baseCwdSource || ""),
       fuzzyMatched: Boolean(item?.fuzzyMatched),
       content: String(item?.content || ""),
+      savedContent: String(item?.savedContent ?? item?.content ?? ""),
+      lastSavedContent: String(item?.lastSavedContent ?? item?.content ?? ""),
+      dirtyBaseContent: String(item?.dirtyBaseContent ?? item?.content ?? ""),
       truncated: Boolean(item?.truncated),
       bytesRead: Number(item?.bytesRead || 0),
       totalBytes: Number(item?.totalBytes || 0),
@@ -3492,6 +3700,8 @@ export const useConsoleStore = defineStore("console", () => {
     dispose,
     failedTaskCount,
     latestVisibleCommandRequestId,
+    getRemoteFileSaveErrorForContext,
+    isSavingRemoteFileForContext,
     loadAgentDiagnostics,
     loadDashboard,
     loadErrors,
@@ -3519,6 +3729,7 @@ export const useConsoleStore = defineStore("console", () => {
     remoteFileBaseCwd,
     remoteFileError,
     remoteFilePath,
+    remoteFileSaveError,
     remoteFileViewer,
     rejectManagedAgent,
     rejectUser,
@@ -3529,6 +3740,8 @@ export const useConsoleStore = defineStore("console", () => {
     resolvedTabs,
     resettingUserId,
     saveAuthCode,
+    saveRemoteFile,
+    savingRemoteFile,
     saveManagedAgent,
     saveUser,
     selectedAgentId,
