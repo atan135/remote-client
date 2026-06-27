@@ -5,16 +5,34 @@ import path from "node:path";
 import iconv from "iconv-lite";
 
 const DEFAULT_MAX_BYTES = 1024 * 1024;
+const FUZZY_SEARCH_MAX_DEPTH = 6;
+const FUZZY_SEARCH_MAX_ENTRIES = 5000;
+const FUZZY_SEARCH_SKIPPED_DIRECTORIES = new Set([
+  ".git",
+  ".hg",
+  ".svn",
+  "node_modules",
+  "dist",
+  "build",
+  "coverage",
+  ".cache",
+  ".next",
+  ".nuxt",
+  "target",
+  "vendor"
+]);
 
 export function readTextFilePreview(filePath, options = {}) {
   const requestedPath = normalizeFilePathInput(filePath);
   const baseCwd = normalizeFilePathInput(options.baseCwd);
+  const baseCwdSource = String(options.baseCwdSource || "").trim();
 
   if (!requestedPath) {
     throw new Error("文件路径不能为空");
   }
 
-  const resolvedPath = resolveRequestedFilePath(requestedPath, baseCwd);
+  const resolution = resolveRequestedFilePath(requestedPath, baseCwd);
+  const resolvedPath = resolution.resolvedPath;
   const stat = fs.statSync(resolvedPath);
 
   if (!stat.isFile()) {
@@ -36,6 +54,9 @@ export function readTextFilePreview(filePath, options = {}) {
   return {
     requestedPath,
     resolvedPath,
+    baseCwd: resolution.baseCwd,
+    baseCwdSource,
+    fuzzyMatched: Boolean(resolution.fuzzyMatched),
     content,
     truncated: totalBytes > bytesToRead,
     bytesRead: bytesToRead,
@@ -56,7 +77,7 @@ function resolveRequestedFilePath(requestedPath, baseCwd) {
   }
 
   if (isAbsoluteFilePath(requestedPath)) {
-    return path.resolve(requestedPath);
+    return resolveUniqueFilePath(path.resolve(requestedPath), requestedPath, "");
   }
 
   if (!baseCwd) {
@@ -75,7 +96,133 @@ function resolveRequestedFilePath(requestedPath, baseCwd) {
     throw new Error("基准目录必须是绝对路径");
   }
 
-  return path.resolve(baseCwd, requestedPath);
+  return resolveUniqueFilePath(path.resolve(baseCwd, requestedPath), requestedPath, baseCwd);
+}
+
+function resolveUniqueFilePath(exactPath, requestedPath, baseCwd) {
+  const exactResolvedPath = path.resolve(exactPath);
+
+  if (fs.existsSync(exactResolvedPath)) {
+    return {
+      resolvedPath: exactResolvedPath,
+      baseCwd,
+      fuzzyMatched: false
+    };
+  }
+
+  const fuzzyPath = findUniqueFuzzyFilePath(exactResolvedPath);
+
+  if (!fuzzyPath) {
+    return {
+      resolvedPath: exactResolvedPath,
+      baseCwd,
+      fuzzyMatched: false
+    };
+  }
+
+  return {
+    requestedPath,
+    resolvedPath: fuzzyPath,
+    baseCwd,
+    fuzzyMatched: true
+  };
+}
+
+function findUniqueFuzzyFilePath(exactPath) {
+  const directory = path.dirname(exactPath);
+  const requestedName = path.basename(exactPath);
+
+  if (!requestedName || requestedName === "." || requestedName === path.sep) {
+    return "";
+  }
+
+  const entries = collectFuzzySearchFileEntries(directory);
+
+  if (entries.length === 0) {
+    return "";
+  }
+
+  return (
+    pickUniqueFuzzyFilePath(entries, requestedName, (name, keyword) => name === keyword) ||
+    pickUniqueFuzzyFilePath(entries, requestedName, (name, keyword) => name.startsWith(keyword)) ||
+    pickUniqueFuzzyFilePath(entries, requestedName, (name, keyword) => name.includes(keyword))
+  );
+}
+
+function collectFuzzySearchFileEntries(rootDirectory) {
+  const root = path.resolve(rootDirectory);
+  const pending = [{ directory: root, depth: 0 }];
+  const files = [];
+  let visitedEntries = 0;
+
+  while (pending.length > 0 && visitedEntries < FUZZY_SEARCH_MAX_ENTRIES) {
+    const current = pending.shift();
+    let entries;
+
+    try {
+      entries = fs.readdirSync(current.directory, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+
+    for (const entry of entries) {
+      visitedEntries += 1;
+
+      if (visitedEntries > FUZZY_SEARCH_MAX_ENTRIES) {
+        break;
+      }
+
+      const entryPath = path.join(current.directory, entry.name);
+
+      if (entry.isFile() || entry.isSymbolicLink()) {
+        files.push({
+          name: entry.name,
+          path: entryPath
+        });
+        continue;
+      }
+
+      if (
+        entry.isDirectory() &&
+        current.depth < FUZZY_SEARCH_MAX_DEPTH &&
+        !FUZZY_SEARCH_SKIPPED_DIRECTORIES.has(entry.name.toLowerCase())
+      ) {
+        pending.push({
+          directory: entryPath,
+          depth: current.depth + 1
+        });
+      }
+    }
+  }
+
+  return files;
+}
+
+function pickUniqueFuzzyFilePath(entries, requestedName, matcher) {
+  const keyword = requestedName.toLowerCase();
+
+  if (!keyword) {
+    return "";
+  }
+
+  const matches = entries.filter((entry) => matcher(String(entry.name || "").toLowerCase(), keyword));
+
+  if (matches.length === 0) {
+    return "";
+  }
+
+  if (matches.length === 1) {
+    return matches[0].path;
+  }
+
+  const error = new Error(
+    `文件名匹配到多个候选，请输入更完整的名称: ${matches
+      .slice(0, 8)
+      .map((entry) => entry.path)
+      .join(", ")}`
+  );
+  error.code = "EAMBIGUOUS";
+  throw error;
 }
 
 function isAbsoluteFilePath(value) {

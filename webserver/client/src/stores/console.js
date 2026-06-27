@@ -1275,11 +1275,6 @@ export const useConsoleStore = defineStore("console", () => {
       return false;
     }
 
-    if (!baseCwd && !isAbsoluteRemoteFilePath(filePath)) {
-      setRemoteFileErrorForContext(context, "相对路径需要先填写基准目录，或改用绝对路径");
-      return false;
-    }
-
     if (!authCodesByAgentId.value.get(normalizeAgentId(agentId))) {
       setRemoteFileErrorForContext(context, "请先为当前设备配置 auth_code，再读取文件");
       return false;
@@ -1322,7 +1317,7 @@ export const useConsoleStore = defineStore("console", () => {
 
       if (shouldRememberPath) {
         setRemoteFilePathForContext(context, viewer.filePath || filePath);
-        setRemoteFileBaseCwdForContext(context, baseCwd);
+        setRemoteFileBaseCwdForContext(context, viewer.baseCwd || baseCwd);
       }
 
       return viewer;
@@ -3396,6 +3391,8 @@ export const useConsoleStore = defineStore("console", () => {
       requestedPath,
       resolvedPath,
       baseCwd,
+      baseCwdSource: String(item?.baseCwdSource || context.baseCwdSource || ""),
+      fuzzyMatched: Boolean(item?.fuzzyMatched),
       content: String(item?.content || ""),
       truncated: Boolean(item?.truncated),
       bytesRead: Number(item?.bytesRead || 0),

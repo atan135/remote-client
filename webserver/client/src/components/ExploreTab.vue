@@ -997,7 +997,7 @@ watch(
                 <div class="terminal-tool-panel">
                   <div class="terminal-tool-head">
                     <strong>打开目标文件</strong>
-                    <small>读取当前设备上的文本文件；相对路径会按下方基准目录解析。</small>
+                    <small>读取当前设备上的文本文件；相对路径优先跟随当前终端目录。</small>
                   </div>
                   <label class="field-block field-block-tight">
                     <span>基准目录</span>
@@ -1006,7 +1006,7 @@ watch(
                       :fetch-suggestions="queryCommonWorkingDirectories"
                       :trigger-on-focus="Boolean(activeAgent?.commonWorkingDirectories?.length)"
                       clearable
-                      placeholder="相对路径必填；绝对路径可留空"
+                      placeholder="可选；无终端上下文时用于解析相对路径"
                       @update:model-value="emit('update:remoteFileBaseCwd', $event)"
                       @select="emit('update:remoteFileBaseCwd', $event?.value || '')"
                     />

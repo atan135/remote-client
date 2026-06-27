@@ -12,8 +12,29 @@ export class ExecutionGateway {
   }
 
   async readTextFile(filePath, options = {}) {
+    const requestedPath = String(filePath || "").trim();
+    const sessionId = String(options.sessionId || "").trim();
+    let baseCwd = String(options.baseCwd || "").trim();
+    let baseCwdSource = baseCwd ? "request" : "";
+
+    if (sessionId) {
+      try {
+        const liveCwd = await this.ptySessionManager.querySessionCwd(sessionId, requestedPath);
+
+        if (liveCwd) {
+          baseCwd = liveCwd;
+          baseCwdSource = "terminal.current.cwd";
+        }
+      } catch (error) {
+        if (!baseCwd) {
+          throw error;
+        }
+      }
+    }
+
     return readTextFilePreview(filePath, {
-      baseCwd: String(options.baseCwd || "").trim(),
+      baseCwd,
+      baseCwdSource,
       maxBytes: this.config.remoteFileMaxBytes,
       windowsEncoding: this.config.windowsOutputEncoding
     });

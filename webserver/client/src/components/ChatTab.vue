@@ -836,12 +836,6 @@ async function openAiFile(message) {
     return;
   }
 
-  if (!message.baseCwd && !isAbsoluteRemoteFilePath(message.filePath)) {
-    message.fileOpenStatus = "failed";
-    appendAssistantMessage("Codex 返回的是相对路径，但消息缺少基准目录；请让 Codex 返回绝对路径后再打开。");
-    return;
-  }
-
   message.fileOpenStatus = "opening";
   const result = await props.remoteFileOpener({
     agentId: message.agentId || props.selectedAgentId,

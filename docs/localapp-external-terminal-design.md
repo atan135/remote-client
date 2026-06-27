@@ -100,13 +100,13 @@
 - 文本文件预览
 - `sessionId` 只是可选上下文，`/api/remote-files/read` 允许不传 `sessionId`
 - 绝对路径无需 `baseCwd`
-- 相对路径必须有显式 `baseCwd`；前端文件面板默认用会话创建时的 `cwd` 作为基准目录
-- 服务端只使用请求 `baseCwd` 或已记录的会话创建 `cwd`，不会实时探测活动终端当前目录
+- 相对路径带活动 `sessionId` 时，agent 会优先向 PTY 会话探测当前目录作为实时基准目录；探测失败时再回退请求 `baseCwd`
+- 如果相对文件名未精确命中，agent 会在基准目录下做受限文件名模糊搜索；只有唯一匹配时才打开
 - `localapp` 使用 `fs/stat/read` 读取文件，不通过 shell、PTY 或终端命令读取
 - 文件大小截断
 - 常见编码识别
 
-注意：终端 cwd 不再是文件读取的可靠隐式来源，不应描述为自动跟随当前终端目录。Windows `localapp` 也不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
+注意：自动获取当前目录只用于解析路径，文件内容读取仍不通过终端命令。Windows `localapp` 也不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
 
 ## 当前实现状态
 

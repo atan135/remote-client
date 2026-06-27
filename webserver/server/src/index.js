@@ -1783,7 +1783,7 @@ function clearPendingAgentDisconnect(agentId) {
   return pending;
 }
 
-function createPendingRemoteFileRead({ requestId, agentId, filePath, user }) {
+function createPendingRemoteFileRead({ requestId, agentId, sessionId, filePath, user }) {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
       pendingRemoteFileReads.delete(requestId);
@@ -1801,6 +1801,7 @@ function createPendingRemoteFileRead({ requestId, agentId, filePath, user }) {
     pendingRemoteFileReads.set(requestId, {
       requestId,
       agentId,
+      sessionId,
       filePath,
       userId: user.id,
       username: user.username,
@@ -1837,8 +1838,13 @@ function resolveRemoteFileReadRequest(payload) {
   const item = {
     requestId,
     agentId: String(payload?.agentId || pending.agentId || ""),
+    sessionId: String(payload?.sessionId || pending.sessionId || ""),
     filePath: String(payload?.filePath || pending.filePath || ""),
+    requestedPath: String(payload?.requestedPath || payload?.filePath || pending.filePath || ""),
     resolvedPath: String(payload?.resolvedPath || payload?.filePath || ""),
+    baseCwd: String(payload?.baseCwd || ""),
+    baseCwdSource: String(payload?.baseCwdSource || ""),
+    fuzzyMatched: Boolean(payload?.fuzzyMatched),
     content: String(payload?.content || ""),
     truncated: Boolean(payload?.truncated),
     bytesRead: Number(payload?.bytesRead || 0),
@@ -1853,6 +1859,9 @@ function resolveRemoteFileReadRequest(payload) {
     agentId: item.agentId,
     filePath: item.filePath,
     resolvedPath: item.resolvedPath,
+    baseCwd: item.baseCwd,
+    baseCwdSource: item.baseCwdSource,
+    fuzzyMatched: item.fuzzyMatched,
     truncated: item.truncated,
     bytesRead: item.bytesRead,
     totalBytes: item.totalBytes,
@@ -1861,6 +1870,7 @@ function resolveRemoteFileReadRequest(payload) {
     username: pending.username
   });
 
+  updateTerminalSessionCwdFromRemoteFileRead(item);
   pending.resolve(item);
 }
 
@@ -1917,6 +1927,38 @@ function mapRemoteFileReadErrorCode(errorCode) {
   }
 
   return 400;
+}
+
+function updateTerminalSessionCwdFromRemoteFileRead(item) {
+  const sessionId = String(item?.sessionId || "").trim();
+  const agentId = String(item?.agentId || "").trim();
+  const baseCwd = normalizeRemoteFilePath(item?.baseCwd);
+
+  if (
+    !sessionId ||
+    !baseCwd ||
+    String(item?.baseCwdSource || "") !== "terminal.current.cwd" ||
+    !isPathAbsoluteForKnownPlatforms(baseCwd)
+  ) {
+    return;
+  }
+
+  const session = terminalSessionStore.get(sessionId);
+
+  if (!session || String(session.agentId || "") !== agentId || session.cwd === baseCwd) {
+    return;
+  }
+
+  const updatedSession = terminalSessionStore.update(sessionId, {
+    cwd: baseCwd
+  });
+
+  if (!updatedSession) {
+    return;
+  }
+
+  void persistTerminalSessionRecord(updatedSession);
+  broadcastTerminalSessionUpdate(updatedSession);
 }
 
 function reconcileMissingAgentTerminalSessions(agentId, syncedTerminalSessions) {
@@ -2796,6 +2838,7 @@ function dispatchRemoteFileRead(agentId, context) {
   const pendingPromise = createPendingRemoteFileRead({
     requestId,
     agentId,
+    sessionId: context.sessionId,
     filePath: context.filePath,
     user: context.user
   });

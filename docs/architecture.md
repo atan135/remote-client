@@ -279,15 +279,15 @@ profile 当前可约束：
 - 通过 `file.read.secure` 请求目标 agent 读取文本文件
 - 文件读取是独立于 PTY 的能力；`sessionId` 可为空
 - 绝对路径可直接读取，不需要 `baseCwd`
-- 相对路径必须带显式 `baseCwd`；前端文件面板默认用会话创建时的 `cwd` 填充基准目录
-- 服务端只使用请求中的 `baseCwd` 或已记录的会话创建 `cwd`，不会实时探测活动终端当前目录
+- 相对路径带活动 `sessionId` 时，agent 会优先向 PTY 会话探测当前目录并作为实时基准目录；探测失败时再回退请求中的 `baseCwd`
+- 如果相对文件名在基准目录下没有精确命中，agent 会在受限范围内做文件名模糊搜索；只有唯一匹配时才自动打开
 - 仅支持文本预览
 - 超出上限时截断返回
 - 会识别常见编码，Windows 下支持本地编码回退
 
 当前前端已支持在终端详情页中打开和预览文本文件。
 
-注意：终端 cwd 不再是文件读取的可靠隐式来源，文档和功能说明都不应描述为自动跟随当前终端目录。
+注意：文件内容读取仍由 `localapp` 的 `fs/stat/read` 完成，不通过 shell 或 PTY 执行读文件命令。Windows `localapp` 仍不会把 `/c/...` 这类 Git Bash / POSIX 风格路径自动转换为 `C:\...`。
 
 ## `localapp` 模块说明
 
@@ -439,8 +439,9 @@ profile 当前可约束：
 
 1. 浏览器提交 `/api/remote-files/read`
 2. 服务端生成 `file.read.secure`
-3. agent 读取文件并返回 `file.read.completed` 或 `file.read.error`
-4. 服务端将结果同步回浏览器
+3. agent 对相对路径优先探测活动终端当前目录，并按需要做唯一文件名模糊匹配
+4. agent 读取文件并返回 `file.read.completed` 或 `file.read.error`
+5. 服务端将结果同步回浏览器；如果返回的是实时终端目录，会同步更新对应会话 `cwd`
 
 ## 日志
 
