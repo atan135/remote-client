@@ -9,6 +9,8 @@ import {
   ElOption,
   ElOptionGroup,
   ElPopover,
+  ElRadioButton,
+  ElRadioGroup,
   ElSelect,
   ElTabPane,
   ElTabs,
@@ -16,6 +18,7 @@ import {
 } from "element-plus";
 import {
   Back,
+  Delete,
   EditPen,
   FolderOpened,
   InfoFilled,
@@ -131,6 +134,10 @@ const props = defineProps({
     type: Boolean,
     required: true
   },
+  canClearTerminalSessions: {
+    type: Boolean,
+    default: false
+  },
   submitting: {
     type: Boolean,
     required: true
@@ -159,6 +166,14 @@ const props = defineProps({
     type: String,
     default: ""
   },
+  clearingTerminalSessions: {
+    type: Boolean,
+    default: false
+  },
+  terminalSessionSortMode: {
+    type: String,
+    default: "createdAt"
+  },
   loadingTerminalSessions: {
     type: Boolean,
     default: false
@@ -175,6 +190,7 @@ const emit = defineEmits([
   "update:commandShell",
   "update:terminalProfile",
   "update:terminalSessionName",
+  "update:terminalSessionSortMode",
   "update:terminalCwd",
   "update:terminalInput",
   "update:remoteFilePath",
@@ -192,7 +208,8 @@ const emit = defineEmits([
   "resize-terminal-session",
   "rename-terminal-session",
   "terminate-terminal-session",
-  "delete-terminal-session"
+  "delete-terminal-session",
+  "clear-terminal-sessions"
 ]);
 
 const TERMINAL_SESSION_NAME_MAX_LENGTH = 128;
@@ -856,9 +873,31 @@ watch(
               <div>
                 <h3>会话列表</h3>
               </div>
-              <el-tag effect="plain" round>
-                {{ terminalSessions.length }} 个
-              </el-tag>
+              <div class="explore-session-list-tools">
+                <el-radio-group
+                  class="explore-session-sort"
+                  :model-value="terminalSessionSortMode"
+                  size="small"
+                  @update:model-value="emit('update:terminalSessionSortMode', $event)"
+                >
+                  <el-radio-button label="createdAt">时间</el-radio-button>
+                  <el-radio-button label="status">状态</el-radio-button>
+                </el-radio-group>
+                <el-button
+                  class="explore-session-clear-button"
+                  round
+                  plain
+                  size="small"
+                  :disabled="!canClearTerminalSessions"
+                  @click="emit('clear-terminal-sessions')"
+                >
+                  <el-icon><Delete /></el-icon>
+                  <span>{{ clearingTerminalSessions ? "清空中..." : "清空已结束" }}</span>
+                </el-button>
+                <el-tag effect="plain" round>
+                  {{ terminalSessions.length }} 个
+                </el-tag>
+              </div>
             </div>
 
             <div v-if="terminalSessions.length" class="session-list explore-session-list">

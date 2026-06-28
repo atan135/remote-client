@@ -75,6 +75,12 @@ const remoteFileWriteTimeoutMs = remoteFileReadTimeoutMs;
 const terminalSessionPersistDebounceMs = Math.max(0, config.terminalSessionPersistDebounceMs);
 const terminalSessionTurnSyncDebounceMs = Math.max(0, config.terminalSessionTurnSyncDebounceMs);
 const agentHeartbeatBroadcastIntervalMs = Math.max(0, config.agentHeartbeatBroadcastIntervalMs);
+const TERMINAL_SESSION_CLOSED_STATUSES = Object.freeze([
+  "completed",
+  "failed",
+  "terminated",
+  "connection_lost"
+]);
 
 const agentSocketServer = new WebSocketServer({ noServer: true });
 const browserSocketServer = new WebSocketServer({ noServer: true });
@@ -816,6 +822,10 @@ app.post("/api/terminal-sessions/:sessionId/terminate", requireAuth, (req, res) 
   void handleTerminalSessionTerminateRequest(req, res);
 });
 
+app.delete("/api/terminal-sessions", requireAuth, (req, res) => {
+  void handleTerminalSessionClearRequest(req, res);
+});
+
 app.delete("/api/terminal-sessions/:sessionId", requireAuth, (req, res) => {
   void handleTerminalSessionDeleteRequest(req, res);
 });
@@ -1356,20 +1366,18 @@ async function handleTerminalSessionDeleteRequest(req, res) {
     return;
   }
 
-  if (!isTerminalSessionClosedStatus(session.status)) {
-    res.status(409).json({ message: "仅允许删除已结束的终端会话" });
-    return;
-  }
-
   try {
-    await flushTerminalSessionPersistence(sessionId);
-    const removedActiveSession = terminalSessionStore.remove(sessionId);
-    const deletedFromHistory = await terminalSessionHistoryService.deleteSession(sessionId);
-    clearPendingTerminalSessionPersist(sessionId);
-    clearPendingTerminalSessionTurnSync(sessionId);
-    const payload = {
+    await ensureUserCanControlAgent(req.auth.user, session.agentId);
+
+    if (!isTerminalSessionClosedStatus(session.status)) {
+      res.status(409).json({ message: "仅允许删除已结束的终端会话" });
+      return;
+    }
+
+    const result = await deleteClosedTerminalSessions([session]);
+    const payload = result.deletedSessionPayloads[0] || {
       sessionId,
-      agentId: String(session.agentId || removedActiveSession?.agentId || ""),
+      agentId: String(session.agentId || ""),
       deletedAt: new Date().toISOString()
     };
 
@@ -1378,16 +1386,18 @@ async function handleTerminalSessionDeleteRequest(req, res) {
       agentId: payload.agentId,
       userId: req.auth.user.id,
       username: req.auth.user.username,
-      deletedFromHistory,
-      removedActiveSession: Boolean(removedActiveSession)
+      deletedFromHistory: result.deletedFromHistory,
+      removedActiveSession: result.removedActiveCount > 0
     });
 
-    browserHub.broadcast("terminal.session.deleted", payload);
+    for (const deletedPayload of result.deletedSessionPayloads) {
+      browserHub.broadcast("terminal.session.deleted", deletedPayload);
+    }
     res.json({
       ok: true,
       sessionId,
-      deletedFromHistory,
-      removedActiveSession: Boolean(removedActiveSession)
+      deletedFromHistory: result.deletedFromHistory > 0,
+      removedActiveSession: result.removedActiveCount > 0
     });
   } catch (error) {
     logEvent(commandLogger, "error", "terminal.session.delete_failed", {
@@ -1396,8 +1406,158 @@ async function handleTerminalSessionDeleteRequest(req, res) {
       username: req.auth.user.username,
       error: error.message
     });
-    res.status(500).json({ message: error.message || "终端会话删除失败" });
+    res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "终端会话删除失败" });
   }
+}
+
+async function handleTerminalSessionClearRequest(req, res) {
+  const agentId = String(req.query.agentId || req.body?.agentId || "").trim();
+
+  if (!agentId) {
+    res.status(400).json({ message: "agentId is required" });
+    return;
+  }
+
+  try {
+    await ensureUserCanControlAgent(req.auth.user, agentId);
+    const [storedClosedSessions] = await Promise.all([
+      terminalSessionHistoryService.listClosedSessions({
+        agentId,
+        statuses: TERMINAL_SESSION_CLOSED_STATUSES
+      })
+    ]);
+    const activeClosedSessions = terminalSessionStore
+      .list(config.terminalSessionHistoryLimit)
+      .filter(
+        (session) =>
+          String(session?.agentId || "") === agentId &&
+          isTerminalSessionClosedStatus(session?.status)
+      );
+    const sessionsById = new Map();
+
+    for (const session of storedClosedSessions) {
+      sessionsById.set(session.sessionId, session);
+    }
+
+    for (const session of activeClosedSessions) {
+      sessionsById.set(session.sessionId, session);
+    }
+
+    const targetSessions = Array.from(sessionsById.values());
+    const result = await deleteClosedTerminalSessions(targetSessions);
+    const activeSessionsAfterDelete = terminalSessionStore
+      .list(config.terminalSessionHistoryLimit)
+      .filter(
+        (session) =>
+          String(session?.agentId || "") === agentId &&
+          !isTerminalSessionClosedStatus(session?.status)
+      );
+    const skippedSessionIds = activeSessionsAfterDelete.map((session) => session.sessionId);
+    const skippedRunningCount = activeSessionsAfterDelete.filter(
+      (session) => String(session?.status || "") === "running"
+    ).length;
+
+    logEvent(commandLogger, "info", "terminal.session.cleared", {
+      agentId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      deletedSessionCount: result.deletedSessionIds.length,
+      skippedSessionCount: skippedSessionIds.length,
+      deletedFromHistory: result.deletedFromHistory,
+      removedActiveCount: result.removedActiveCount
+    });
+
+    for (const payload of result.deletedSessionPayloads) {
+      browserHub.broadcast("terminal.session.deleted", payload);
+    }
+
+    res.json({
+      ok: true,
+      agentId,
+      deletedSessionIds: result.deletedSessionIds,
+      skippedSessionIds,
+      deletedFromHistory: result.deletedFromHistory,
+      removedActiveCount: result.removedActiveCount,
+      skippedActiveCount: skippedSessionIds.length,
+      skippedRunningCount
+    });
+  } catch (error) {
+    logEvent(commandLogger, "error", "terminal.session.clear_failed", {
+      agentId,
+      userId: req.auth.user.id,
+      username: req.auth.user.username,
+      error: error.message
+    });
+    res
+      .status(error.statusCode || 500)
+      .json({ message: error.message || "终端会话清空失败" });
+  }
+}
+
+async function deleteClosedTerminalSessions(sessions) {
+  const sessionsById = new Map();
+
+  for (const session of Array.isArray(sessions) ? sessions : []) {
+    const sessionId = String(session?.sessionId || "").trim();
+
+    if (!sessionId || !isTerminalSessionClosedStatus(session?.status)) {
+      continue;
+    }
+
+    sessionsById.set(sessionId, session);
+  }
+
+  const targetSessions = Array.from(sessionsById.values());
+  const targetSessionIds = targetSessions.map((session) => session.sessionId);
+
+  await Promise.allSettled(
+    targetSessionIds.map((sessionId) => flushTerminalSessionPersistence(sessionId))
+  );
+
+  const targetSessionIdSet = new Set(targetSessionIds);
+  const removedActiveSessions = terminalSessionStore.removeWhere(
+    (session) =>
+      targetSessionIdSet.has(session.sessionId) &&
+      isTerminalSessionClosedStatus(session.status)
+  );
+  const deletedFromHistory = await terminalSessionHistoryService.deleteSessionsByIds(
+    targetSessionIds,
+    { statuses: TERMINAL_SESSION_CLOSED_STATUSES }
+  );
+  const remainingHistorySessionIds = new Set(
+    await terminalSessionHistoryService.listExistingSessionIds(targetSessionIds)
+  );
+
+  for (const sessionId of targetSessionIds) {
+    clearPendingTerminalSessionPersist(sessionId);
+    clearPendingTerminalSessionTurnSync(sessionId);
+  }
+
+  const deletedAt = new Date().toISOString();
+  const removedActiveSessionIds = new Set(
+    removedActiveSessions.map((session) => session.sessionId)
+  );
+  const deletedSessionPayloads = targetSessions
+    .filter(
+      (session) =>
+        removedActiveSessionIds.has(session.sessionId) ||
+        (!remainingHistorySessionIds.has(session.sessionId) &&
+          !terminalSessionStore.get(session.sessionId))
+    )
+    .map((session) => ({
+      sessionId: session.sessionId,
+      agentId: String(session.agentId || ""),
+      deletedAt
+    }));
+
+  return {
+    deletedSessionIds: deletedSessionPayloads.map((payload) => payload.sessionId),
+    deletedSessionPayloads,
+    deletedFromHistory,
+    removedActiveCount: removedActiveSessions.length
+  };
 }
 
 async function handleRemoteFileReadRequest(req, res) {
@@ -4304,7 +4464,7 @@ function normalizeCommandShell(value, agentPlatform = "") {
 }
 
 function isTerminalSessionClosedStatus(status) {
-  return ["completed", "failed", "terminated", "connection_lost"].includes(String(status || ""));
+  return TERMINAL_SESSION_CLOSED_STATUSES.includes(String(status || ""));
 }
 
 function normalizeProfileOutputMode(value) {

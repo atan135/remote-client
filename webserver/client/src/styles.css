@@ -1655,7 +1655,7 @@ textarea {
 }
 
 .explore-session-list {
-  max-height: min(36vh, 280px);
+  max-height: 560px;
   margin-top: 10px;
   overflow-y: auto;
   padding-right: 4px;
@@ -1663,8 +1663,33 @@ textarea {
 }
 
 .explore-session-list .session-item {
+  min-height: 58px;
   padding: 10px 12px;
-  border-radius: 12px;
+  border-radius: 8px;
+}
+
+.explore-session-list-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+.explore-session-sort .el-radio-button__inner {
+  min-height: 28px;
+  padding: 6px 10px;
+  line-height: 1;
+}
+
+.explore-session-clear-button.el-button {
+  min-height: 28px;
+  padding: 0 10px;
+}
+
+.explore-session-clear-button.el-button .el-icon {
+  margin-right: 4px;
 }
 
 .explore-session-screen {
@@ -3993,7 +4018,7 @@ textarea {
   .explore-session-list {
     width: 100%;
     max-width: 100%;
-    max-height: min(52dvh, 460px);
+    max-height: 560px;
     overflow-x: hidden;
     padding-right: 0;
   }
@@ -4433,7 +4458,7 @@ textarea {
   }
 
   .explore-session-list {
-    max-height: min(56dvh, 500px);
+    max-height: 560px;
   }
 
   .explore-session-pane .card-head-tight {
@@ -4856,7 +4881,7 @@ textarea {
   }
 
   .explore-session-list {
-    max-height: min(42vh, 360px);
+    max-height: 560px;
   }
 
   .explore-file-viewer > pre,

@@ -27,6 +27,7 @@ const fallbackTerminalProfiles = Object.freeze([
 
 const TERMINAL_OUTPUT_BUFFER_LIMIT = 1200;
 const TERMINAL_SESSION_NAME_MAX_LENGTH = 128;
+const TERMINAL_SESSION_SORT_MODES = Object.freeze(["createdAt", "status"]);
 const TERMINAL_INTERRUPT_SEQUENCE = "\u0003";
 const REMOTE_FILE_CONTEXT_SEPARATOR = "\u0000";
 const JIETU_LOG_PREFIX = "[remote-client:jietu]";
@@ -105,8 +106,10 @@ export const useConsoleStore = defineStore("console", () => {
   const terminatingTerminalSessionId = ref(null);
   const renamingTerminalSessionId = ref(null);
   const deletingTerminalSessionId = ref(null);
+  const clearingTerminalSessions = ref(false);
   const deletingCommandRequestId = ref(null);
   const clearingCommands = ref(false);
+  const terminalSessionSortMode = ref("createdAt");
   const session = ref(null);
   const authMode = ref("login");
   const pendingTaskCount = ref(0);
@@ -398,6 +401,14 @@ export const useConsoleStore = defineStore("console", () => {
     Boolean(
       !clearingCommands.value &&
         visibleCommands.value.some((item) => isCommandRecordDeletableStatus(item?.status))
+    )
+  );
+
+  const canClearTerminalSessions = computed(() =>
+    Boolean(
+      selectedAgentId.value &&
+        !clearingTerminalSessions.value &&
+        visibleTerminalSessions.value.some((item) => isTerminalSessionClosedStatus(item?.status))
     )
   );
 
@@ -1865,6 +1876,85 @@ export const useConsoleStore = defineStore("console", () => {
     }
   }
 
+  async function clearTerminalSessions(agentId = selectedAgentId.value) {
+    const normalizedAgentId = String(agentId || "").trim();
+
+    if (!normalizedAgentId) {
+      wsState.error = "请先选择设备";
+      return false;
+    }
+
+    const targetLabel = agentsById.value.get(normalizedAgentId)?.label || normalizedAgentId;
+
+    try {
+      await ElMessageBox.confirm(
+        `确认清空 ${targetLabel} 下所有已结束会话吗？running 会话会保留，不会中断输出、输入或连接。`,
+        "清空终端会话",
+        {
+          type: "warning",
+          confirmButtonText: "清空",
+          cancelButtonText: "取消"
+        }
+      );
+    } catch {
+      return false;
+    }
+
+    clearingTerminalSessions.value = true;
+    wsState.error = "";
+    loadErrors.terminalSessions = "";
+
+    try {
+      const response = await fetch(
+        `/api/terminal-sessions?agentId=${encodeURIComponent(normalizedAgentId)}`,
+        {
+          method: "DELETE"
+        }
+      );
+
+      if (response.status === 401) {
+        await handleUnauthorized();
+        return false;
+      }
+
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(payload.message || "终端会话清空失败");
+      }
+
+      const deletedSessionIds = Array.isArray(payload.deletedSessionIds)
+        ? payload.deletedSessionIds
+        : [];
+
+      removeTerminalSessions(deletedSessionIds);
+
+      ensureSelectedTerminalSession();
+
+      try {
+        await loadTerminalSessions();
+      } catch (error) {
+        loadErrors.terminalSessions = error.message || "刷新终端会话失败";
+        throw error;
+      }
+
+      ensureSelectedTerminalSession();
+
+      if (deletedSessionIds.length > 0) {
+        ElMessage.success("已清空已结束终端会话");
+      } else {
+        ElMessage.info("当前没有可清空的已结束终端会话");
+      }
+
+      return true;
+    } catch (error) {
+      wsState.error = error.message;
+      return false;
+    } finally {
+      clearingTerminalSessions.value = false;
+    }
+  }
+
   async function createAuthCode() {
     if (!authCodeForm.agentId.trim() || !authCodeForm.authCode.trim()) {
       wsState.error = "请填写设备标识和 RSA 公钥";
@@ -2791,7 +2881,7 @@ export const useConsoleStore = defineStore("console", () => {
       return;
     }
 
-    const runningSession = sessions.find((item) => !isTerminalSessionClosedStatus(item.status));
+    const runningSession = sessions.find((item) => isTerminalSessionRunningStatus(item.status));
     selectedTerminalSessionId.value = runningSession?.sessionId || sessions[0]?.sessionId || "";
   }
 
@@ -2854,7 +2944,11 @@ export const useConsoleStore = defineStore("console", () => {
     approvingManagedAgentId.value = null;
     rejectingManagedAgentId.value = null;
     updatingManagedAgentId.value = null;
+    terminatingTerminalSessionId.value = null;
     renamingTerminalSessionId.value = null;
+    deletingTerminalSessionId.value = null;
+    clearingTerminalSessions.value = false;
+    terminalSessionSortMode.value = "createdAt";
     deletingAdminAuthCodeId.value = null;
     if (terminalResizeFlushTimer) {
       window.clearTimeout(terminalResizeFlushTimer);
@@ -2903,6 +2997,14 @@ export const useConsoleStore = defineStore("console", () => {
     const normalizedItems = Array.isArray(items) ? items.slice() : [];
     normalizedItems.sort(compareTerminalSessionRecords);
     terminalSessions.value = normalizedItems;
+  }
+
+  function setTerminalSessionSortMode(mode) {
+    const normalizedMode = String(mode || "").trim();
+    terminalSessionSortMode.value = TERMINAL_SESSION_SORT_MODES.includes(normalizedMode)
+      ? normalizedMode
+      : "createdAt";
+    terminalSessions.value = [...terminalSessions.value].sort(compareTerminalSessionRecords);
   }
 
   function upsertAgent(item) {
@@ -3051,6 +3153,28 @@ export const useConsoleStore = defineStore("console", () => {
     return didRemoveSession;
   }
 
+  function removeTerminalSessions(sessionIds) {
+    const normalizedSessionIds = [
+      ...new Set(
+        (Array.isArray(sessionIds) ? sessionIds : [])
+          .map((sessionId) => String(sessionId || "").trim())
+          .filter(Boolean)
+      )
+    ];
+
+    if (normalizedSessionIds.length === 0) {
+      return false;
+    }
+
+    let didRemove = false;
+
+    for (const sessionId of normalizedSessionIds) {
+      didRemove = removeTerminalSession(sessionId) || didRemove;
+    }
+
+    return didRemove;
+  }
+
   function appendTerminalSessionOutput(output) {
     const sessionRecord = terminalSessionById.value.get(String(output?.sessionId || ""));
 
@@ -3163,6 +3287,10 @@ export const useConsoleStore = defineStore("console", () => {
 
   function isTerminalSessionClosedStatus(status) {
     return ["completed", "failed", "terminated", "connection_lost"].includes(String(status || ""));
+  }
+
+  function isTerminalSessionRunningStatus(status) {
+    return String(status || "") === "running";
   }
 
   function buildSessionInputPayload(sessionRecord, input) {
@@ -3384,6 +3512,15 @@ export const useConsoleStore = defineStore("console", () => {
   }
 
   function compareTerminalSessionRecords(left, right) {
+    if (terminalSessionSortMode.value === "status") {
+      const leftRunningRank = isTerminalSessionRunningStatus(left?.status) ? 0 : 1;
+      const rightRunningRank = isTerminalSessionRunningStatus(right?.status) ? 0 : 1;
+
+      if (leftRunningRank !== rightRunningRank) {
+        return leftRunningRank - rightRunningRank;
+      }
+    }
+
     return String(right?.createdAt || "").localeCompare(String(left?.createdAt || ""));
   }
 
@@ -3396,7 +3533,18 @@ export const useConsoleStore = defineStore("console", () => {
   }
 
   function didTerminalSessionSortKeyChange(previousRecord, nextRecord) {
-    return String(previousRecord?.createdAt || "") !== String(nextRecord?.createdAt || "");
+    if (String(previousRecord?.createdAt || "") !== String(nextRecord?.createdAt || "")) {
+      return true;
+    }
+
+    if (terminalSessionSortMode.value === "status") {
+      return (
+        isTerminalSessionRunningStatus(previousRecord?.status) !==
+        isTerminalSessionRunningStatus(nextRecord?.status)
+      );
+    }
+
+    return false;
   }
 
   function createRemoteFileContext(agentId, sessionId) {
@@ -3698,6 +3846,7 @@ export const useConsoleStore = defineStore("console", () => {
     avatarLabel,
     bootstrapping,
     canClearCommands,
+    canClearTerminalSessions,
     canCreateTerminalSession,
     canSendTerminalInput,
     canSubmitCommand,
@@ -3709,6 +3858,7 @@ export const useConsoleStore = defineStore("console", () => {
     approvingUserId,
     clearAutoOpenTerminalSession,
     clearCommandRecords,
+    clearTerminalSessions,
     clearRemoteFileErrors,
     clearRemoteFilePreviewViewer,
     commandInput,
@@ -3721,6 +3871,7 @@ export const useConsoleStore = defineStore("console", () => {
     createUser,
     creatingAuthCode,
     clearingCommands,
+    clearingTerminalSessions,
     creatingTerminalSession,
     creatingUser,
     deleteAuthCode,
@@ -3791,6 +3942,8 @@ export const useConsoleStore = defineStore("console", () => {
     terminalInput,
     terminalProfile,
     terminalSessionName,
+    terminalSessionSortMode,
+    setTerminalSessionSortMode,
     terminateTerminalSession,
     terminatingTerminalSessionId,
     timelineFilterAgentId,

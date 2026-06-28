@@ -62,6 +62,33 @@ export class TerminalSessionStore {
     return record;
   }
 
+  removeWhere(predicate) {
+    if (typeof predicate !== "function") {
+      return [];
+    }
+
+    const removed = [];
+
+    for (const sessionId of [...this.order]) {
+      const record = this.sessions.get(sessionId);
+
+      if (!record || !predicate(record)) {
+        continue;
+      }
+
+      this.sessions.delete(sessionId);
+      this.inputReceipts.delete(sessionId);
+      removed.push(record);
+    }
+
+    if (removed.length > 0) {
+      const removedIds = new Set(removed.map((record) => record.sessionId));
+      this.order = this.order.filter((sessionId) => !removedIds.has(sessionId));
+    }
+
+    return removed;
+  }
+
   getInputReceipt(sessionId, inputId) {
     const bucket = this.inputReceipts.get(sessionId);
     return bucket?.items.get(inputId) || null;

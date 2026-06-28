@@ -56,6 +56,7 @@ async function handleRenameTerminalSession(payload) {
     :can-create-terminal-session="store.canCreateTerminalSession"
     :can-send-terminal-input="store.canSendTerminalInput"
     :can-terminate-terminal-session="store.canTerminateTerminalSession"
+    :can-clear-terminal-sessions="store.canClearTerminalSessions"
     :submitting="store.submitting"
     :creating-terminal-session="store.creatingTerminalSession"
     :sending-terminal-input="store.sendingTerminalInput"
@@ -63,6 +64,8 @@ async function handleRenameTerminalSession(payload) {
     :terminating-terminal-session-id="store.terminatingTerminalSessionId || ''"
     :renaming-terminal-session-id="store.renamingTerminalSessionId || ''"
     :deleting-terminal-session-id="store.deletingTerminalSessionId || ''"
+    :clearing-terminal-sessions="store.clearingTerminalSessions"
+    :terminal-session-sort-mode="store.terminalSessionSortMode"
     :loading-terminal-sessions="store.loadingTerminalSessions"
     :terminal-sessions-error="store.loadErrors.terminalSessions"
     @update:selected-agent-id="store.selectedAgentId = $event"
@@ -70,6 +73,7 @@ async function handleRenameTerminalSession(payload) {
     @update:command-shell="store.commandShell = $event"
     @update:terminal-profile="store.terminalProfile = $event"
     @update:terminal-session-name="store.terminalSessionName = $event"
+    @update:terminal-session-sort-mode="store.setTerminalSessionSortMode"
     @update:terminal-cwd="store.terminalCwd = $event"
     @update:terminal-input="store.terminalInput = $event"
     @update:remote-file-path="store.updateRemoteFilePath"
@@ -88,5 +92,6 @@ async function handleRenameTerminalSession(payload) {
     @rename-terminal-session="handleRenameTerminalSession"
     @terminate-terminal-session="store.terminateTerminalSession"
     @delete-terminal-session="store.deleteTerminalSession"
+    @clear-terminal-sessions="store.clearTerminalSessions"
   />
 </template>

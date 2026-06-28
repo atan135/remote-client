@@ -336,6 +336,31 @@ export class TerminalSessionHistoryService {
     return rows[0] ? serializeStoredTerminalSession(rows[0]) : null;
   }
 
+  async listExistingSessionIds(sessionIds) {
+    const normalizedSessionIds = normalizeSessionIdList(sessionIds);
+
+    if (normalizedSessionIds.length === 0) {
+      return [];
+    }
+
+    const existingSessionIds = [];
+
+    for (const chunk of chunkArray(normalizedSessionIds, 500)) {
+      const [rows] = await this.pool.execute(
+        `
+          SELECT session_id
+          FROM terminal_sessions
+          WHERE session_id IN (${chunk.map(() => "?").join(", ")})
+        `,
+        chunk
+      );
+
+      existingSessionIds.push(...rows.map((row) => row.session_id));
+    }
+
+    return existingSessionIds;
+  }
+
   async updateSession(sessionId, patch = {}) {
     const normalizedSessionId = String(sessionId || "").trim();
 
@@ -408,6 +433,71 @@ export class TerminalSessionHistoryService {
     );
 
     return Number(result?.affectedRows || 0) > 0;
+  }
+
+  async listClosedSessions({ agentId = "", statuses = [] } = {}) {
+    const normalizedAgentId = String(agentId || "").trim();
+    const normalizedStatuses = normalizeStatusList(statuses);
+
+    if (normalizedStatuses.length === 0) {
+      return [];
+    }
+
+    const conditions = [`status IN (${normalizedStatuses.map(() => "?").join(", ")})`];
+    const values = [...normalizedStatuses];
+
+    if (normalizedAgentId) {
+      conditions.push("agent_id = ?");
+      values.push(normalizedAgentId);
+    }
+
+    const [rows] = await this.pool.execute(
+      `
+        SELECT
+          session_id,
+          agent_id,
+          status
+        FROM terminal_sessions
+        WHERE ${conditions.join(" AND ")}
+        ORDER BY created_at DESC
+      `,
+      values
+    );
+
+    return rows.map((row) => ({
+      sessionId: row.session_id,
+      agentId: row.agent_id,
+      status: row.status || ""
+    }));
+  }
+
+  async deleteSessionsByIds(sessionIds, { statuses = [] } = {}) {
+    const normalizedSessionIds = normalizeSessionIdList(sessionIds);
+    const normalizedStatuses = normalizeStatusList(statuses);
+
+    if (normalizedSessionIds.length === 0) {
+      return 0;
+    }
+
+    let affectedRows = 0;
+
+    for (const chunk of chunkArray(normalizedSessionIds, 500)) {
+      const [result] = await this.pool.execute(
+        `
+          DELETE FROM terminal_sessions
+          WHERE session_id IN (${chunk.map(() => "?").join(", ")})
+            ${
+              normalizedStatuses.length > 0
+                ? `AND status IN (${normalizedStatuses.map(() => "?").join(", ")})`
+                : ""
+            }
+        `,
+        normalizedStatuses.length > 0 ? [...chunk, ...normalizedStatuses] : chunk
+      );
+      affectedRows += Number(result?.affectedRows || 0);
+    }
+
+    return affectedRows;
   }
 }
 
@@ -483,6 +573,30 @@ function toNullableNumber(value) {
 function normalizeLimit(value, fallback) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 500) : fallback;
+}
+
+function normalizeStatusList(statuses) {
+  return [...new Set((Array.isArray(statuses) ? statuses : []).map((status) => String(status || "").trim()).filter(Boolean))];
+}
+
+function normalizeSessionIdList(sessionIds) {
+  return [
+    ...new Set(
+      (Array.isArray(sessionIds) ? sessionIds : [])
+        .map((sessionId) => String(sessionId || "").trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
+function chunkArray(items, chunkSize) {
+  const chunks = [];
+
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
+  }
+
+  return chunks;
 }
 
 export function serializeStoredTerminalSession(row) {
