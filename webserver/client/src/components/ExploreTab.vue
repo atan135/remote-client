@@ -16,7 +16,6 @@ import {
 } from "element-plus";
 import {
   Back,
-  Document,
   EditPen,
   FolderOpened,
   InfoFilled,
@@ -1167,16 +1166,6 @@ watch(
               </el-button>
             </template>
           </div>
-        </div>
-
-        <div v-if="currentSession" class="explore-session-summary-strip">
-          <span>
-            <el-icon><Document /></el-icon>
-            {{ currentSessionDisplayName }}
-          </span>
-          <span>{{ currentSessionProfileText }}</span>
-          <span class="explore-session-summary-cwd">{{ currentSessionCwdText }}</span>
-          <span>退出码 {{ currentSessionExitCodeText }}</span>
         </div>
 
         <div v-if="currentSession" class="explore-terminal-shell">
