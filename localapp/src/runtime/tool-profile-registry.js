@@ -91,9 +91,11 @@ export class ToolProfileRegistry {
 }
 
 function createBuiltInProfiles(config) {
+  const defaultShellLabel = createDefaultShellLabel(config.defaultShell);
+
   return {
     default_shell_session: normalizeProfile("default_shell_session", {
-      label: "默认 Shell",
+      label: defaultShellLabel,
       runner: "pty",
       command: config.defaultShell,
       argsTemplate: createDefaultShellArgsTemplate(config.defaultShell),
@@ -114,7 +116,7 @@ function createBuiltInProfiles(config) {
       idleTimeoutMs: config.sessionIdleTimeoutMs,
       source: "builtin",
       kind: "shell",
-      description: "使用 localapp 默认 shell 启动交互式终端",
+      description: `使用 localapp 默认 shell (${formatCommandForDisplay(config.defaultShell)}) 启动交互式终端`,
       recommended: true
     }),
     claude_code_session: normalizeProfile("claude_code_session", {
@@ -145,9 +147,12 @@ function createBuiltInProfiles(config) {
 
 function normalizeProfile(profileName, profileConfig) {
   const normalizedCommand = String(profileConfig.command || "").trim();
+  const rawLabel = String(profileConfig.label || profileName).trim() || profileName;
   return {
     name: profileName,
-    label: String(profileConfig.label || profileName).trim() || profileName,
+    label: profileName === "default_shell_session"
+      ? createDefaultShellLabel(normalizedCommand, rawLabel)
+      : rawLabel,
     runner: String(profileConfig.runner || "pty"),
     command: normalizedCommand,
     argsTemplate: Array.isArray(profileConfig.argsTemplate)
@@ -272,19 +277,14 @@ function buildProcessEnv(allowlist, extraEnv) {
 
 function createDiscoveredProfiles(existingProfiles, config) {
   const discoveredExecutables = listDiscoveredExecutables(config);
-  const occupiedCommands = new Set(
-    Object.values(existingProfiles)
-      .map((profile) => normalizeCommandValue(profile?.command))
-      .filter(Boolean)
-      .map((command) => normalizeCommandKey(command))
-  );
+  const occupiedProfilesByCommand = groupProfilesByCommand(existingProfiles);
   const discoveredProfiles = {};
 
   for (const executable of discoveredExecutables) {
     const commandKey = normalizeCommandKey(executable.command);
     const usesFinalOutputMode = supportsFinalOnlyOutput(executable.command);
 
-    if (!commandKey || occupiedCommands.has(commandKey)) {
+    if (!commandKey || shouldSkipDiscoveredExecutable(executable, occupiedProfilesByCommand)) {
       continue;
     }
 
@@ -316,9 +316,56 @@ function createDiscoveredProfiles(existingProfiles, config) {
       description: executable.description,
       recommended: false
     });
+
+    addProfileToCommandGroup(occupiedProfilesByCommand, discoveredProfiles[profileName]);
   }
 
   return discoveredProfiles;
+}
+
+function groupProfilesByCommand(profiles) {
+  const grouped = new Map();
+
+  for (const profile of Object.values(profiles || {})) {
+    addProfileToCommandGroup(grouped, profile);
+  }
+
+  return grouped;
+}
+
+function addProfileToCommandGroup(grouped, profile) {
+  const commandKey = normalizeCommandKey(profile?.command);
+
+  if (!commandKey) {
+    return;
+  }
+
+  const bucket = grouped.get(commandKey);
+
+  if (bucket) {
+    bucket.push(profile);
+    return;
+  }
+
+  grouped.set(commandKey, [profile]);
+}
+
+function shouldSkipDiscoveredExecutable(executable, occupiedProfilesByCommand) {
+  const occupiedProfiles = occupiedProfilesByCommand.get(normalizeCommandKey(executable?.command)) || [];
+
+  if (occupiedProfiles.length === 0) {
+    return false;
+  }
+
+  if (executable?.allowCommandDuplicate === true) {
+    return occupiedProfiles.some((profile) =>
+      profile?.name !== "default_shell_session" &&
+      String(profile?.kind || "") === String(executable?.kind || "") &&
+      String(profile?.runner || "pty") === "pty"
+    );
+  }
+
+  return true;
 }
 
 function listDiscoveredExecutables(config) {
@@ -346,7 +393,8 @@ function listDiscoveredExecutables(config) {
       label: String(candidate?.label || deriveExecutableLabel(command)).trim() || command,
       description: String(candidate?.description || "").trim(),
       kind: normalizeProfileKind(candidate?.kind, command),
-      resolvedCommand
+      resolvedCommand,
+      allowCommandDuplicate: candidate?.allowCommandDuplicate === true
     });
   }
 
@@ -357,22 +405,18 @@ function buildExecutableDiscoveryCandidates(config) {
   const shellCandidates = process.platform === "win32"
     ? [
         {
-          command: config.defaultShell,
-          label: "默认 Shell",
-          kind: "shell",
-          description: "使用 localapp 当前默认 shell 启动交互式终端"
-        },
-        {
           command: "powershell.exe",
-          label: "Windows PowerShell",
+          label: "Windows PowerShell 5 / powershell.exe",
           kind: "shell",
-          description: "传统 PowerShell 主机"
+          description: "Windows PowerShell 5.x 主机 (powershell.exe)",
+          allowCommandDuplicate: true
         },
         {
           command: "pwsh.exe",
-          label: "PowerShell 7",
+          label: "PowerShell 7 / pwsh.exe",
           kind: "shell",
-          description: "跨平台 PowerShell 7 主机"
+          description: "PowerShell 7+ 主机 (pwsh.exe)",
+          allowCommandDuplicate: true
         },
         {
           command: "cmd.exe",
@@ -388,12 +432,6 @@ function buildExecutableDiscoveryCandidates(config) {
         }
       ]
     : [
-        {
-          command: config.defaultShell,
-          label: "默认 Shell",
-          kind: "shell",
-          description: "使用 localapp 当前默认 shell 启动交互式终端"
-        },
         {
           command: "/bin/bash",
           label: "Bash",
@@ -767,19 +805,87 @@ function resolveExplicitCommandPath(command) {
 function resolveCommandFromPath(command, env) {
   const pathValue = String(env?.PATH || env?.Path || "").trim();
 
-  if (!pathValue) {
+  if (pathValue) {
+    for (const directory of pathValue.split(path.delimiter).map((item) => item.trim()).filter(Boolean)) {
+      const candidate = findExistingExecutable(path.join(directory, command), env);
+
+      if (candidate) {
+        return candidate;
+      }
+    }
+  }
+
+  return resolveWellKnownWindowsCommand(command, env);
+}
+
+function resolveWellKnownWindowsCommand(command, env = process.env) {
+  if (process.platform !== "win32") {
     return "";
   }
 
-  for (const directory of pathValue.split(path.delimiter).map((item) => item.trim()).filter(Boolean)) {
-    const candidate = findExistingExecutable(path.join(directory, command), env);
+  const commandKey = normalizeCommandKey(command);
 
-    if (candidate) {
-      return candidate;
+  if (commandKey === "powershell") {
+    return findFirstExistingExecutable([
+      path.join(getWindowsRoot(env), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+      path.join(getWindowsRoot(env), "SysWOW64", "WindowsPowerShell", "v1.0", "powershell.exe")
+    ], env);
+  }
+
+  if (commandKey === "pwsh") {
+    return findFirstExistingExecutable(buildPowerShell7CandidatePaths(env), env);
+  }
+
+  return "";
+}
+
+function findFirstExistingExecutable(candidates, env = process.env) {
+  for (const candidate of candidates) {
+    const resolved = findExistingExecutable(candidate, env);
+
+    if (resolved) {
+      return resolved;
     }
   }
 
   return "";
+}
+
+function getWindowsRoot(env = process.env) {
+  return String(env.SystemRoot || env.WINDIR || "C:\\Windows").trim() || "C:\\Windows";
+}
+
+function buildPowerShell7CandidatePaths(env = process.env) {
+  const roots = [
+    env.ProgramFiles,
+    env.ProgramW6432,
+    env["ProgramFiles(x86)"],
+    env.LOCALAPPDATA
+      ? path.join(String(env.LOCALAPPDATA), "Microsoft", "WindowsApps")
+      : ""
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+  const candidates = [];
+
+  for (const root of Array.from(new Set(roots))) {
+    candidates.push(path.join(root, "PowerShell", "7", "pwsh.exe"));
+    candidates.push(path.join(root, "pwsh.exe"));
+
+    const powerShellRoot = path.join(root, "PowerShell");
+
+    try {
+      for (const entry of fs.readdirSync(powerShellRoot, { withFileTypes: true })) {
+        if (entry.isDirectory() && /^7(?:[.-]|$)/.test(entry.name)) {
+          candidates.push(path.join(powerShellRoot, entry.name, "pwsh.exe"));
+        }
+      }
+    } catch {
+      // Missing Program Files PowerShell directory is normal when PowerShell 7 is not installed.
+    }
+  }
+
+  return candidates;
 }
 
 function findExistingExecutable(targetPath, env = process.env) {
@@ -828,6 +934,41 @@ function buildExecutableCandidates(targetPath, env) {
 
 function normalizeCommandValue(command) {
   return String(command || "").trim().replace(/^"(.*)"$/, "$1");
+}
+
+function createDefaultShellLabel(command, baseLabel = "默认 Shell") {
+  const label = String(baseLabel || "默认 Shell").trim() || "默认 Shell";
+  const commandLabel = formatCommandForDisplay(command);
+
+  if (!commandLabel || textMentionsCommand(label, commandLabel)) {
+    return label;
+  }
+
+  return `${label} / ${commandLabel}`;
+}
+
+function formatCommandForDisplay(command) {
+  const normalizedCommand = normalizeCommandValue(command);
+
+  if (!normalizedCommand) {
+    return "";
+  }
+
+  return hasPathSeparator(normalizedCommand)
+    ? normalizedCommand
+    : path.basename(normalizedCommand) || normalizedCommand;
+}
+
+function textMentionsCommand(text, command) {
+  const normalizedText = String(text || "").toLowerCase();
+  const normalizedCommand = normalizeCommandValue(command).toLowerCase();
+  const commandBaseName = path.basename(normalizedCommand).toLowerCase();
+
+  return Boolean(
+    normalizedCommand &&
+      (normalizedText.includes(normalizedCommand) ||
+        (commandBaseName && normalizedText.includes(commandBaseName)))
+  );
 }
 
 function hasPathSeparator(command) {

@@ -465,7 +465,26 @@ function getTerminalProfileOptionLabel(profile) {
   const displayName = getTerminalProfileDisplayName(profile) || String(profile?.name || "").trim();
   const command = String(profile?.command || "").trim();
   const sourceText = String(profile?.source || "") === "discovered" ? "环境探测" : "内置/配置";
-  return command ? `${displayName} / ${command} / ${sourceText}` : `${displayName} / ${sourceText}`;
+  const parts = [displayName];
+
+  if (command && !doesTextMentionCommand(displayName, command)) {
+    parts.push(command);
+  }
+
+  parts.push(sourceText);
+  return parts.filter(Boolean).join(" / ");
+}
+
+function doesTextMentionCommand(text, command) {
+  const normalizedText = String(text || "").toLowerCase();
+  const normalizedCommand = String(command || "").trim().replace(/^"(.*)"$/, "$1").toLowerCase();
+  const commandName = normalizedCommand.split(/[\\/]/).pop();
+
+  return Boolean(
+    normalizedCommand &&
+      (normalizedText.includes(normalizedCommand) ||
+        (commandName && normalizedText.includes(commandName)))
+  );
 }
 
 function queryCommonWorkingDirectories(queryString, callback) {
