@@ -236,7 +236,7 @@ agent 注册时会上报本机 RSA 公钥和指纹，服务端会规范化公钥
 - `claude_code_session`
 - `codex_code_session`
 
-此外，`localapp` 现在还会按内置候选集和 `DISCOVER_TERMINAL_COMMANDS` 对目标环境做可执行命令探测，把可直接启动的 shell / CLI 以 `discovered_*` profile 的形式一并上报给服务端和浏览器。
+此外，`localapp` 现在还会按内置候选集和 `DISCOVER_TERMINAL_COMMANDS` 对目标环境做可执行命令探测，把可作为交互式会话启动的 shell / CLI 以 `discovered_*` profile 的形式一并上报给服务端和浏览器；裸 `git`、`npm`、`docker` 这类命令执行器不会作为默认交互式 profile 上报。
 
 profile 当前可约束：
 

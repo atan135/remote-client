@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,6 +6,8 @@ import { fileURLToPath } from "node:url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "../..");
+const INTERACTIVE_CLI_COMMANDS = new Set(["claude", "codex", "node", "python", "python3"]);
+const DISCOVERY_STARTUP_PROBE_TIMEOUT_MS = 2000;
 
 export class ToolProfileRegistry {
   constructor(config) {
@@ -377,7 +380,7 @@ function listDiscoveredExecutables(config) {
     const command = String(candidate?.command || "").trim();
     const normalizedKey = normalizeCommandKey(command);
 
-    if (!command || !normalizedKey || seenCommands.has(normalizedKey)) {
+    if (!command || !normalizedKey || seenCommands.has(normalizedKey) || !isInteractiveDiscoveryCandidate(candidate)) {
       continue;
     }
 
@@ -387,12 +390,18 @@ function listDiscoveredExecutables(config) {
       continue;
     }
 
+    const kind = normalizeProfileKind(candidate?.kind, command);
+
+    if (!canStartDiscoveredInteractiveCommand({ command, resolvedCommand, kind })) {
+      continue;
+    }
+
     seenCommands.add(normalizedKey);
     discovered.push({
       command,
       label: String(candidate?.label || deriveExecutableLabel(command)).trim() || command,
       description: String(candidate?.description || "").trim(),
-      kind: normalizeProfileKind(candidate?.kind, command),
+      kind,
       resolvedCommand,
       allowCommandDuplicate: candidate?.allowCommandDuplicate === true
     });
@@ -471,12 +480,6 @@ function buildExecutableDiscoveryCandidates(config) {
       description: "OpenAI Codex CLI"
     },
     {
-      command: "git",
-      label: "Git",
-      kind: "cli",
-      description: "Git 命令行"
-    },
-    {
       command: "node",
       label: "Node.js REPL",
       kind: "cli",
@@ -517,30 +520,6 @@ function buildExecutableDiscoveryCandidates(config) {
       label: "Python 3",
       kind: "cli",
       description: "Python 3 交互式解释器"
-    },
-    {
-      command: "uv",
-      label: "uv",
-      kind: "cli",
-      description: "Python / Rust 工具链 CLI"
-    },
-    {
-      command: "docker",
-      label: "Docker",
-      kind: "cli",
-      description: "Docker 命令行"
-    },
-    {
-      command: "kubectl",
-      label: "kubectl",
-      kind: "cli",
-      description: "Kubernetes CLI"
-    },
-    {
-      command: "ssh",
-      label: "SSH",
-      kind: "cli",
-      description: "OpenSSH 命令行"
     }
   ];
   const customCandidates = Array.isArray(config?.discoveredTerminalCommands)
@@ -553,6 +532,59 @@ function buildExecutableDiscoveryCandidates(config) {
     : [];
 
   return [...shellCandidates, ...cliCandidates, ...customCandidates];
+}
+
+function isInteractiveDiscoveryCandidate(candidate) {
+  const command = candidate?.command;
+  const kind = normalizeProfileKind(candidate?.kind, command);
+
+  if (kind === "shell") {
+    return true;
+  }
+
+  return INTERACTIVE_CLI_COMMANDS.has(normalizeCommandKey(command));
+}
+
+function canStartDiscoveredInteractiveCommand({ command, resolvedCommand, kind }) {
+  if (kind === "shell") {
+    return true;
+  }
+
+  const probeArgs = createInteractiveStartupProbeArgs(command);
+
+  if (!probeArgs) {
+    return false;
+  }
+
+  if (probeArgs.length === 0) {
+    return true;
+  }
+
+  try {
+    const result = spawnSync(resolvedCommand || command, probeArgs, {
+      env: process.env,
+      stdio: "ignore",
+      timeout: DISCOVERY_STARTUP_PROBE_TIMEOUT_MS,
+      windowsHide: true
+    });
+
+    return result.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function createInteractiveStartupProbeArgs(command) {
+  switch (normalizeCommandKey(command)) {
+    case "claude":
+    case "codex":
+    case "node":
+    case "python":
+    case "python3":
+      return ["--version"];
+    default:
+      return null;
+  }
 }
 
 function buildDiscoveredProfileName(command, occupiedNames) {

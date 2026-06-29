@@ -256,7 +256,7 @@
 
 当前 profile 由 `ToolProfileRegistry` 管理。
 
-它现在不只合并内置 profile 和配置文件，还会按本机环境探测常见 shell / CLI，可把探测到的可执行命令自动补成 `discovered_*` profile。
+它现在不只合并内置 profile 和配置文件，还会按本机环境探测常见 shell / 交互式 CLI，可把探测到且可启动的交互式入口自动补成 `discovered_*` profile。
 
 当前仓库已内置或配置的常见 profile：
 
@@ -264,13 +264,14 @@
 - `claude_code_session`
 - `codex_code_session`
 
-另外，若目标机上存在额外可执行命令，`localapp` 还会探测并补充诸如：
+另外，若目标机上存在额外可交互入口，`localapp` 还会探测并补充诸如：
 
 - `discovered_cmd`
 - `discovered_pwsh`
-- `discovered_git`
 - `discovered_node`
 - `discovered_python`
+
+裸 `git`、`npm`、`docker`、`kubectl` 这类命令执行器不会作为默认交互式会话 profile 上报；如果确实需要特殊入口，应在 `localapp/config/tool-profiles.json` 显式配置。
 
 当前 profile 可控制：
 
@@ -350,7 +351,7 @@
 - 常用工作目录
 - 预设命令
 
-其中 terminal profiles 现在除了静态 profile，也包含环境探测得到的 `discovered_*` profile 及其显示标签、来源、类型与可用性。
+其中 terminal profiles 现在除了静态 profile，也包含环境探测得到的可交互 `discovered_*` profile 及其显示标签、来源、类型与可用性。
 
 服务端会据此：
 
