@@ -68,6 +68,7 @@ export const useConsoleStore = defineStore("console", () => {
   const commandShell = ref("powershell");
   const terminalProfile = ref("");
   const terminalSessionName = ref("");
+  const terminalSessionNameAutoValue = ref("");
   const terminalCwd = ref("");
   const terminalInput = ref("");
   const remoteFilePathsByContext = reactive(new Map());
@@ -1134,6 +1135,7 @@ export const useConsoleStore = defineStore("console", () => {
 
       if (shouldUseSessionNameInput) {
         terminalSessionName.value = "";
+        terminalSessionNameAutoValue.value = "";
       }
       terminalInput.value = "";
       return payload.item || true;
@@ -2914,6 +2916,7 @@ export const useConsoleStore = defineStore("console", () => {
     commandShell.value = "powershell";
     terminalProfile.value = "";
     terminalSessionName.value = "";
+    terminalSessionNameAutoValue.value = "";
     terminalCwd.value = "";
     terminalInput.value = "";
     authMode.value = "login";
@@ -3245,6 +3248,46 @@ export const useConsoleStore = defineStore("console", () => {
 
   function normalizeTerminalSessionName(value) {
     return String(value ?? "").trim().slice(0, TERMINAL_SESSION_NAME_MAX_LENGTH);
+  }
+
+  function updateTerminalSessionName(value) {
+    terminalSessionName.value = normalizeTerminalSessionName(value);
+    terminalSessionNameAutoValue.value = "";
+  }
+
+  function updateTerminalCwd(value) {
+    const nextCwd = String(value || "").trim();
+    const currentSessionName = normalizeTerminalSessionName(terminalSessionName.value);
+    const currentAutoValue = normalizeTerminalSessionName(terminalSessionNameAutoValue.value);
+    const shouldApplyAutoName = !currentSessionName || currentSessionName === currentAutoValue;
+    const nextAutoValue = createTerminalSessionNameFromCwd(nextCwd);
+
+    terminalCwd.value = nextCwd;
+
+    if (!shouldApplyAutoName) {
+      return;
+    }
+
+    terminalSessionName.value = nextAutoValue;
+    terminalSessionNameAutoValue.value = nextAutoValue;
+  }
+
+  function createTerminalSessionNameFromCwd(value) {
+    const normalized = String(value || "")
+      .trim()
+      .replace(/[\\/]+$/g, "");
+
+    if (!normalized) {
+      return "";
+    }
+
+    const parts = normalized.split(/[\\/]+/).filter(Boolean);
+
+    if (parts.length === 0) {
+      return "";
+    }
+
+    return normalizeTerminalSessionName(parts[parts.length - 1]);
   }
 
   function isAbsoluteRemoteFilePath(value) {
@@ -3944,6 +3987,8 @@ export const useConsoleStore = defineStore("console", () => {
     terminalSessionName,
     terminalSessionSortMode,
     setTerminalSessionSortMode,
+    updateTerminalCwd,
+    updateTerminalSessionName,
     terminateTerminalSession,
     terminatingTerminalSessionId,
     timelineFilterAgentId,
