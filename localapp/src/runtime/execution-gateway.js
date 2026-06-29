@@ -17,7 +17,7 @@ export class ExecutionGateway {
     let baseCwd = String(options.baseCwd || "").trim();
     let baseCwdSource = baseCwd ? "request" : "";
 
-    if (sessionId) {
+    if (sessionId && !baseCwd) {
       try {
         const liveCwd = await this.ptySessionManager.querySessionCwd(sessionId, requestedPath);
 
@@ -46,7 +46,7 @@ export class ExecutionGateway {
     let baseCwd = String(options.baseCwd || "").trim();
     let baseCwdSource = baseCwd ? "request" : "";
 
-    if (sessionId) {
+    if (sessionId && !baseCwd) {
       try {
         const liveCwd = await this.ptySessionManager.querySessionCwd(sessionId, requestedPath);
 

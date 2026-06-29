@@ -5,6 +5,7 @@ import { logEvent } from "../logger.js";
 import { TerminalSessionRunner } from "./runners/terminal-session-runner.js";
 
 const SESSION_CWD_QUERY_TIMEOUT_MS = 4000;
+const HIDDEN_OUTPUT_CAPTURE_LIMIT = 16384;
 
 export class PtySessionManager {
   constructor(config, loggers, profileRegistry, sessionStore) {
@@ -87,7 +88,8 @@ export class PtySessionManager {
       ptyProcess,
       eventSink,
       idleTimer: null,
-      terminatingReason: ""
+      terminatingReason: "",
+      hiddenOutputFilter: null
     };
 
     this.handles.set(sessionId, handle);
@@ -128,9 +130,15 @@ export class PtySessionManager {
 
     ptyProcess.onData((chunk) => {
       this.touchSession(handle);
+      const visibleChunk = filterHiddenPtyOutput(handle, chunk);
+
+      if (!visibleChunk) {
+        return;
+      }
+
       const appended = this.sessionStore.appendOutput(sessionId, {
         stream: "stdout",
-        chunk,
+        chunk: visibleChunk,
         sentAt: new Date().toISOString()
       });
 
@@ -143,8 +151,8 @@ export class PtySessionManager {
         agentId,
         profile: profileName,
         profileLabel: handle.profileLabel,
-        chunkLength: chunk.length,
-        ...createTerminalOutputDiagnostics(chunk)
+        chunkLength: visibleChunk.length,
+        ...createTerminalOutputDiagnostics(visibleChunk)
       });
 
       this.emit(handle, "terminal.session.output", {
@@ -313,7 +321,15 @@ export class PtySessionManager {
     }
 
     this.touchSession(handle);
-    const cwd = await readSessionCwdFromPty(handle.ptyProcess, probe);
+    const hiddenOutputFilter = createHiddenPtyOutputFilter(probe);
+    handle.hiddenOutputFilter = hiddenOutputFilter;
+
+    let cwd = "";
+    try {
+      cwd = await readSessionCwdFromPty(handle.ptyProcess, probe);
+    } finally {
+      clearHiddenPtyOutputFilter(handle, hiddenOutputFilter);
+    }
 
     if (!cwd) {
       throw new Error("当前终端目录为空，无法解析相对路径");
@@ -524,6 +540,49 @@ function createSessionCwdProbe(command) {
   }
 
   return null;
+}
+
+function createHiddenPtyOutputFilter(probe) {
+  return {
+    startMarker: probe.startMarker,
+    endMarker: probe.endMarker,
+    buffer: ""
+  };
+}
+
+function clearHiddenPtyOutputFilter(handle, filter) {
+  if (!handle?.hiddenOutputFilter) {
+    return;
+  }
+
+  if (!filter || handle.hiddenOutputFilter === filter) {
+    handle.hiddenOutputFilter = null;
+  }
+}
+
+function filterHiddenPtyOutput(handle, chunk) {
+  const text = String(chunk || "");
+  const filter = handle.hiddenOutputFilter;
+
+  if (!filter) {
+    return text;
+  }
+
+  filter.buffer = trimHiddenOutputBuffer(`${filter.buffer}${text}`);
+
+  if (extractSessionCwdFromOutput(filter.buffer, filter.startMarker, filter.endMarker)) {
+    clearHiddenPtyOutputFilter(handle, filter);
+  }
+
+  return "";
+}
+
+function trimHiddenOutputBuffer(value) {
+  const text = String(value || "");
+
+  return text.length > HIDDEN_OUTPUT_CAPTURE_LIMIT
+    ? text.slice(-HIDDEN_OUTPUT_CAPTURE_LIMIT)
+    : text;
 }
 
 function readSessionCwdFromPty(ptyProcess, probe) {
