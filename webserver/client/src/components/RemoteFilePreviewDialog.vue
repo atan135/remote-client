@@ -684,6 +684,19 @@ function formatCompactDateTime(value) {
 
 .remote-file-mode {
   max-width: 100%;
+  --el-segmented-bg-color: rgba(232, 239, 247, 0.12);
+  --el-segmented-color: rgba(226, 234, 244, 0.82);
+  --el-segmented-item-hover-color: #ffffff;
+  --el-segmented-item-hover-bg-color: rgba(255, 255, 255, 0.12);
+  --el-segmented-item-active-bg-color: rgba(255, 255, 255, 0.16);
+  --el-segmented-item-selected-color: #ffffff;
+  --el-segmented-item-selected-bg-color: #f2a65a;
+  --el-segmented-item-disabled-color: rgba(226, 234, 244, 0.38);
+  border: 1px solid rgba(226, 234, 244, 0.16);
+}
+
+.remote-file-mode :deep(.el-segmented__item-label) {
+  font-weight: 600;
 }
 
 .remote-file-actions {

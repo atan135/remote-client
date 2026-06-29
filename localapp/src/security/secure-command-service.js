@@ -357,6 +357,10 @@ function hasRequiredField(payload, fieldName) {
     return Number.isFinite(parsed) && parsed > 0;
   }
 
+  if (fieldName === "expectedTotalBytes") {
+    return Object.prototype.hasOwnProperty.call(payload, fieldName) && payload[fieldName] !== null;
+  }
+
   return Boolean(String(payload[fieldName] || "").trim());
 }
 
