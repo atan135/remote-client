@@ -8,6 +8,7 @@ const __dirname = path.dirname(__filename);
 const packageRoot = path.resolve(__dirname, "../..");
 const INTERACTIVE_CLI_COMMANDS = new Set(["claude", "codex", "node", "python", "python3"]);
 const DISCOVERY_STARTUP_PROBE_TIMEOUT_MS = 2000;
+const DEFAULT_INTERACTIVE_TERM = "xterm-256color";
 
 export class ToolProfileRegistry {
   constructor(config) {
@@ -273,6 +274,10 @@ function buildProcessEnv(allowlist, extraEnv) {
     if (Object.prototype.hasOwnProperty.call(extraEnv, key)) {
       nextEnv[key] = String(extraEnv[key]);
     }
+  }
+
+  if (!String(nextEnv.TERM || "").trim() || String(nextEnv.TERM || "").trim().toLowerCase() === "dumb") {
+    nextEnv.TERM = DEFAULT_INTERACTIVE_TERM;
   }
 
   return nextEnv;
