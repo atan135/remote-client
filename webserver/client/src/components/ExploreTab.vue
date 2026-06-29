@@ -243,10 +243,6 @@ const selectedTerminalProfileUnavailableReason = computed(() =>
     : ""
 );
 
-const selectedTerminalProfileDescription = computed(() =>
-  String(selectedTerminalProfileConfig.value?.description || "").trim()
-);
-
 const terminalProfileOptionGroups = computed(() => {
   const profiles = Array.isArray(props.availableTerminalProfiles) ? props.availableTerminalProfiles : [];
   const groups = [
@@ -852,9 +848,6 @@ watch(
                       :value="profile.name" :disabled="profile.isAvailable === false" />
                   </el-option-group>
                 </el-select>
-                <small v-if="selectedTerminalProfileDescription" class="muted">
-                  {{ selectedTerminalProfileDescription }}
-                </small>
                 <small v-if="selectedTerminalProfileUnavailableReason" class="muted">
                   {{ selectedTerminalProfileUnavailableReason }}
                 </small>
@@ -988,75 +981,9 @@ watch(
               {{ currentSession?.status || "未选择会话" }}
             </el-tag>
             <template v-if="currentSession">
-              <el-popover
-                v-model:visible="sessionInputPopoverVisible"
-                placement="bottom-end"
-                trigger="click"
-                width="min(560px, calc(100vw - 32px))"
-                popper-class="terminal-tool-popover"
-                @hide="fitVisibleTerminal"
-              >
-                <template #reference>
-                  <el-button
-                    v-if="!isTerminalSessionClosed(currentSession.status)"
-                    class="explore-session-icon-button"
-                    round
-                    plain
-                    title="发送输入"
-                  >
-                    <el-icon><EditPen /></el-icon>
-                    <span>{{ shouldPreferFinalAnswer ? "提问" : "输入" }}</span>
-                  </el-button>
-                </template>
-                <div class="terminal-tool-panel">
-                  <div class="terminal-tool-head">
-                    <strong>{{ shouldPreferFinalAnswer ? "继续提问" : "发送输入" }}</strong>
-                    <small>也可以直接在下方终端中输入。</small>
-                  </div>
-                  <label v-if="presetCommands.length" class="field-block field-block-tight explore-session-preset-field">
-                    <span>预设输入</span>
-                    <el-select :model-value="selectedSessionPresetCommandKey" clearable
-                      placeholder="选择当前设备 localapp/.env 中的预设输入" @update:model-value="handleSessionPresetCommandChange">
-                      <el-option v-for="preset in presetCommands" :key="`session-${preset.key}`" :label="preset.label"
-                        :value="preset.key" />
-                    </el-select>
-                    <p v-if="selectedSessionPresetCommand" class="muted explore-preset-command-preview">
-                      {{ selectedSessionPresetCommand.command }}
-                    </p>
-                  </label>
-                  <label class="field-block field-block-tight explore-session-input">
-                    <span>文本输入</span>
-                    <el-input :model-value="terminalInput" type="textarea" :autosize="{ minRows: 3, maxRows: 6 }"
-                      :placeholder="shouldPreferFinalAnswer
-                        ? '输入你的追加要求，发送到当前模型会话'
-                        : '向当前终端会话发送输入'
-                        " @update:model-value="emit('update:terminalInput', $event)" />
-                  </label>
-                  <div class="hero-actions explore-session-input-actions">
-                    <el-button
-                      v-if="presetCommands.length"
-                      class="explore-session-action explore-session-action-preset"
-                      round
-                      plain
-                      :disabled="!canSendSessionPresetInput"
-                      @click="sendSelectedSessionPresetInput">
-                      {{ sendingTerminalInput ? "发送中..." : "发送预设输入" }}
-                    </el-button>
-                    <el-button
-                      class="explore-session-action explore-session-action-send"
-                      type="primary"
-                      round
-                      :disabled="!canSendTerminalInput"
-                      @click="emit('send-terminal-input', currentSession.sessionId)">
-                      {{ sendingTerminalInput ? "发送中..." : "发送" }}
-                    </el-button>
-                  </div>
-                </div>
-              </el-popover>
-
               <el-button
                 v-if="!isTerminalSessionClosed(currentSession.status)"
-                class="explore-session-icon-button"
+                class="explore-session-icon-button explore-session-mobile-only-button"
                 round
                 plain
                 type="warning"

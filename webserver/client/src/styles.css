@@ -1752,6 +1752,10 @@ textarea {
   margin-right: 5px;
 }
 
+.explore-session-mobile-only-button.el-button {
+  display: none;
+}
+
 .terminal-tool-popover.el-popper {
   border: 1px solid rgba(132, 154, 178, 0.2);
   border-radius: 14px;
@@ -3575,6 +3579,10 @@ textarea {
     max-width: 100vw;
   }
 
+  .explore-session-mobile-only-button.el-button {
+    display: inline-flex;
+  }
+
   .app-shell:has(.explore-page.is-focus-mode) {
     padding: 0;
   }
@@ -4873,7 +4881,7 @@ textarea {
 
   .explore-main-card > .el-card__body,
   .explore-session-detail-card > .el-card__body {
-    padding: 18px 20px 20px;
+    padding: 1px 20px 20px;
   }
 
   .explore-page.is-focus-mode .explore-session-detail-card > .el-card__body {
