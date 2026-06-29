@@ -4,11 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite --host 0.0.0.0",
+    "dev": "vite --host 0.0.0.0 --port 4173 --strictPort",
     "build": "vite build",
     "zip:dist": "node scripts/zip-dist.mjs",
     "package:dist": "npm run build && npm run zip:dist",
-    "preview": "vite preview --host 0.0.0.0"
+    "preview": "vite preview --host 0.0.0.0 --port 4173 --strictPort"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",

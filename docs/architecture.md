@@ -56,7 +56,7 @@ Vue 3 控制台，负责：
 
 - `webserver/server`：`3100`
 - `localapp` 默认上连地址：`ws://localhost:3100/ws/agent`
-- `webserver/client` 开发服务器：`5173`
+- `webserver/client` 开发服务器：`4173`
 - `localapp` 本地调试接口默认端口：`3210`
 
 ## 登录与会话

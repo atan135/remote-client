@@ -109,18 +109,18 @@ npm run dev:agent
 默认访问地址：
 
 ```text
-http://127.0.0.1:5173
+http://127.0.0.1:4173
 ```
 
 默认端口：
 
 - 服务端 HTTP：`3100`
 - agent WebSocket：`ws://localhost:3100/ws/agent`
-- 前端开发服务器：`5173`
+- 前端开发服务器：`4173`
 
 ## 首次联调
 
-1. 浏览器访问 `http://127.0.0.1:5173`。
+1. 浏览器访问 `http://127.0.0.1:4173`。
 2. 使用 `admin / ChangeMe123!` 登录。
 3. 如果开启了 `AGENT_APPROVAL_REQUIRED=true`，先在“我的 -> 设备审核”中通过目标设备。
 4. 打开 `localapp/keys/auth_public.pem`。
