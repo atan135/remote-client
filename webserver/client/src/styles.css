@@ -3286,10 +3286,12 @@ textarea {
   position: relative;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   min-width: 0;
   min-height: 320px;
   max-height: 460px;
   overflow: hidden;
+  padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 14px;
   background:
@@ -3304,9 +3306,8 @@ textarea {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  min-height: 320px;
+  min-height: 0;
   overflow: hidden;
-  padding: 10px 12px;
 }
 
 .terminal-emulator.interactive {

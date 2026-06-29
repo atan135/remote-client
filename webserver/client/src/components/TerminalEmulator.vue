@@ -32,6 +32,7 @@ let renderedSessionId = "";
 let renderedMaxSeq = 0;
 let resizeObserver = null;
 let observedHostWidth = 0;
+let observedHostHeight = 0;
 let reportedTerminalSizeKey = "";
 let suppressTerminalData = false;
 let replayInProgress = false;
@@ -52,6 +53,7 @@ onBeforeUnmount(() => {
   resizeObserver?.disconnect();
   resizeObserver = null;
   observedHostWidth = 0;
+  observedHostHeight = 0;
   reportedTerminalSizeKey = "";
   window.removeEventListener("resize", handleWindowResize);
   terminalHost.value?.removeEventListener("click", focusTerminal);
@@ -138,15 +140,18 @@ function createTerminal() {
   if (typeof ResizeObserver === "function") {
     resizeObserver = new ResizeObserver(() => {
       const nextWidth = getHostWidth();
+      const nextHeight = getHostHeight();
 
-      if (nextWidth <= 0 || nextWidth === observedHostWidth) {
+      if (nextWidth <= 0 || nextHeight <= 0 || (nextWidth === observedHostWidth && nextHeight === observedHostHeight)) {
         return;
       }
 
       observedHostWidth = nextWidth;
+      observedHostHeight = nextHeight;
       scheduleFitTerminal();
     });
     observedHostWidth = getHostWidth();
+    observedHostHeight = getHostHeight();
     resizeObserver.observe(terminalHost.value);
   }
 }
@@ -271,6 +276,10 @@ function emitTerminalResize() {
 
 function getHostWidth() {
   return Math.round(terminalHost.value?.getBoundingClientRect().width || 0);
+}
+
+function getHostHeight() {
+  return Math.round(terminalHost.value?.getBoundingClientRect().height || 0);
 }
 
 function syncOutputs(forceReplay = false) {
